@@ -103,10 +103,6 @@ def _format_regions(
 def recognize_text_formatted(image_path: str, limit: int = 40) -> str:
     """OCR with a compact string for LLM context."""
     regions = recognize_text(image_path)
-    if not regions:
-        if not _VISION_OK:
-            return "OCR unavailable (install pyobjc-framework-Vision)."
-        return "No text detected."
     w, h = image_dimensions(image_path)
     return _format_regions(regions, w, h, limit)
 

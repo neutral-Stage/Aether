@@ -17,5 +17,8 @@ def test_prewarm_registers_yaml_bundle_ids(monkeypatch, tmp_path) -> None:  # no
     loader._prewarmed = False  # noqa: SLF001
     loader._BUNDLE_TO_PACK.pop("com.test.NovelApp", None)  # ensure not pre-registered
 
-    key = loader.resolve_pack_key(bundle_id="com.test.NovelApp")
-    assert key == "novelapp"
+    try:
+        key = loader.resolve_pack_key(bundle_id="com.test.NovelApp")
+        assert key == "novelapp"
+    finally:
+        loader._BUNDLE_TO_PACK.pop("com.test.NovelApp", None)  # noqa: SLF001

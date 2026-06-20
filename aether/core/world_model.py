@@ -71,7 +71,7 @@ class WorldModel:
         self.screen_stream_summary: str = ""
         self.screen_content_class: str = "unknown"
         self.text_heavy_score: float = 0.0
-        self.ax_text_ratio: float = 1.0
+        self.ax_text_ratio: float = 1.0  # ax_text_ratio: reserved — not yet computed in the perception loop (AX-present-but-wrong stays dormant until then)
 
     def set_goal(self, goal: str) -> None:
         self.active_goal = goal
