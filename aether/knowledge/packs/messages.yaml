@@ -1,0 +1,25 @@
+# Messages.app knowledge pack — Phase 1
+app: Messages
+tier: 1
+bundle_ids:
+  - com.apple.MobileSMS
+aliases:
+  - messages
+  - imessage
+shortcuts:
+  - "⌘N — new message"
+  - "⌘F — search messages"
+  - "↩ — send the typed message"
+  - "⌘↑/⌘↓ — move between conversations"
+recipes:
+  send_message:
+    - "Prefer AppleScript: tell application \"Messages\" to send \"<text>\" to buddy \"<name>\""
+    - "Or ⌘N, type the recipient, Tab to the body, type the message, press Return"
+  search_conversation:
+    - "⌘F, type the contact or keyword, Return"
+gotchas:
+  - "Sending requires the recipient to be a known iMessage/SMS contact"
+  - "Group chats may not be addressable by a single buddy name via AppleScript"
+  - "Automation prompts for permission the first time AppleScript drives Messages"
+scripting:
+  run_applescript: "Drive Messages via AppleScript for deterministic sending"

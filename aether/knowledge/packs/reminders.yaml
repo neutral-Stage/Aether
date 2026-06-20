@@ -1,0 +1,22 @@
+# Reminders.app knowledge pack — Phase 1
+app: Reminders
+tier: 1
+bundle_ids:
+  - com.apple.reminders
+aliases:
+  - reminders
+shortcuts:
+  - "⌘N — new reminder"
+  - "⌘F — search"
+  - "⌘1/⌘2/⌘3 — switch between Today/Scheduled/All"
+recipes:
+  add_reminder:
+    - "AppleScript: tell application \"Reminders\" to make new reminder with properties {name:\"<text>\"}"
+    - "Or ⌘N, type the reminder text, set a date with natural language, Return"
+  complete_reminder:
+    - "Click the radio circle to the left of the reminder, or select it and press the spacebar"
+gotchas:
+  - "A specific list must exist before adding to it via AppleScript"
+  - "Natural-language dates ('tomorrow 9am') are parsed only in the typed UI, not AppleScript"
+scripting:
+  run_applescript: "Create/complete reminders deterministically via AppleScript"
