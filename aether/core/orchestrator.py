@@ -194,11 +194,21 @@ class Agent:
         if decision.tier != RouteTier.VISION:
             return None
         path = self.world.capture_screenshot()
+        if not path:
+            return None
         vision_client = self.router.pick_client(decision)
         if hasattr(vision_client, "analyze_screenshot"):
-            return await asyncio.to_thread(vision_client.analyze_screenshot, path)
+            ctx = await asyncio.to_thread(vision_client.analyze_screenshot, path)
+            self.world.screen_content_class = getattr(
+                vision_client, "last_content_class", "unknown"
+            )
+            return ctx
         from ..perception import ocr
-        return await asyncio.to_thread(ocr.recognize_text_formatted, path)
+        formatted, regions, (w, h) = await asyncio.to_thread(ocr.recognize, path)
+        content = ocr.classify_screen_content(regions, w, h)
+        self.world.screen_content_class = content["label"]
+        self.world.text_heavy_score = content["score"]
+        return formatted
 
     async def _reason_step(
         self,

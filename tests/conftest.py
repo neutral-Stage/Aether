@@ -75,6 +75,9 @@ def world() -> WorldModel:
     w.ax_rendered = "Finder window with OK button"
     w.ax_insufficient = False
     w.is_novel_goal = False
+    w.screen_content_class = "unknown"
+    w.text_heavy_score = 0.0
+    w.ax_text_ratio = 1.0
     return w
 
 

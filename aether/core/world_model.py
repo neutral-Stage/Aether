@@ -69,6 +69,9 @@ class WorldModel:
         self._task_steps: list[str] = []
         self._tool_trace: list[dict[str, Any]] = []
         self.screen_stream_summary: str = ""
+        self.screen_content_class: str = "unknown"
+        self.text_heavy_score: float = 0.0
+        self.ax_text_ratio: float = 1.0
 
     def set_goal(self, goal: str) -> None:
         self.active_goal = goal
