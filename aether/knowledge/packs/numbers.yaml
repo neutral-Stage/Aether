@@ -1,0 +1,23 @@
+# Numbers.app knowledge pack — Phase 1
+app: Numbers
+tier: 1
+bundle_ids:
+  - com.apple.iWork.Numbers
+aliases:
+  - numbers
+shortcuts:
+  - "⌘N — new spreadsheet"
+  - "↩ — confirm cell entry"
+  - "⌘= — autosum (with cells selected)"
+  - "⌥↩ — newline within a cell"
+recipes:
+  set_cell:
+    - "Click the cell, type the value, press Return"
+    - "AppleScript: tell application \"Numbers\" to set value of cell \"B2\" of table 1 of sheet 1 of front document to \"<v>\""
+  export_csv:
+    - "File ▸ Export To ▸ CSV…, or AppleScript export with format CSV"
+gotchas:
+  - "Cell references are sheet/table-scoped; the first table is usually 'Table 1'"
+  - "Formulas must start with '=' typed into the cell"
+scripting:
+  run_applescript: "Numbers supports AppleScript for cells/export"
