@@ -32,6 +32,20 @@ from ..core.metrics import MetricsCollector
 if TYPE_CHECKING:
     from ..hud.overlay import HUD
 
+def record_usage_for_response(metrics, resp) -> None:  # noqa: ANN001
+    """Record token usage for an LLMResponse if the backend reported any."""
+    if resp is None:
+        return
+    in_tok = getattr(resp, "input_tokens", None)
+    out_tok = getattr(resp, "output_tokens", None)
+    if in_tok is None and out_tok is None:
+        return
+    try:
+        metrics.record_llm_usage(getattr(resp, "backend", "unknown"), in_tok, out_tok)
+    except Exception:  # noqa: BLE001 — metrics must never break the agent loop
+        pass
+
+
 BASE_SYSTEM_PROMPT = """You are Aether, an AI agent that operates a real macOS computer \
 on the user's behalf using the provided tools.
 
@@ -251,6 +265,7 @@ class Agent:
                 )
             else:
                 raise
+        record_usage_for_response(self.metrics, resp)
         return resp, decision.tier.value
 
     def _verification_for_tool(self, name: str, args: dict) -> VerificationExpectation | None:
