@@ -47,6 +47,9 @@ class LLMResponse:
     raw_content: list               # original content blocks (to echo back)
     stop_reason: str | None
     backend: str = "anthropic"
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
 
 
 class LLMBackend(Protocol):
@@ -113,12 +116,15 @@ class LLM:
                     "name": block.name,
                     "input": dict(block.input or {}),
                 })
+        in_tok, out_tok = _usage_from_anthropic(resp)
         return LLMResponse(
             text="\n".join(text_parts).strip(),
             tool_calls=tool_calls,
             raw_content=resp.content,
             stop_reason=resp.stop_reason,
             backend="anthropic",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
     def analyze_image(self, image_path: str, prompt: str) -> str:
@@ -256,12 +262,15 @@ class OpenAICompatibleClient:
         stop = choice.finish_reason or "end_turn"
         if tool_calls and stop == "tool_calls":
             stop = "tool_use"
+        in_tok, out_tok = _usage_from_openai(resp)
         return LLMResponse(
             text=text if not tool_calls else "",
             tool_calls=tool_calls,
             raw_content=raw_blocks,
             stop_reason=stop,
             backend=self.backend,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
     def analyze_image(self, image_path: str, prompt: str) -> str:
@@ -408,12 +417,15 @@ class LocalHTTPClient:
 
         tool_calls = _parse_tool_calls_from_text(text)
         raw = [{"type": "text", "text": text}] if text else []
+        in_tok, out_tok = _usage_from_ollama(body)
         return LLMResponse(
             text=text if not tool_calls else "",
             tool_calls=tool_calls,
             raw_content=raw,
             stop_reason="tool_use" if tool_calls else "end_turn",
             backend="local_http",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
 
@@ -511,6 +523,31 @@ class VisionLLM:
         with urllib.request.urlopen(req, timeout=60) as resp:
             body = json.loads(resp.read().decode())
         return body["choices"][0]["message"]["content"]
+
+
+def _usage_from_anthropic(resp: Any) -> tuple[int | None, int | None]:
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return (None, None)
+    return (getattr(usage, "input_tokens", None), getattr(usage, "output_tokens", None))
+
+
+def _usage_from_openai(resp: Any) -> tuple[int | None, int | None]:
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return (None, None)
+    return (getattr(usage, "prompt_tokens", None), getattr(usage, "completion_tokens", None))
+
+
+def _usage_from_ollama(body: dict) -> tuple[int | None, int | None]:
+    if not isinstance(body, dict):
+        return (None, None)
+    if "prompt_eval_count" in body or "eval_count" in body:
+        return (body.get("prompt_eval_count"), body.get("eval_count"))
+    usage = body.get("usage")
+    if isinstance(usage, dict):
+        return (usage.get("prompt_tokens"), usage.get("completion_tokens"))
+    return (None, None)
 
 
 def _format_tools_for_local(tools: list[dict]) -> str:
