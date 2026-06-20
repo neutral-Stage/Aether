@@ -183,9 +183,10 @@ class WorldModel:
     def record_observation(self, text: str) -> None:
         self._history.append(HistoryEntry("observation", text[:500]))
 
-    def capture_screenshot(self) -> str:
-        path = screen_cap.capture_to_file()
-        self.last_screenshot = path
+    def capture_screenshot(self) -> str | None:
+        path = screen_cap.try_capture_to_file()
+        if path:
+            self.last_screenshot = path
         return path
 
     def begin_action_verification(
