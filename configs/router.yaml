@@ -123,6 +123,7 @@ roles:
     max_tokens: 512
     temperature: 0
     timeout_seconds: 30
+    native_tools: false    # true → use Ollama native /api/chat tools field (Phase 1)
 
   cloud_frontier:
     provider: zai              # supervisor / planner — GLM-5-Turbo via Z.ai

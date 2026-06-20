@@ -273,6 +273,7 @@ class Router:
                 max_tokens=int(role.get("max_tokens", 512)),
                 temperature=float(role.get("temperature", 0)),
                 timeout=float(role.get("timeout_seconds", 30)),
+                native_tools=bool(role.get("native_tools", False)),
             )
         return self._clients["local_fast"]
 

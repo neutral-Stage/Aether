@@ -333,12 +333,14 @@ class LocalHTTPClient:
         max_tokens: int = 512,
         temperature: float = 0.0,
         timeout: float = 30.0,
+        native_tools: bool = False,
     ):
         self.endpoint = endpoint.rstrip("/")
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
+        self.native_tools = native_tools
         self._available: bool | None = None
 
     def available(self) -> bool:
@@ -384,16 +386,19 @@ class LocalHTTPClient:
             else:
                 ollama_messages.append({"role": role, "content": str(content)})
 
-        tool_hint = _format_tools_for_local(tools)
-        if tool_hint:
-            ollama_messages[0]["content"] += "\n\n" + tool_hint
-
         payload = {
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
             "options": {"temperature": self.temperature, "num_predict": self.max_tokens},
         }
+        if self.native_tools and tools:
+            payload["tools"] = _anthropic_tools_to_openai(tools)
+        else:
+            tool_hint = _format_tools_for_local(tools)
+            if tool_hint:
+                ollama_messages[0]["content"] += "\n\n" + tool_hint
+
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             self.endpoint,
@@ -415,7 +420,9 @@ class LocalHTTPClient:
         elif "choices" in body:
             text = body["choices"][0]["message"].get("content", "") or ""
 
-        tool_calls = _parse_tool_calls_from_text(text)
+        tool_calls = _parse_ollama_tool_calls(body) if self.native_tools else []
+        if not tool_calls:
+            tool_calls = _parse_tool_calls_from_text(text)
         raw = [{"type": "text", "text": text}] if text else []
         in_tok, out_tok = _usage_from_ollama(body)
         return LLMResponse(
@@ -576,6 +583,30 @@ def _parse_tool_calls_from_text(text: str) -> list[dict]:
         if tc:
             tool_calls.append(tc)
     return tool_calls
+
+
+def _parse_ollama_tool_calls(body: dict) -> list[dict]:
+    """Parse Ollama native message.tool_calls into [{id, name, input}]."""
+    msg = body.get("message") if isinstance(body, dict) else None
+    if not isinstance(msg, dict):
+        return []
+    calls: list[dict] = []
+    for tc in msg.get("tool_calls") or []:
+        fn = tc.get("function") if isinstance(tc, dict) else None
+        if not isinstance(fn, dict):
+            continue
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {}
+        calls.append({
+            "id": f"local_{uuid.uuid4().hex[:12]}",
+            "name": fn.get("name", ""),
+            "input": dict(args or {}),
+        })
+    return calls
 
 
 def _json_to_tool_call(raw: str) -> dict | None:
