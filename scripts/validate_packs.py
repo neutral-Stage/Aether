@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Validate all knowledge packs (Phase 11, §6.9).
 
 Usage:
