@@ -1,0 +1,22 @@
+{
+  "name": "analyze_screen",
+  "description": "OCR/vision analysis when AX is insufficient. mode='ocr' (default) or 'full'.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "PNG path (optional)"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "ocr",
+          "full"
+        ]
+      }
+    }
+  },
+  "permission": "screen",
+  "impact": "read"
+}

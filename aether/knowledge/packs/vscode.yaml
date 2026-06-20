@@ -1,0 +1,27 @@
+# VS Code / Cursor — Phase 4 (Tier 0 delegation + Tier 2 editor drive)
+app: Visual Studio Code
+tier: 0
+shortcuts:
+  - "⌘P — quick open file"
+  - "⌘⇧P — command palette"
+  - "⌘` — toggle terminal"
+  - "⌘B — toggle sidebar"
+  - "⌘W — close editor"
+  - "⌘S — save"
+  - "F5 — start debug"
+  - "⌘⇧F — search in files"
+recipes:
+  coding_task:
+    - "For real coding work use delegate_to_coder (claude/codex/cursor CLI)"
+    - "Pass precise spec: files, acceptance criteria, test command"
+    - "Supervise: read diff output, run tests via run_shell"
+  open_workspace:
+    - "open_app name Cursor or Code"
+    - "Or shell: cursor /path/to/project or code /path"
+gotchas:
+  - "Cursor/VS Code Electron AX tree is often sparse — use command palette + CLI"
+  - "delegate_to_coder needs CLI on PATH (claude, codex, etc.)"
+  - "Never auto-push git without user confirmation"
+scripting:
+  delegate_to_coder: "Tier-0 supervised coding agent subprocess"
+  code_cli: "code --goto file:line for navigation"

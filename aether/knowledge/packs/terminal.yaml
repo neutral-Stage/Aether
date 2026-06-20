@@ -1,0 +1,27 @@
+# Terminal / iTerm knowledge pack — Phase 5
+app: Terminal
+tier: 1  # shell via run_shell; AX for window focus
+bundle_ids:
+  - com.apple.Terminal
+  - com.googlecode.iterm2
+aliases:
+  - terminal
+  - iterm
+  - iterm2
+shortcuts:
+  - "⌘T — new tab"
+  - "⌘N — new window"
+  - "⌘K — clear screen (Terminal)"
+  - "⌘⇧C — copy (iTerm)"
+  - "⌘⇧V — paste (iTerm)"
+recipes:
+  run_command:
+    - "Prefer run_shell tool with approved paths"
+    - "Activate Terminal/iTerm first if user expects visible output"
+    - "Destructive commands require policy confirmation"
+  new_tab:
+    - "open_app Terminal then ⌘T"
+gotchas:
+  - "Shell access is high impact — careful mode confirms every command"
+  - "Long-running processes block; use timeout in run_shell"
+  - "iTerm and Terminal have different bundle IDs"

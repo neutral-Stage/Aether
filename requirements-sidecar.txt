@@ -1,0 +1,10 @@
+# Sidecar HTTP server (Phase 3–5)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# Tests (Phase 5 security suite + Phase 6 unit/integration)
+pytest>=8.0.0
+ruff>=0.8.0
+jsonschema>=4.23.0
+httpx>=0.27.0
+websockets>=12.0

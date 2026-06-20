@@ -1,0 +1,26 @@
+# DaVinci Resolve — Phase 4 knowledge pack
+app: DaVinci Resolve
+tier: 1  # Python/Lua scripting API (Studio) + Tier 3 vision for color
+shortcuts:
+  - "Space — play/pause"
+  - "I / O — in/out points"
+  - "⌘B — blade at playhead"
+  - "⌘Z — undo"
+  - "⌘S — save project"
+  - "⇧⌘M — media pool"
+  - "⌘F — fullscreen viewer"
+recipes:
+  import_and_timeline:
+    - "Use Resolve Python API: project.GetMediaPool().ImportMedia(paths)"
+    - "Create timeline via CreateTimelineFromClips"
+    - "For color grading UI (nodes, wheels) use vision + key commands — API cannot script color page"
+  render_deliver:
+    - "Script render job via project.SetRenderSettings + AddRenderJob"
+    - "Start render with project.StartRendering()"
+gotchas:
+  - "Free Resolve: Lua API only; Python requires Studio"
+  - "Color page, Fusion complex graphs, and audio mixer EQ are Tier 3 (no API)"
+  - "Always save project before batch renders"
+scripting:
+  resolve_python: "DaVinciResolveScript module — media pool, timeline, render"
+  resolve_lua: "Fusion/Resolve embedded Lua for timeline ops"

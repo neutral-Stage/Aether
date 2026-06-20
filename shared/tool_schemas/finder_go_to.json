@@ -1,0 +1,17 @@
+{
+  "name": "finder_go_to",
+  "description": "Navigate Finder front window to a POSIX path (e.g. /Users/you/Downloads).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

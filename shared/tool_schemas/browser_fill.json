@@ -1,0 +1,21 @@
+{
+  "name": "browser_fill",
+  "description": "Fill a form field in the Playwright browser.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "selector": {
+        "type": "string"
+      },
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "selector",
+      "text"
+    ]
+  },
+  "permission": "network",
+  "impact": "reversible"
+}

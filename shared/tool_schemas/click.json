@@ -1,0 +1,30 @@
+{
+  "name": "click",
+  "description": "Click a UI element. Prefer element_index from get_screen_context; uses AXPress when available, else CGEvent. Or pass x,y coordinates.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "element_index": {
+        "type": "integer"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      },
+      "button": {
+        "type": "string",
+        "enum": [
+          "left",
+          "right"
+        ]
+      },
+      "double": {
+        "type": "boolean"
+      }
+    }
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

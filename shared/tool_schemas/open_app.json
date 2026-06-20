@@ -1,0 +1,17 @@
+{
+  "name": "open_app",
+  "description": "Launch or focus a macOS app by name, e.g. 'Safari', 'Mail', 'Finder'.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

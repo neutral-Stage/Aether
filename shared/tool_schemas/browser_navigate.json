@@ -1,0 +1,17 @@
+{
+  "name": "browser_navigate",
+  "description": "Open a URL in headless Chromium (Playwright).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ]
+  },
+  "permission": "network",
+  "impact": "reversible"
+}

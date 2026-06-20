@@ -1,0 +1,28 @@
+# Logic Pro — Phase 4 knowledge pack (Tier 3: key commands + AX + vision)
+app: Logic Pro
+tier: 3
+shortcuts:
+  - "Space — play/stop"
+  - "R — record enable selected track"
+  - "⌘S — save"
+  - "⌘Z — undo"
+  - "S — solo track"
+  - "M — mute track"
+  - "⌘K — metronome"
+  - "⌥⌘K — musical typing keyboard"
+  - "A — automation mode"
+  - "B — smart controls"
+recipes:
+  bounce_mix:
+    - "File → Bounce → Project or Selection (use AX or ⌘ menus)"
+    - "Set format PCM/WAV in bounce dialog via get_screen_context"
+    - "Confirm bounce path with user before overwrite"
+  add_track:
+    - "⌥⌘N — new software instrument track"
+    - "Or Track → New Tracks via menu automation"
+gotchas:
+  - "No public automation API — rely on key commands and Accessibility"
+  - "Plugin UIs vary; use vision fallback for third-party plugin windows"
+  - "Scripter MIDI plugin supports JavaScript for MIDI generation only"
+scripting:
+  system_events: "AppleScript via System Events for menu items when AX fails"

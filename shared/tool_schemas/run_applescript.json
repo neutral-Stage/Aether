@@ -1,0 +1,17 @@
+{
+  "name": "run_applescript",
+  "description": "Run arbitrary AppleScript and return output.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "source"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

@@ -1,0 +1,17 @@
+{
+  "name": "type_text",
+  "description": "Type text into the currently focused field.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

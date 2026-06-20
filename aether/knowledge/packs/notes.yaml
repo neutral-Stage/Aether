@@ -1,0 +1,23 @@
+# Notes.app knowledge pack — Phase 5
+app: Notes
+tier: 1  # AppleScript + AX
+bundle_ids:
+  - com.apple.Notes
+aliases:
+  - notes
+shortcuts:
+  - "⌘N — new note"
+  - "⌘F — find in note"
+  - "⌘L — make checklist"
+  - "⌘⇧T — table of contents"
+  - "⌘Delete — delete note (destructive)"
+recipes:
+  create_note:
+    - "open_app Notes; ⌘N for new note"
+    - "Type title and body via type_text or AX"
+  search_notes:
+    - "Use search field in sidebar via get_screen_context"
+gotchas:
+  - "Deleting notes is destructive — confirm first"
+  - "iCloud sync may delay visibility of new notes"
+  - "Shared notes have different permissions"

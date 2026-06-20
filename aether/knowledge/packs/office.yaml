@@ -1,0 +1,31 @@
+# Microsoft Office (Word/Excel/PowerPoint/Outlook) — Phase 4
+app: Microsoft Office
+tier: 1
+shortcuts:
+  - "⌘S — save"
+  - "⌘Z — undo"
+  - "⌘C / ⌘V — copy/paste"
+  - "⌘F — find"
+  - "⌘P — print"
+  - "Excel: ⌘T — new sheet"
+  - "PowerPoint: ⌘D — duplicate slide"
+  - "Outlook: ⌘N — new message"
+recipes:
+  word_format_document:
+    - "Prefer AppleScript: tell application Microsoft Word"
+    - "Set paragraph style, font via scripting before pixel clicks"
+  excel_pivot:
+    - "Use Excel AppleScript/VBA for pivot table creation when available"
+    - "Fallback: Record steps via AX + vision for chart tools"
+  powerpoint_deck:
+    - "AppleScript: add slide, set title/content text ranges"
+    - "Use slide master changes via scripting not raw clicks"
+gotchas:
+  - "Office for Mac AppleScript dictionaries vary by version"
+  - "Sending email from Outlook is destructive — confirm first"
+  - "Macro security may block VBA — prefer AppleScript on Mac"
+scripting:
+  word: "tell application Microsoft Word"
+  excel: "tell application Microsoft Excel"
+  powerpoint: "tell application Microsoft PowerPoint"
+  outlook: "tell application Microsoft Outlook"

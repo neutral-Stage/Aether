@@ -1,0 +1,17 @@
+{
+  "name": "finish",
+  "description": "Call when the task is complete. `message` is spoken to the user.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "message": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "message"
+    ]
+  },
+  "permission": "none",
+  "impact": "read"
+}

@@ -1,0 +1,22 @@
+# Finder knowledge pack — Phase 1
+app: Finder
+tier: 1  # AppleScript
+shortcuts:
+  - "⌘⇧G — Go to Folder"
+  - "⌘↑ — go to enclosing folder"
+  - "⌘↓ — open selection"
+  - "⌘N — new Finder window"
+  - "⌘⇧. — toggle hidden files"
+  - "Space — Quick Look"
+recipes:
+  go_to_folder:
+    - "Prefer finder_go_to with absolute POSIX path"
+    - "Or ⌘⇧G and type path"
+  open_downloads:
+    - "finder_go_to with ~/Downloads expanded to full path"
+gotchas:
+  - "Use POSIX paths in AppleScript (e.g. /Users/you/Downloads)"
+  - "Finder AX tree is shallow — scripting beats clicking sidebar"
+  - "Multiple windows: activate Finder first"
+scripting:
+  finder_go_to: "Set front window target to POSIX path"

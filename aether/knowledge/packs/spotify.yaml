@@ -1,0 +1,21 @@
+# Spotify knowledge pack — Phase 9
+app: Spotify
+tier: 2
+bundle_ids:
+  - com.spotify.client
+aliases:
+  - spotify
+shortcuts:
+  - "Space — play/pause"
+  - "⌘→ / ⌘← — next/previous track"
+  - "⌘L — go to search"
+  - "⌘⇧F — toggle fullscreen"
+recipes:
+  play_playlist:
+    - "⌘L search; type playlist name"
+    - "Return to open; Space to play"
+  control_playback:
+    - "Space play/pause; ⌘→ skip"
+gotchas:
+  - "Premium features may need login — do not change account settings"
+  - "Deleting playlists is destructive — confirm"

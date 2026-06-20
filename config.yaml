@@ -1,0 +1,154 @@
+# Aether Phase 12 configuration (GA release candidate)
+
+version: 1.0.0-rc.1
+
+llm:
+  provider: zai                # legacy hint; router roles in configs/router.yaml take precedence
+  model: glm-5-turbo           # supervisor default (cloud_frontier)
+  max_tokens: 1024
+  temperature: 0
+  # API keys via .env — see .env.example:
+  #   ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY,
+  #   FIREWORKS_API_KEY, KILO_API_KEY, KIE_API_KEY, ZAI_API_KEY, GOOGLE_API_KEY
+
+# Model router — local fast + cloud frontier (see configs/router.yaml)
+router:
+  enabled: true
+  config_path: configs/router.yaml
+
+# Long-term memory (SQLite + embeddings — Phase 11)
+memory:
+  enabled: true
+  db_path: data/memory.db
+  embedding_provider: hash       # hash | openai | local
+  openai_model: text-embedding-3-small
+  local_model: all-MiniLM-L6-v2
+
+# Skill / macro memory — learn from successful multi-step traces (Phase 4)
+skills:
+  enabled: true
+  db_path: data/skills.db
+
+# Observability (exposed via sidecar GET /metrics and /dashboard)
+observability:
+  enabled: true
+
+# Vision / OCR fallback
+vision:
+  enabled: true
+
+# Playwright browser automation
+browser:
+  headless: true
+
+# Expanded safety policy (§6.7)
+policy:
+  redact_secrets: true
+  block_injection_goals: true
+  flag_injection_in_context: true
+  wrap_untrusted_context: true
+  approved_file_roots:
+    - ~                          # expanded to current user home at runtime
+  network_allowlist: []          # empty = allow all; set hosts in careful mode
+
+# Signed append-only audit log (§6.7 FR-29)
+audit:
+  enabled: true
+  path: data/audit.jsonl
+
+# Beta feature flags (disabled by default for risky features)
+beta:
+  continuous_screen_stream: false   # ScreenCaptureKit continuous stream (Swift)
+  ambient_listening: false          # always-on mic + wake word
+  wake_word: false                   # energy-based placeholder; Porcupine-ready hook
+  wake_word_engine: energy           # energy | porcupine (future)
+  screen_stream_fps: 0.5            # max frames/sec when continuous stream enabled
+  native_effectors: false            # route click/type to Swift HTTP bridge
+  realtime_voice: false              # OpenAI Realtime API path (Phase 10)
+  auto_update_check: true           # check for updates on launch (Swift)
+  update_feed_url: ""                # empty = GitHub releases API placeholder
+  sparkle_appcast_url: ""            # Sparkle 2 appcast XML (Phase 9)
+  crash_reporting: false             # Phase 12: POST /crash-report (opt-in)
+  plugins_enabled: false             # Phase 12: load ~/.aether/plugins and plugins/
+
+# Plugin SDK (Phase 12)
+plugins:
+  enabled: false                     # alias for beta.plugins_enabled
+  require_explicit_enable: true      # refuse load unless beta.plugins_enabled or plugins.enabled
+
+# Beta feedback (Phase 9)
+feedback:
+  enabled: true
+  store_path: data/feedback.jsonl
+
+# Performance tuning (Phase 5)
+performance:
+  ax_cache_ttl_ms: 200
+
+# MCP client (disabled by default — enable per server)
+mcp:
+  enabled: false
+  allow_private_urls: false   # set true only for trusted local MCP servers (127.0.0.1, RFC1918)
+  servers: []
+  # Stdio example:
+  # - name: filesystem
+  #   transport: stdio
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you"]
+  #   enabled: false
+  # SSE / remote HTTP example (Phase 10):
+  # - name: remote_tools
+  #   transport: sse
+  #   url: https://mcp.example.com
+  #   sse_path: /sse
+  #   headers:
+  #     Authorization: "Bearer YOUR_TOKEN"
+  #   enabled: false
+
+# Tier-0 coding agent delegation (§6.10)
+delegation:
+  enabled: true
+  default_agent: auto          # auto | claude | codex | opencode | cursor
+  timeout_sec: 300
+  structured_output: true      # Phase 11: JSON {stdout, stderr, exit_code, summary}
+  env_allowlist: []            # extra env vars beyond safe defaults
+
+voice:
+  mode: pipeline                   # pipeline | realtime (Phase 10 beta)
+  realtime_provider: openai        # openai (requires OPENAI_API_KEY)
+  tts: groq                    # groq | macos | none
+  tts_stream: true               # prefer POST /tts/stream when available
+  tts_model: canopylabs/orpheus-v1-english   # Groq Orpheus TTS model ID
+  tts_voice: troy              # Orpheus English voice (troy, hannah, austin, …)
+  stt: groq                    # groq | openai | none  (none => typed input)
+  stt_model: whisper-large-v3-turbo          # Groq Whisper model ID
+  record_seconds: 8            # max push-to-talk capture length
+  barge_in: true               # Phase 4: interrupt TTS when user speaks
+  vad_energy_threshold: 0.02   # mic RMS threshold for barge-in detection
+
+agent:
+  max_steps: 12                # safety cap on tool calls per task
+  careful: false               # true => confirm before EVERY action
+  narrate: true                # speak a short line before each action
+  local_only: false            # true => prefer local model; cloud fallback if unavailable
+  explicit_planner: false      # Phase 11: decompose novel goals into plan steps (FR-9)
+  planner_use_llm: true        # use cloud LLM for planning when explicit_planner is true
+
+hud:
+  enabled: true                # menu-bar + overlay window
+
+stop:
+  hotkey: ctrl+shift+s         # global STOP hotkey (requires pynput)
+  escape_double_tap: true      # double-tap Escape also triggers STOP
+
+knowledge:
+  enabled: true                # inject App Knowledge Packs (Mail, Safari, Office, IDEs, …)
+  sideload_dir: ~/.aether/packs  # Phase 11: user-installed packs
+
+# Per-capability permission toggles (false = block tool calls)
+capabilities:
+  screen: true
+  input: true
+  shell: true
+  files: true
+  network: true

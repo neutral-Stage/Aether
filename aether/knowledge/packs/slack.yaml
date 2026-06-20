@@ -1,0 +1,26 @@
+# Slack knowledge pack — Phase 5
+app: Slack
+tier: 2  # AX + keyboard; limited AppleScript
+bundle_ids:
+  - com.tinyspeck.slackmacgap
+aliases:
+  - slack
+shortcuts:
+  - "⌘K — quick switcher / command palette"
+  - "⌘N — new message"
+  - "⌘⇧K — browse channels"
+  - "⌘F — search in channel"
+  - "⌘⇧A — upload file"
+  - "Esc — close sidebar / dismiss"
+recipes:
+  send_message:
+    - "Select channel or DM via quick switcher (⌘K)"
+    - "Focus message field; type text"
+    - "Return to send — DESTRUCTIVE: confirm before sending"
+  search_channel:
+    - "⌘F to search within current channel"
+    - "Use get_screen_context to read results"
+gotchas:
+  - "Sending messages is irreversible — require confirmation"
+  - "Electron UI may have sparse AX; use quick switcher + keyboard"
+  - "Threads open in side panel; re-read AX after navigation"

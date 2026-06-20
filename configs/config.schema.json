@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aether.local/config.schema.json",
+  "title": "Aether config.yaml",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "version": { "type": "string" },
+    "llm": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "max_tokens": { "type": "integer", "minimum": 1 },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 }
+      }
+    },
+    "router": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "config_path": { "type": "string" }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "max_steps": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "careful": { "type": "boolean" },
+        "narrate": { "type": "boolean" },
+        "local_only": { "type": "boolean" },
+        "explicit_planner": { "type": "boolean" },
+        "planner_use_llm": { "type": "boolean" }
+      }
+    },
+    "delegation": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "default_agent": { "type": "string" },
+        "timeout_sec": { "type": "integer", "minimum": 1 },
+        "structured_output": { "type": "boolean" },
+        "env_allowlist": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "db_path": { "type": "string" },
+        "embedding_provider": { "enum": ["hash", "openai", "local"] }
+      }
+    },
+    "knowledge": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "sideload_dir": { "type": "string" }
+      }
+    },
+    "voice": {
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["pipeline", "realtime"] },
+        "realtime_provider": { "type": "string" },
+        "tts": { "enum": ["groq", "macos", "none"] },
+        "tts_stream": { "type": "boolean" },
+        "tts_model": { "type": "string" },
+        "tts_voice": { "type": "string" },
+        "stt": { "enum": ["groq", "openai", "none"] },
+        "stt_model": { "type": "string" },
+        "record_seconds": { "type": "number", "minimum": 1 },
+        "barge_in": { "type": "boolean" },
+        "vad_energy_threshold": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "beta": {
+      "type": "object",
+      "description": "Risky or in-progress features — disabled by default",
+      "properties": {
+        "continuous_screen_stream": { "type": "boolean" },
+        "ambient_listening": { "type": "boolean" },
+        "wake_word": { "type": "boolean" },
+        "wake_word_engine": { "type": "string" },
+        "screen_stream_fps": { "type": "number", "minimum": 0.1, "maximum": 30 },
+        "native_effectors": { "type": "boolean" },
+        "realtime_voice": { "type": "boolean" },
+        "plugins_enabled": { "type": "boolean" },
+        "auto_update_check": { "type": "boolean" },
+        "update_feed_url": { "type": "string" },
+        "sparkle_appcast_url": { "type": "string" },
+        "crash_reporting": { "type": "boolean" }
+      }
+    },
+    "plugins": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "require_explicit_enable": { "type": "boolean" }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "allow_private_urls": { "type": "boolean" },
+        "servers": {
+          "type": "array",
+          "items": { "type": "object" }
+        }
+      }
+    },
+    "feedback": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "store_path": { "type": "string" }
+      }
+    },
+    "policy": { "type": "object" },
+    "audit": { "type": "object" },
+    "capabilities": { "type": "object" }
+  }
+}

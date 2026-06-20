@@ -1,0 +1,24 @@
+# Calendar.app knowledge pack — Phase 5
+app: Calendar
+tier: 1  # AppleScript + AX
+bundle_ids:
+  - com.apple.iCal
+aliases:
+  - calendar
+  - ical
+shortcuts:
+  - "⌘N — new event"
+  - "⌘1/2/3 — day/week/month view"
+  - "⌘T — go to today"
+  - "⌘F — search"
+recipes:
+  create_event:
+    - "⌘N to create event; fill title, time, location"
+    - "Confirm before sending invites (destructive)"
+  find_meeting:
+    - "⌘F search or navigate with arrow keys"
+    - "get_screen_context for event details"
+gotchas:
+  - "Sending invites affects other people — treat as destructive"
+  - "Multiple calendars; verify correct calendar selected"
+  - "Time zone changes affect displayed times"

@@ -1,0 +1,163 @@
+# Model router role → backend mapping (§6.3)
+#
+# Roles:
+#   local_fast      — reflexive UI steps, simple tool picks (Ollama/MLX/llama.cpp)
+#   cloud_frontier  — planning, hard reasoning, novel goals
+#   vision          — screenshot + VLM/OCR when AX is insufficient
+#
+# Provider API keys are read from environment variables (never commit secrets).
+# Set keys in `.env` — see `.env.example`.
+
+default_role: cloud_frontier
+
+# Reusable provider templates — referenced by roles via `provider: <name>`
+providers:
+  anthropic:
+    backend: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    model: claude-sonnet-4-6
+    max_tokens: 1024
+    temperature: 0
+
+  openai:
+    backend: openai_compatible
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    model: gpt-4o-mini
+    max_tokens: 1024
+    temperature: 0
+    provider_label: openai
+
+  openrouter:
+    backend: openai_compatible
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    model: anthropic/claude-sonnet-4
+    max_tokens: 1024
+    temperature: 0
+    provider_label: openrouter
+    extra_headers:
+      HTTP-Referer: https://github.com/aether-agent
+      X-Title: Aether
+
+  groq:
+    backend: openai_compatible
+    api_key_env: GROQ_API_KEY
+    base_url: https://api.groq.com/openai/v1
+    model: llama-3.3-70b-versatile
+    max_tokens: 1024
+    temperature: 0
+    provider_label: groq
+
+  fireworks:
+    backend: openai_compatible
+    api_key_env: FIREWORKS_API_KEY
+    base_url: https://api.fireworks.ai/inference/v1
+    model: accounts/fireworks/models/llama-v3p3-70b-instruct
+    max_tokens: 1024
+    temperature: 0
+    provider_label: fireworks
+
+  kilo:
+    backend: openai_compatible
+    api_key_env: KILO_API_KEY
+    base_url: https://api.kilo.ai/api/gateway
+    model: anthropic/claude-sonnet-4.6
+    max_tokens: 1024
+    temperature: 0
+    provider_label: kilo
+
+  kie_gemini:
+    # Kie uses model-specific paths — pick the endpoint for your subscribed model
+    backend: openai_compatible
+    api_key_env: KIE_API_KEY
+    base_url: https://api.kie.ai/gemini-2.5-pro/v1
+    model: gemini-2.5-pro
+    max_tokens: 1024
+    temperature: 0
+    provider_label: kie
+
+  zai:
+    # GLM-5-Turbo — supervisor / planner (cloud_frontier)
+    # Z.ai model ID: glm-5-turbo (see https://docs.z.ai/guides/llm/glm-5-turbo)
+    backend: openai_compatible
+    api_key_env: ZAI_API_KEY
+    base_url: https://api.z.ai/api/coding/paas/v4
+    model: glm-5-turbo
+    max_tokens: 4096
+    temperature: 0
+    provider_label: zai
+
+  zai_vision:
+    # GLM-5V — vision / VLM path (user alias for glm-5v-turbo)
+    # Z.ai model ID: glm-5v-turbo (see https://docs.z.ai/guides/vlm/glm-5v-turbo)
+    backend: openai_compatible
+    api_key_env: ZAI_API_KEY
+    base_url: https://api.z.ai/api/coding/paas/v4
+    model: glm-5v-turbo
+    max_tokens: 4096
+    temperature: 0
+    provider_label: zai_vision
+
+  google:
+    backend: google
+    api_key_env: GOOGLE_API_KEY
+    model: gemini-2.0-flash
+    max_tokens: 1024
+    temperature: 0
+
+# Fallback chain when a backend is unavailable
+fallback_order:
+  - local_fast
+  - cloud_frontier
+
+# Per-role provider failover (Phase 10, NFR-3): on transient LLM errors (503, rate
+# limit), try ``failover_providers`` in order after the primary ``provider``.
+# Unit tests: tests/unit/test_router_failover.py
+
+roles:
+  local_fast:
+    backend: http          # http | anthropic | openai_compatible | google
+    endpoint: http://localhost:11434/api/chat   # Ollama-compatible
+    model: llama3.2:3b
+    max_tokens: 512
+    temperature: 0
+    timeout_seconds: 30
+
+  cloud_frontier:
+    provider: zai              # supervisor / planner — GLM-5-Turbo via Z.ai
+    failover_providers:
+      - openrouter
+      - groq
+    # provider: anthropic
+    # provider: openrouter
+    # provider: groq
+    # provider: openai
+    # provider: kilo
+    # provider: kie_gemini
+    # provider: google
+
+  vision:
+    provider: zai_vision       # GLM-5V (glm-5v-turbo) via Z.ai
+    failover_providers:
+      - openrouter
+      - google
+    ocr_only: false
+    # Optional VLM HTTP endpoint (OpenAI-compatible /v1/chat/completions with image)
+    vlm_endpoint: null
+    vlm_model: null
+
+# Routing heuristics
+routing:
+  # Steps with this many prior failures on the current goal → cloud
+  failure_threshold_cloud: 2
+  # Empty AX tree → vision path
+  ax_empty_threshold: 3
+  # Reflexive tools that may use local_fast when AX is sufficient
+  reflexive_tools:
+    - open_app
+    - click
+    - press_key
+    - type_text
+    - finder_go_to
+    - safari_open_url

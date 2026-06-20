@@ -1,0 +1,128 @@
+# Automated task benchmark suite (Phase 6)
+# Goals are scored against expected tool traces or success criteria.
+# Run: python scripts/benchmark_tasks.py --mock
+# Live: python scripts/benchmark_tasks.py --sidecar http://127.0.0.1:8765
+
+version: 1
+description: >
+  Scripted multi-step goals for measuring agent success rate.
+  Mock mode validates trace scoring without LLM/macOS dependencies.
+
+tasks:
+  - id: finder_open
+    category: finder
+    goal: "Open Finder and confirm it is frontmost"
+    mock_trace:
+      - tool: open_app
+        args: { name: Finder }
+      - tool: get_screen_context
+        args: {}
+      - tool: finish
+        args: { message: "Finder is open." }
+    success:
+      required_tools: [open_app, finish]
+      min_steps: 2
+
+  - id: safari_navigate
+    category: safari
+    goal: "Open Safari and go to apple.com"
+    mock_trace:
+      - tool: safari_open_url
+        args: { url: "https://apple.com" }
+      - tool: finish
+        args: { message: "Opened apple.com in Safari." }
+    success:
+      required_tools: [safari_open_url, finish]
+
+  - id: mail_compose_draft
+    category: mail
+    goal: "Compose a new email draft in Mail"
+    mock_trace:
+      - tool: mail_compose
+        args: { to: "test@example.com", subject: "Hello", body: "Hi" }
+      - tool: finish
+        args: { message: "Draft composed." }
+    success:
+      required_tools: [mail_compose, finish]
+
+  - id: shell_echo
+    category: shell
+    goal: "Run echo hello in the terminal"
+    mock_trace:
+      - tool: run_shell
+        args: { command: "echo hello" }
+      - tool: finish
+        args: { message: "Echo complete." }
+    success:
+      required_tools: [run_shell, finish]
+
+  - id: browser_smoke
+    category: browser
+    goal: "Navigate to example.com in the browser"
+    mock_trace:
+      - tool: browser_navigate
+        args: { url: "https://example.com" }
+      - tool: browser_get_text
+        args: { selector: "h1" }
+      - tool: finish
+        args: { message: "Page loaded." }
+    success:
+      required_tools: [browser_navigate, finish]
+      min_steps: 2
+
+  - id: remember_fact
+    category: memory
+    goal: "Remember that the user's favorite color is blue"
+    mock_trace:
+      - tool: remember_fact
+        args: { text: "favorite color is blue" }
+      - tool: finish
+        args: { message: "Remembered." }
+    success:
+      required_tools: [remember_fact, finish]
+
+  - id: finder_go_to
+    category: finder
+    goal: "Go to Downloads folder in Finder"
+    mock_trace:
+      - tool: finder_go_to
+        args: { path: "~/Downloads" }
+      - tool: finish
+        args: { message: "Navigated to Downloads." }
+    success:
+      required_tools: [finder_go_to, finish]
+
+  - id: press_key_shortcut
+    category: input
+    goal: "Press Command+Space to open Spotlight"
+    mock_trace:
+      - tool: press_key
+        args: { key: "space", modifiers: ["command"] }
+      - tool: finish
+        args: { message: "Shortcut sent." }
+    success:
+      required_tools: [press_key, finish]
+
+  - id: screenshot_analyze
+    category: vision
+    goal: "Take a screenshot and analyze the screen when AX is empty"
+    mock_trace:
+      - tool: get_screen_context
+        args: {}
+      - tool: analyze_screen
+        args: {}
+      - tool: finish
+        args: { message: "Screen analyzed." }
+    success:
+      required_tools: [analyze_screen, finish]
+
+  - id: applescript_smoke
+    category: applescript
+    goal: "Run a simple AppleScript to get frontmost app name"
+    mock_trace:
+      - tool: run_applescript
+        args: { source: 'tell application "System Events" to get name of first process' }
+      - tool: finish
+        args: { message: "AppleScript ran." }
+    success:
+      required_tools: [run_applescript, finish]

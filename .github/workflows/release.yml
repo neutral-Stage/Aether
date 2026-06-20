@@ -1,0 +1,45 @@
+# Build release DMG on version tag (stub — requires Apple credentials)
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt -r requirements-sidecar.txt
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+      - name: Swift build
+        working-directory: macos/Aether
+        run: swift build -c release
+
+      - name: Build DMG (requires signing secrets)
+        run: |
+          if [ -z "${{ secrets.APPLE_DEVELOPER_ID }}" ]; then
+            echo "Skipping DMG: APPLE_DEVELOPER_ID not configured"
+            exit 0
+          fi
+          bash macos/scripts/build-dmg.sh
+
+      - name: Upload artifact placeholder
+        uses: actions/upload-artifact@v4
+        with:
+          name: aether-release-${{ github.ref_name }}
+          path: |
+            VERSION
+            macos/Aether/.build/release/Aether
+          if-no-files-found: ignore

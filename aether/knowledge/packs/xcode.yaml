@@ -1,0 +1,26 @@
+# Xcode knowledge pack — Phase 9
+app: Xcode
+tier: 0
+bundle_ids:
+  - com.apple.dt.Xcode
+aliases:
+  - xcode
+shortcuts:
+  - "⌘B — build"
+  - "⌘R — run"
+  - "⌘U — test"
+  - "⌘⇧O — open quickly"
+  - "⌘⇧K — clean build folder"
+  - "⌘0 — show/hide navigator"
+recipes:
+  build_project:
+    - "Open workspace via open_app or shell: open *.xcworkspace"
+    - "⌘B build; read issue navigator via get_screen_context"
+  run_tests:
+    - "⌘U test; or xcodebuild test -scheme <name>"
+  coding_task:
+    - "Use delegate_to_coder for multi-file edits"
+    - "Supervise with xcodebuild and test output"
+gotchas:
+  - "Clean build folder is destructive — confirm"
+  - "Simulator/device selection affects run target — verify scheme"

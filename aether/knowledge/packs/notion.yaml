@@ -1,0 +1,23 @@
+# Notion knowledge pack — Phase 9
+app: Notion
+tier: 2
+bundle_ids:
+  - notion.id
+aliases:
+  - notion
+shortcuts:
+  - "⌘P — quick find"
+  - "⌘N — new page"
+  - "⌘⇧N — new window"
+  - "⌘[/] — back/forward"
+  - "⌘L — copy link"
+recipes:
+  open_page:
+    - "⌘P quick find; type page title"
+    - "get_screen_context after navigation"
+  create_page:
+    - "⌘N or inline + New page"
+    - "Confirm before publishing/sharing"
+gotchas:
+  - "Electron app — sparse AX; quick find is reliable"
+  - "Sharing links is destructive-adjacent — confirm"

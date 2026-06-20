@@ -1,0 +1,21 @@
+# Zoom knowledge pack — Phase 9
+app: Zoom
+tier: 2
+bundle_ids:
+  - us.zoom.xos
+aliases:
+  - zoom
+shortcuts:
+  - "⌘⇧A — mute/unmute audio"
+  - "⌘⇧V — start/stop video"
+  - "⌘⇧S — share screen"
+  - "⌘W — close window"
+recipes:
+  join_meeting:
+    - "Open Zoom; click Join — prefer user-provided meeting ID"
+    - "Do not join meetings without explicit user goal"
+  mute_self:
+    - "⌘⇧A or click Mute in meeting controls"
+gotchas:
+  - "Joining/leaving meetings affects others — confirm"
+  - "Screen share requires Screen Recording permission"

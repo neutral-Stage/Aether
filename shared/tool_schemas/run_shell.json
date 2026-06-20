@@ -1,0 +1,17 @@
+{
+  "name": "run_shell",
+  "description": "Run a shell command and return its output.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "command"
+    ]
+  },
+  "permission": "shell",
+  "impact": "reversible"
+}

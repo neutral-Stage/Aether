@@ -1,0 +1,17 @@
+{
+  "name": "safari_open_url",
+  "description": "Open a URL in Safari (activates Safari, sets front tab URL).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

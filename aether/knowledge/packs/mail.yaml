@@ -1,0 +1,25 @@
+# Mail.app knowledge pack — Phase 1
+app: Mail
+tier: 1  # AppleScript / Apple Events
+shortcuts:
+  - "⌘N — new message"
+  - "⌘⇧D — send"
+  - "⌘⇧F — forward"
+  - "⌘R — reply"
+  - "⌘1 — inbox"
+  - "⌘⇧A — attach file"
+recipes:
+  compose_email:
+    - "Use mail_compose tool (AppleScript) for reliable new message"
+    - "Or ⌘N then type in the compose window"
+    - "Confirm with user before mail_compose if sending is implied"
+  read_inbox:
+    - "Activate Mail; use get_screen_context for message list"
+    - "Prefer keyboard navigation (↓) to select messages"
+gotchas:
+  - "Sending email is destructive — require confirmation before send"
+  - "Compose window may be a separate sheet; re-read AX after ⌘N"
+  - "Some accounts delay 'Send' until sync completes"
+scripting:
+  mail_compose: "Create visible outgoing message with to/subject/body"
+  mail_activate: "Bring Mail to front"

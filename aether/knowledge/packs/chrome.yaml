@@ -1,0 +1,27 @@
+# Google Chrome knowledge pack — Phase 5
+app: Google Chrome
+tier: 2  # AX + browser tools; prefer Playwright for automation
+bundle_ids:
+  - com.google.Chrome
+  - com.google.Chrome.canary
+aliases:
+  - chrome
+  - google chrome
+shortcuts:
+  - "⌘L — focus address bar"
+  - "⌘T — new tab"
+  - "⌘W — close tab"
+  - "⌘⇧T — reopen closed tab"
+  - "⌘F — find on page"
+  - "⌘R — reload"
+recipes:
+  open_url:
+    - "Prefer browser_navigate for deterministic control"
+    - "Or ⌘L, type URL, Return"
+  fill_form:
+    - "Use browser_fill with selector from get_screen_context or analyze_screen"
+    - "Re-verify after submit"
+gotchas:
+  - "Many sites block automation; use browser_* tools over raw clicks when possible"
+  - "Extensions can alter DOM; AX may not match visible UI"
+  - "Incognito windows have separate profiles"

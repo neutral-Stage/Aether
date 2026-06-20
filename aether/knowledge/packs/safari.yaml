@@ -1,0 +1,22 @@
+# Safari knowledge pack — Phase 1
+app: Safari
+tier: 1  # AppleScript + AX
+shortcuts:
+  - "⌘L — focus address bar"
+  - "⌘T — new tab"
+  - "⌘W — close tab"
+  - "⌘R — reload"
+  - "⌘F — find on page"
+  - "⌘⇧T — reopen closed tab"
+recipes:
+  open_url:
+    - "Prefer safari_open_url tool for deterministic navigation"
+    - "Or open_app Safari then ⌘L, type URL, Return"
+  search_web:
+    - "⌘L, type query, Return (uses default search engine)"
+gotchas:
+  - "Private browsing windows behave differently in AX"
+  - "Some sites block automation; use AppleScript URL set when possible"
+  - "After navigation, wait and call get_screen_context again"
+scripting:
+  safari_open_url: "Set URL of front Safari document"

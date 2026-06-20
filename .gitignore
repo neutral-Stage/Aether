@@ -1,0 +1,19 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# runtime artifacts
+*.wav
+*.png
+captures/
+logs/
+data/
+.pytest_cache/
+macos/Aether/.build/
+.DS_Store

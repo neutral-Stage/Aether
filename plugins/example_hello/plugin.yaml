@@ -1,0 +1,5 @@
+name: example_hello
+version: 0.1.0
+description: Harmless read-only hello tool for plugin SDK demonstration
+enabled: true
+author: Aether Team

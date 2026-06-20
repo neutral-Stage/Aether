@@ -1,0 +1,17 @@
+{
+  "name": "browser_click",
+  "description": "Click an element in the Playwright browser by CSS selector.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "selector": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "selector"
+    ]
+  },
+  "permission": "network",
+  "impact": "reversible"
+}

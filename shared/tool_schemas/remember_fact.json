@@ -1,0 +1,21 @@
+{
+  "name": "remember_fact",
+  "description": "Store a fact in long-term memory for future tasks.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string",
+        "description": "fact|preference|quirk"
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "permission": "none",
+  "impact": "reversible"
+}

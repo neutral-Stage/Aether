@@ -1,0 +1,29 @@
+# Aether — Phase 1 dependencies
+# Python 3.10+ on macOS (Apple Silicon recommended)
+
+# --- Core (required) ---
+anthropic>=0.39.0           # LLM brain (tool calling)
+python-dotenv>=1.0.0        # load API keys from .env
+PyYAML>=6.0                 # config.yaml
+
+# --- macOS native bridges (required, macOS only) ---
+pyobjc-core>=10.0
+pyobjc-framework-Cocoa>=10.0              # NSWorkspace, app control
+pyobjc-framework-Quartz>=10.0             # CGEvent (mouse/keyboard), screen capture
+pyobjc-framework-ApplicationServices>=10.0 # Accessibility (AXUIElement)
+
+# --- Phase 1 HUD + STOP ---
+rumps>=0.4.0                # menu-bar presence (optional but recommended)
+pynput>=1.7.6               # global STOP hotkey (optional; HUD button always works)
+
+# --- Phase 2: router, vision, browser, memory ---
+playwright>=1.40.0          # browser automation (optional: playwright install chromium)
+pyobjc-framework-Vision>=10.0  # on-device OCR (optional, macOS only)
+
+# Local fast model: use Ollama (https://ollama.com) — no Python package required.
+# Configure endpoint in configs/router.yaml (default http://localhost:11434/api/chat)
+# TTS uses the built-in macOS `say` command (no package needed).
+# STT (push-to-talk) needs these + an OPENAI_API_KEY. Omit to use typed input.
+sounddevice>=0.4.6         # mic capture  (needs PortAudio: `brew install portaudio`)
+numpy>=1.24               # audio buffers
+openai>=1.30.0            # Whisper transcription

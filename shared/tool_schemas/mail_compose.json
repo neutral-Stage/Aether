@@ -1,0 +1,20 @@
+{
+  "name": "mail_compose",
+  "description": "Open Mail with a new compose window (visible, not sent). Use for drafting; sending requires separate confirmation.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "to": {
+        "type": "string"
+      },
+      "subject": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string"
+      }
+    }
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

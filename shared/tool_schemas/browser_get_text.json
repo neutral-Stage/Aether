@@ -1,0 +1,17 @@
+{
+  "name": "browser_get_text",
+  "description": "Read text from an element in the Playwright browser.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "selector": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "selector"
+    ]
+  },
+  "permission": "network",
+  "impact": "read"
+}

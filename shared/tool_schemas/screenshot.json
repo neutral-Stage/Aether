@@ -1,0 +1,10 @@
+{
+  "name": "screenshot",
+  "description": "Capture the screen to a PNG file (returns the path).",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "permission": "screen",
+  "impact": "read"
+}

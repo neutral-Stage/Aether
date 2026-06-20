@@ -1,0 +1,10 @@
+{
+  "name": "get_screen_context",
+  "description": "Read what's currently on screen: the frontmost app and a numbered list of UI elements. Call FIRST and after actions that change the screen.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "permission": "screen",
+  "impact": "read"
+}

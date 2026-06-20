@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "tool_count": 19,
+  "tools": [
+    {
+      "name": "get_screen_context",
+      "file": "get_screen_context.json"
+    },
+    {
+      "name": "open_app",
+      "file": "open_app.json"
+    },
+    {
+      "name": "click",
+      "file": "click.json"
+    },
+    {
+      "name": "type_text",
+      "file": "type_text.json"
+    },
+    {
+      "name": "press_key",
+      "file": "press_key.json"
+    },
+    {
+      "name": "run_shell",
+      "file": "run_shell.json"
+    },
+    {
+      "name": "screenshot",
+      "file": "screenshot.json"
+    },
+    {
+      "name": "analyze_screen",
+      "file": "analyze_screen.json"
+    },
+    {
+      "name": "remember_fact",
+      "file": "remember_fact.json"
+    },
+    {
+      "name": "browser_navigate",
+      "file": "browser_navigate.json"
+    },
+    {
+      "name": "browser_click",
+      "file": "browser_click.json"
+    },
+    {
+      "name": "browser_fill",
+      "file": "browser_fill.json"
+    },
+    {
+      "name": "browser_get_text",
+      "file": "browser_get_text.json"
+    },
+    {
+      "name": "browser_screenshot",
+      "file": "browser_screenshot.json"
+    },
+    {
+      "name": "run_applescript",
+      "file": "run_applescript.json"
+    },
+    {
+      "name": "finder_go_to",
+      "file": "finder_go_to.json"
+    },
+    {
+      "name": "safari_open_url",
+      "file": "safari_open_url.json"
+    },
+    {
+      "name": "mail_compose",
+      "file": "mail_compose.json"
+    },
+    {
+      "name": "finish",
+      "file": "finish.json"
+    }
+  ]
+}

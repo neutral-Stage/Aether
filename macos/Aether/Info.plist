@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Aether</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.aether.macos</string>
+	<key>CFBundleVersion</key>
+	<string>0.5.0-beta.1</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.5.0-beta.1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Aether uses the microphone for push-to-talk voice commands.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Aether transcribes your voice on device for low-latency control.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Aether automates Mail, Safari, Finder, and other apps on your behalf.</string>
+</dict>
+</plist>

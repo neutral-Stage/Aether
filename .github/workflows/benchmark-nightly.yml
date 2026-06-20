@@ -1,0 +1,50 @@
+name: Benchmark Nightly
+
+# Non-blocking nightly benchmark — does not gate PR CI (see ci.yml).
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Run live sidecar benchmark (requires secrets + API keys)"
+        type: boolean
+        default: false
+
+jobs:
+  benchmark:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-sidecar.txt
+
+      - name: Mock benchmark (default)
+        run: python scripts/benchmark_tasks.py --mock
+
+      - name: Live sidecar benchmark (optional)
+        if: github.event_name == 'workflow_dispatch' && inputs.live == true
+        env:
+          AETHER_SIDECAR_TOKEN: ${{ secrets.AETHER_SIDECAR_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          python -m sidecar.server &
+          SIDECAR_PID=$!
+          sleep 5
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8765/health && break
+            sleep 2
+          done
+          python scripts/benchmark_tasks.py --sidecar http://127.0.0.1:8765 --token "$AETHER_SIDECAR_TOKEN" || true
+          kill $SIDECAR_PID 2>/dev/null || true

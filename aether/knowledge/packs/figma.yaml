@@ -1,0 +1,23 @@
+# Figma knowledge pack — Phase 9
+app: Figma
+tier: 2
+bundle_ids:
+  - com.figma.Desktop
+aliases:
+  - figma
+shortcuts:
+  - "⌘\\ — show/hide UI"
+  - "⌘F — find in file"
+  - "⌘G — find next"
+  - "⌘D — duplicate selection"
+  - "⌘⇧K — place image"
+  - "Space+drag — pan canvas"
+recipes:
+  select_frame:
+    - "Use quick find (⌘F) or layers panel via AX"
+    - "Prefer keyboard navigation; canvas is often sparse in AX"
+  export_asset:
+    - "Select layer; Export panel — confirm before bulk export"
+gotchas:
+  - "Canvas elements rarely appear in AX — use find + keyboard"
+  - "Destructive file ops need confirmation"
