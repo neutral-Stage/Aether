@@ -1,0 +1,22 @@
+# Linear knowledge pack — Phase 1
+app: Linear
+tier: 2
+bundle_ids:
+  - com.linear.linear
+aliases:
+  - linear
+shortcuts:
+  - "⌘K — command menu"
+  - "C — create a new issue"
+  - "/ — focus search"
+  - "G then I — go to My Issues"
+recipes:
+  create_issue:
+    - "Press C, type the title, Tab to description, then ⌘↩ to submit"
+  search_issue:
+    - "Press / or ⌘K, type the query, Return"
+  go_to_view:
+    - "⌘K, type the view/team name (e.g. 'Backlog'), Return"
+gotchas:
+  - "Linear is keyboard-first; single-letter shortcuts (C, /) only work when no field is focused"
+  - "The desktop app wraps the web app; AX labels are generic — prefer ⌘K"

@@ -1,0 +1,23 @@
+# Obsidian knowledge pack — Phase 1
+app: Obsidian
+tier: 2
+bundle_ids:
+  - md.obsidian
+aliases:
+  - obsidian
+shortcuts:
+  - "⌘O — quick open a note"
+  - "⌘P — command palette"
+  - "⌘N — new note"
+  - "⌘E — toggle edit/preview"
+recipes:
+  open_note:
+    - "⌘O, type the note title, Return"
+    - "Or use the obsidian:// URI via safari_open_url, e.g. obsidian://open?vault=<vault>&file=<note>"
+  new_note:
+    - "⌘N, type the title, then the body"
+  run_command:
+    - "⌘P, type the command name (e.g. 'Insert template'), Return"
+gotchas:
+  - "Obsidian is Electron; most actions are reachable via the ⌘P command palette"
+  - "obsidian:// URIs require the vault name to be known"
