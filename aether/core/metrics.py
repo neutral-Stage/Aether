@@ -41,7 +41,7 @@ class MetricsCollector:
     _lock = threading.Lock()
 
     def __init__(self) -> None:
-        self._mutex = threading.Lock()
+        self._mutex = threading.RLock()  # re-entrant: record_step/start_run call inc()/observe() while held
         self._counters: dict[str, int] = defaultdict(int)
         self._gauges: dict[str, float] = {}
         self._histograms: dict[str, list[float]] = defaultdict(list)
