@@ -1,0 +1,21 @@
+# System Settings.app knowledge pack — Phase 1
+app: System Settings
+tier: 2
+bundle_ids:
+  - com.apple.systempreferences
+aliases:
+  - system settings
+  - system preferences
+  - settings
+shortcuts:
+  - "⌘F — search all settings"
+  - "⌘[ / ⌘] — back / forward between panes"
+recipes:
+  open_pane:
+    - "Prefer URL scheme via safari_open_url, e.g. x-apple.systempreferences:com.apple.preference.network"
+    - "Or ⌘F, type the setting name (e.g. 'Wi-Fi'), Return"
+  search_setting:
+    - "⌘F, type the keyword, pick the highlighted result"
+gotchas:
+  - "Pane identifiers (x-apple.systempreferences:...) changed in macOS Ventura+"
+  - "The settings list is a scrolling sidebar; use search rather than scrolling"

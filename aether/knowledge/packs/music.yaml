@@ -1,0 +1,24 @@
+# Music.app knowledge pack — Phase 1
+app: Music
+tier: 1
+bundle_ids:
+  - com.apple.Music
+aliases:
+  - music
+  - apple music
+shortcuts:
+  - "Space — play/pause"
+  - "⌘F — search"
+  - "⌘→/⌘← — next/previous track"
+  - "⌘↑/⌘↓ — volume up/down"
+recipes:
+  play_song:
+    - "AppleScript: tell application \"Music\" to play (first track whose name is \"<song>\")"
+    - "Or ⌘F, type the song, Return, then press Return on the result"
+  pause:
+    - "Press Space, or AppleScript: tell application \"Music\" to pause"
+gotchas:
+  - "Search spans Apple Music catalog and library; library-only playback needs an owned track"
+  - "AppleScript controls the desktop app, not AirPlay targets"
+scripting:
+  run_applescript: "Music supports AppleScript for playback control"

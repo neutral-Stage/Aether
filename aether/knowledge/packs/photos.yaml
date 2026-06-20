@@ -1,0 +1,20 @@
+# Photos.app knowledge pack — Phase 1
+app: Photos
+tier: 2
+bundle_ids:
+  - com.apple.Photos
+aliases:
+  - photos
+shortcuts:
+  - "⌘F — search photos"
+  - "↩ — open selected photo"
+  - "⌘\\ — toggle sidebar"
+  - "⌘. — exit full-screen/edit"
+recipes:
+  search_photos:
+    - "⌘F, type a place/person/thing keyword, Return"
+  edit_photo:
+    - "Select a photo, press Return to open, click Edit (top-right)"
+gotchas:
+  - "Photos has limited AppleScript — prefer AX clicks and keyboard"
+  - "Editing controls are only visible after entering Edit mode"
