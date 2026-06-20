@@ -19,6 +19,50 @@ LATENCY_BUDGETS_MS: dict[str, float] = {
     "stop_latency_ms": 200.0,
 }
 
+# Estimated LLM prices in USD per 1K tokens (input, output). ESTIMATES ONLY —
+# token counts from providers can differ from billed amounts; cache/tiered
+# pricing is ignored. Keyed by provider (LLMResponse.backend); MODEL_PRICES
+# overrides per model where known. local_http is free.
+PROVIDER_PRICES: dict[str, dict[str, float]] = {
+    "anthropic": {"in": 0.003, "out": 0.015},
+    "openai": {"in": 0.00015, "out": 0.0006},
+    "google": {"in": 0.0001, "out": 0.0004},
+    "groq": {"in": 0.00059, "out": 0.00079},
+    "fireworks": {"in": 0.0009, "out": 0.0009},
+    "openrouter": {"in": 0.003, "out": 0.015},
+    "kilo": {"in": 0.003, "out": 0.015},
+    "kie": {"in": 0.00125, "out": 0.005},
+    "zai": {"in": 0.0006, "out": 0.0022},
+    "zai_vision": {"in": 0.0006, "out": 0.0022},
+    "local_http": {"in": 0.0, "out": 0.0},
+}
+
+MODEL_PRICES: dict[str, dict[str, float]] = {
+    "claude-sonnet-4-6": {"in": 0.003, "out": 0.015},
+    "gpt-4o-mini": {"in": 0.00015, "out": 0.0006},
+    "gemini-2.0-flash": {"in": 0.0001, "out": 0.0004},
+    "llama-3.3-70b-versatile": {"in": 0.00059, "out": 0.00079},
+    "glm-5-turbo": {"in": 0.0006, "out": 0.0022},
+    "glm-5v-turbo": {"in": 0.0006, "out": 0.0022},
+}
+
+
+def estimate_cost_usd(
+    provider: str,
+    model: str | None,
+    tokens_in: int,
+    tokens_out: int,
+) -> float:
+    """Estimated USD cost for a turn. 0.0 for local/unknown providers."""
+    rate = None
+    if model and model in MODEL_PRICES:
+        rate = MODEL_PRICES[model]
+    elif provider in PROVIDER_PRICES:
+        rate = PROVIDER_PRICES[provider]
+    if rate is None:
+        return 0.0
+    return (tokens_in / 1000.0) * rate["in"] + (tokens_out / 1000.0) * rate["out"]
+
 
 @dataclass
 class RunMetrics:
@@ -32,6 +76,9 @@ class RunMetrics:
     errors: int = 0
     route_tiers: dict[str, int] = field(default_factory=dict)
     step_latencies_ms: list[float] = field(default_factory=list)
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float = 0.0
 
 
 class MetricsCollector:
@@ -49,6 +96,7 @@ class MetricsCollector:
         self._current_run: RunMetrics | None = None
         self._max_runs = 50
         self._max_hist = 200
+        self._provider_costs: dict[str, dict[str, float]] = {}
 
     @classmethod
     def get(cls) -> MetricsCollector:
@@ -121,6 +169,36 @@ class MetricsCollector:
                 self.inc("tool_errors_total")
             self.observe("tool_latency_ms", latency_ms)
 
+    def record_llm_usage(
+        self,
+        provider: str,
+        tokens_in: int | None,
+        tokens_out: int | None,
+        model: str | None = None,
+    ) -> None:
+        if tokens_in is None and tokens_out is None:
+            return
+        ti = int(tokens_in or 0)
+        to = int(tokens_out or 0)
+        known = provider in PROVIDER_PRICES or (model is not None and model in MODEL_PRICES)
+        cost = estimate_cost_usd(provider, model, ti, to)
+        self.inc(f"tokens_in_{provider}", ti)
+        self.inc(f"tokens_out_{provider}", to)
+        if not known:
+            self.inc("unknown_provider_usage")
+        with self._mutex:
+            entry = self._provider_costs.setdefault(
+                provider, {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "calls": 0}
+            )
+            entry["tokens_in"] += ti
+            entry["tokens_out"] += to
+            entry["cost_usd"] += cost
+            entry["calls"] += 1
+            if self._current_run:
+                self._current_run.tokens_in += ti
+                self._current_run.tokens_out += to
+                self._current_run.cost_usd += cost
+
     def snapshot(self) -> dict[str, Any]:
         with self._mutex:
             runs = []
@@ -167,6 +245,12 @@ class MetricsCollector:
                 "recent_runs": runs,
                 "latency_budgets_ms": LATENCY_BUDGETS_MS,
                 "slow_warnings": self._counters.get("slow_path_warnings", 0),
+                "provider_costs": {
+                    p: dict(v) for p, v in self._provider_costs.items()
+                },
+                "total_cost_usd": round(
+                    sum(v["cost_usd"] for v in self._provider_costs.values()), 6
+                ),
             }
 
 
