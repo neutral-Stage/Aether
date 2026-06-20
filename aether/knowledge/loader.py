@@ -48,6 +48,8 @@ _APP_ALIASES: dict[str, str] = {
     "xcode": "xcode",
 }
 
+_prewarmed = False
+
 # Bundle ID → pack key (loaded from pack YAML `bundle_ids` + static map)
 _BUNDLE_TO_PACK: dict[str, str] = {
     "com.apple.mail": "mail",
@@ -69,7 +71,10 @@ _BUNDLE_TO_PACK: dict[str, str] = {
 
 
 def sideload_dir() -> Path:
-    """User sideload directory from config or default ~/.aether/packs."""
+    """User sideload directory from env override, config, or default ~/.aether/packs."""
+    env = os.getenv("AETHER_PACKS_DIR")
+    if env:
+        return Path(env).expanduser()
     try:
         from ..core.config import load_config
 
@@ -79,9 +84,6 @@ def sideload_dir() -> Path:
             return Path(str(raw)).expanduser()
     except Exception:  # noqa: BLE001
         pass
-    env = os.getenv("AETHER_PACKS_DIR")
-    if env:
-        return Path(env).expanduser()
     return _DEFAULT_SIDELOAD
 
 
@@ -101,7 +103,7 @@ def _pack_path(app_key: str) -> Path | None:
     return None
 
 
-@lru_cache(maxsize=32)
+@lru_cache(maxsize=128)
 def _load_pack_file(app_key: str) -> dict[str, Any] | None:
     path = _pack_path(app_key)
     if path is None:
@@ -122,8 +124,29 @@ def list_packs() -> list[str]:
     return sorted(keys)
 
 
+def prewarm_packs() -> int:
+    """Load every available pack so its bundle_ids/aliases self-register."""
+    count = 0
+    for key in list_packs():
+        if _load_pack_file(key) is not None:
+            count += 1
+    return count
+
+
+def _ensure_prewarmed() -> None:
+    global _prewarmed
+    if _prewarmed:
+        return
+    _prewarmed = True
+    try:
+        prewarm_packs()
+    except Exception:  # noqa: BLE001 — selection must still work if one pack is bad
+        pass
+
+
 def resolve_pack_key(app_name: str = "", bundle_id: str = "") -> str | None:
     """Resolve pack key from display name and/or bundle ID."""
+    _ensure_prewarmed()
     if bundle_id:
         key = _BUNDLE_TO_PACK.get(bundle_id.strip())
         if key:
