@@ -134,6 +134,22 @@ class Router:
                 self._last_decision = decision
                 return decision
 
+        # AX present but wrong: AX looks sufficient, but the screen is text-heavy
+        # while AX exposes little text (canvas/Electron/doc apps) → use vision.
+        ax_text_threshold = float(routing.get("ax_text_coverage_threshold", 0.15))
+        if (
+            getattr(world, "screen_content_class", "unknown") == "text_heavy"
+            and world.element_count >= ax_empty_threshold
+            and float(getattr(world, "ax_text_ratio", 1.0)) < ax_text_threshold
+        ):
+            decision = RouteDecision(
+                RouteTier.VISION,
+                "ax_present_but_wrong (text_heavy, low ax text coverage)",
+                use_vision_context=True,
+            )
+            self._last_decision = decision
+            return decision
+
         # Careful mode or novel goal → cloud for planning
         if careful or world.is_novel_goal:
             decision = RouteDecision(RouteTier.CLOUD_FRONTIER, "careful_or_novel")

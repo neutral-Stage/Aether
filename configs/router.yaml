@@ -154,6 +154,11 @@ routing:
   failure_threshold_cloud: 2
   # Empty AX tree → vision path
   ax_empty_threshold: 3
+  # Vision content-classifier tuning (Phase 1)
+  ax_text_coverage_threshold: 0.15   # AX text ratio below this + text_heavy → vision
+  text_heavy_char_threshold: 200      # min OCR chars to consider a screen text-heavy
+  text_coverage_threshold: 0.05       # min OCR text-area coverage for text-heavy
+  min_region_confidence: 0.3          # discard OCR boxes below this confidence
   # Reflexive tools that may use local_fast when AX is sufficient
   reflexive_tools:
     - open_app

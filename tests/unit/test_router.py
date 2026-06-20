@@ -59,3 +59,22 @@ class TestRouter:
         if reflexive:
             assert router.is_reflexive_tool(reflexive[0])
         assert not router.is_reflexive_tool("finish")
+
+    def test_ax_present_but_wrong_routes_to_vision(self, router: Router, world: WorldModel) -> None:
+        world.element_count = 10  # AX looks sufficient
+        world.ax_insufficient = False
+        world.screen_content_class = "text_heavy"
+        world.ax_text_ratio = 0.05  # AX exposes almost no text
+        decision = router.route(world)
+        assert decision.tier == RouteTier.VISION
+        assert "ax_present_but_wrong" in decision.reason
+
+    def test_text_heavy_with_good_ax_stays_local(self, router: Router, world: WorldModel) -> None:
+        world.element_count = 10
+        world.ax_insufficient = False
+        world.screen_content_class = "text_heavy"
+        world.ax_text_ratio = 0.9  # AX represents the text fine
+        world.is_novel_goal = False
+        world.needs_replan = False
+        decision = router.route(world)
+        assert decision.tier == RouteTier.LOCAL_FAST
