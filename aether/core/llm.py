@@ -451,6 +451,7 @@ class VisionLLM:
         self.vlm_endpoint = vlm_endpoint
         self.vlm_model = vlm_model
         self._last_vision_context: str = ""
+        self.last_content_class: str = "unknown"
 
     @property
     def last_vision_context(self) -> str:
@@ -470,10 +471,13 @@ class VisionLLM:
     def analyze_screenshot(self, image_path: str, prompt: str | None = None) -> str:
         from ..perception import ocr as ocr_mod
 
-        ocr_text = ocr_mod.recognize_text_formatted(image_path)
-        parts = [f"Screenshot: {image_path}", ocr_text]
+        formatted, regions, (w, h) = ocr_mod.recognize(image_path)
+        content = ocr_mod.classify_screen_content(regions, w, h)
+        self.last_content_class = content["label"]
+        parts = [f"Screenshot: {image_path}", formatted]
 
-        if self.ocr_only:
+        text_heavy = content["label"] == "text_heavy"
+        if self.ocr_only or text_heavy:
             self._last_vision_context = "\n".join(parts)
             return self._last_vision_context
 
