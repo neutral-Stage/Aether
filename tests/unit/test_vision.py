@@ -41,6 +41,17 @@ class TestClassifier:
 
 
 @pytest.mark.unit
+def test_classify_respects_char_threshold() -> None:
+    from aether.perception.ocr import TextRegion, classify_screen_content
+    regions = [TextRegion("words " * 10, 0.95, 0.1, 0.1, 0.4, 0.03) for _ in range(10)]
+    # ~600 chars, coverage 0.12 → text_heavy at default 200
+    assert classify_screen_content(regions, 1000, 800)["label"] == "text_heavy"
+    # but with a very high char_threshold it should NOT be text_heavy
+    out = classify_screen_content(regions, 1000, 800, char_threshold=100000)
+    assert out["label"] != "text_heavy"
+
+
+@pytest.mark.unit
 def test_recognize_returns_triple(monkeypatch) -> None:  # noqa: ANN001
     import aether.perception.ocr as ocr_mod
 

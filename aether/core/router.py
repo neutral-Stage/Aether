@@ -314,11 +314,15 @@ class Router:
                 cloud = FailoverLLMClient(clients) if len(clients) > 1 else clients[0][1]
             else:
                 cloud = self._get_cloud_with_failover()
+        routing = self.cfg.routing
         vision = VisionLLM(
             cloud_llm=cloud,
             ocr_only=bool(role.get("ocr_only", False)),
             vlm_endpoint=role.get("vlm_endpoint"),
             vlm_model=role.get("vlm_model"),
+            min_region_confidence=float(routing.get("min_region_confidence", 0.3)),
+            text_heavy_char_threshold=int(routing.get("text_heavy_char_threshold", 200)),
+            text_coverage_threshold=float(routing.get("text_coverage_threshold", 0.05)),
         )
         self._clients["vision"] = vision
         return vision

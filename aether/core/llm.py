@@ -445,11 +445,17 @@ class VisionLLM:
         ocr_only: bool = False,
         vlm_endpoint: str | None = None,
         vlm_model: str | None = None,
+        min_region_confidence: float = 0.3,
+        text_heavy_char_threshold: int = 200,
+        text_coverage_threshold: float = 0.05,
     ):
         self.cloud = cloud_llm
         self.ocr_only = ocr_only
         self.vlm_endpoint = vlm_endpoint
         self.vlm_model = vlm_model
+        self.min_region_confidence = min_region_confidence
+        self.text_heavy_char_threshold = text_heavy_char_threshold
+        self.text_coverage_threshold = text_coverage_threshold
         self._last_vision_context: str = ""
         self.last_content_class: str = "unknown"
 
@@ -472,7 +478,12 @@ class VisionLLM:
         from ..perception import ocr as ocr_mod
 
         formatted, regions, (w, h) = ocr_mod.recognize(image_path)
-        content = ocr_mod.classify_screen_content(regions, w, h)
+        content = ocr_mod.classify_screen_content(
+            regions, w, h,
+            min_conf=self.min_region_confidence,
+            char_threshold=self.text_heavy_char_threshold,
+            coverage_threshold=self.text_coverage_threshold,
+        )
         self.last_content_class = content["label"]
         parts = [f"Screenshot: {image_path}", formatted]
 
