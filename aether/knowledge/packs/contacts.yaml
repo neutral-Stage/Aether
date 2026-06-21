@@ -1,0 +1,24 @@
+# Contacts.app knowledge pack — Phase 1
+app: Contacts
+tier: 1
+bundle_ids:
+  - com.apple.AddressBook
+aliases:
+  - contacts
+  - address book
+shortcuts:
+  - "⌘N — new contact"
+  - "⌘F — search contacts"
+  - "⌘E — edit selected contact"
+  - "⌘S — save edits"
+recipes:
+  find_contact:
+    - "⌘F, type the name, Return; the matching card shows phone/email"
+    - "Or AppleScript: tell application \"Contacts\" to get the value of every phone of person \"<name>\""
+  new_contact:
+    - "⌘N, fill name/phone/email fields, ⌘S to save"
+gotchas:
+  - "Editing requires clicking Edit (⌘E) before fields are writable"
+  - "Duplicate names need disambiguation by company or email"
+scripting:
+  run_applescript: "Query/modify contacts deterministically via AppleScript"

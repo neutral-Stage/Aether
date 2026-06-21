@@ -123,6 +123,7 @@ roles:
     max_tokens: 512
     temperature: 0
     timeout_seconds: 30
+    native_tools: false    # true → use Ollama native /api/chat tools field (Phase 1)
 
   cloud_frontier:
     provider: zai              # supervisor / planner — GLM-5-Turbo via Z.ai
@@ -153,6 +154,14 @@ routing:
   failure_threshold_cloud: 2
   # Empty AX tree → vision path
   ax_empty_threshold: 3
+  # Vision content-classifier tuning (Phase 1)
+  ax_text_coverage_threshold: 0.15   # AX text ratio below this + text_heavy → vision
+  # NOTE (Phase 1): not yet wired — classify_screen_content currently hardcodes these; reserved for a future tuning pass.
+  text_heavy_char_threshold: 200      # min OCR chars to consider a screen text-heavy
+  # NOTE (Phase 1): not yet wired — classify_screen_content currently hardcodes these; reserved for a future tuning pass.
+  text_coverage_threshold: 0.05       # min OCR text-area coverage for text-heavy
+  # NOTE (Phase 1): not yet wired — classify_screen_content currently hardcodes these; reserved for a future tuning pass.
+  min_region_confidence: 0.3          # discard OCR boxes below this confidence
   # Reflexive tools that may use local_fast when AX is sufficient
   reflexive_tools:
     - open_app

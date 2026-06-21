@@ -17,17 +17,32 @@ def analyze_screen(
 ) -> dict[str, Any]:
     """Capture or analyze a screenshot.
 
-    Returns dict with path, ocr_text, regions, and optional cloud_analysis.
+    Runs OCR once, classifies the screen, and only calls the cloud VLM when the
+    screen is NOT text-heavy (auto OCR-only saves latency/cost on dense text).
+    Returns dict with path, ocr_formatted, regions, content_class, and optional
+    cloud_analysis.
     """
-    path = image_path or screen_cap.capture_to_file()
-    regions = ocr.recognize_text(path)
+    path = image_path or screen_cap.try_capture_to_file()
+    if path is None:
+        return {
+            "path": None,
+            "ocr_formatted": "Screen capture unavailable (permission?).",
+            "regions": [],
+            "region_count": 0,
+            "content_class": "unknown",
+        }
+    formatted, regions, (w, h) = ocr.recognize(path)
+    content = ocr.classify_screen_content(regions, w, h)
     result: dict[str, Any] = {
         "path": path,
-        "ocr_formatted": ocr.recognize_text_formatted(path),
+        "ocr_formatted": formatted,
         "regions": ocr.regions_to_dicts(regions, image_path=path, scale_pixels=True),
         "region_count": len(regions),
+        "content_class": content["label"],
+        "content": content,
     }
-    if use_cloud and cloud_analyze_fn is not None:
+    text_heavy = content["label"] == "text_heavy"
+    if use_cloud and cloud_analyze_fn is not None and not text_heavy:
         try:
             result["cloud_analysis"] = cloud_analyze_fn(path)
         except Exception as e:  # noqa: BLE001

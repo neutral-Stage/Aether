@@ -1,0 +1,22 @@
+# Preview.app knowledge pack — Phase 1
+app: Preview
+tier: 2
+bundle_ids:
+  - com.apple.Preview
+aliases:
+  - preview
+shortcuts:
+  - "⌘F — search within the PDF"
+  - "⌘+ / ⌘- — zoom in/out"
+  - "⇧⌘A — show/hide markup toolbar"
+  - "⌘P — print"
+recipes:
+  search_pdf:
+    - "⌘F, type the query, Return; ↩ cycles matches"
+  annotate:
+    - "⇧⌘A to show markup, choose a tool, then draw/type on the page"
+  export:
+    - "File ▸ Export…, choose a format; for PDF use File ▸ Export as PDF"
+gotchas:
+  - "Markup tools are hidden until the markup toolbar is shown (⇧⌘A)"
+  - "Multi-page navigation uses the sidebar thumbnails (⌥⌘2)"

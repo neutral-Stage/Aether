@@ -8,7 +8,7 @@ This document is the result of a full codebase audit against `Aether_macOS_AI_Ag
 
 ## Executive Summary
 
-Aether has a **working end-to-end agent loop** (perceive → route → reason → policy → act → verify → memory) with a **Python sidecar** (`sidecar/server.py`) and a **native Swift shell** (`macos/Aether/`). Phases 0–5 deliverables are largely present: dual-loop routing, 19 registered tools, MCP stdio client, skill memory, barge-in voice, signed audit log, knowledge packs (12 apps), and observability.
+Aether has a **working end-to-end agent loop** (perceive → route → reason → policy → act → verify → memory) with a **Python sidecar** (`sidecar/server.py`) and a **native Swift shell** (`macos/Aether/`). Phases 0–5 deliverables are largely present: dual-loop routing, 19 registered tools, MCP stdio client, skill memory, barge-in voice, signed audit log, knowledge packs (33 packs), and observability.
 
 **Strengths:** Clear separation of concerns (orchestrator, world model, registry, policy); multi-provider LLM router (`configs/router.yaml`); accessibility-first perception; verify-after-act self-correction; security tests and HMAC audit chain.
 
@@ -449,7 +449,7 @@ scripts/
 
 ### 3.7 Knowledge packs (§6.9)
 
-- 12 packs present; expand Figma, Notion, Arc, Xcode.
+- 33 packs present: original 12 core apps (Slack, Chrome, Terminal, Notes, Calendar, Figma, Notion, Zoom, Spotify, Xcode, VS Code, Arc) + 5 Phase 9 additions + 16 Phase 1 additions (Apple-stack: Finder, Mail, Messages, Safari, Photos, Music, Reminders; third-party: Linear, GitHub, Jira, Asana, Figma-advanced, Notion-advanced, Obsidian, Raycast, 1Password).
 - Pack **validation** script: YAML schema + required fields.
 - **Marketplace** (Phase 9): user-installable pack directory `~/Library/Application Support/Aether/packs/`.
 
@@ -596,7 +596,7 @@ scripts/
 | Sparkle 2 integration (replace `UpdateChecker`) | 1 week | ✅ `SparkleUpdateController.swift` stub + appcast URL config |
 | DMG + first GitHub Release | 2 days | ✅ `macos/scripts/build-dmg.sh` |
 | Beta feedback channel + crash collection (opt-in) | 3 days | ✅ `POST /feedback`, Swift UI field |
-| Expand knowledge packs (+5 apps) | 1 week | ✅ Figma, Notion, Zoom, Spotify, Xcode (17 packs total) |
+| Expand knowledge packs (+5 apps, then +16 in Phase 1) | 1 week | ✅ Figma, Notion, Zoom, Spotify, Xcode + Apple-stack + third-party additions (33 packs total) |
 | `BETA.md` → public beta checklist | 1 day | ⬜ Update when release ships |
 
 **Exit criteria**

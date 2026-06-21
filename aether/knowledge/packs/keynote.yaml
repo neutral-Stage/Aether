@@ -1,0 +1,24 @@
+# Keynote.app knowledge pack — Phase 1
+app: Keynote
+tier: 1
+bundle_ids:
+  - com.apple.iWork.Keynote
+aliases:
+  - keynote
+shortcuts:
+  - "⌘N — new presentation"
+  - "⌥⌘P — play slideshow"
+  - "⇧⌘N — new slide"
+  - "⌘= — zoom in"
+recipes:
+  new_slide:
+    - "⇧⌘N for a new slide, or AppleScript: tell application \"Keynote\" to make new slide at end of slides of front document"
+  start_presentation:
+    - "⌥⌘P to play; Esc to exit"
+  export_pdf:
+    - "File ▸ Export To ▸ PDF…, or AppleScript export with format PDF"
+gotchas:
+  - "Editing text requires double-clicking into a text box first"
+  - "Theme/template selection appears only on new-document creation"
+scripting:
+  run_applescript: "Keynote has rich AppleScript for slides/export"

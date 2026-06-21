@@ -1,0 +1,22 @@
+# Pages.app knowledge pack — Phase 1
+app: Pages
+tier: 1
+bundle_ids:
+  - com.apple.iWork.Pages
+aliases:
+  - pages
+shortcuts:
+  - "⌘N — new document"
+  - "⌘B/⌘I/⌘U — bold/italic/underline"
+  - "⇧⌘T — toggle toolbar/inspector"
+  - "⌘P — print/export"
+recipes:
+  insert_text:
+    - "Click into the body, type; or AppleScript: tell application \"Pages\" to set body text of front document to \"<text>\""
+  export_pdf:
+    - "File ▸ Export To ▸ PDF…, or AppleScript export with format PDF"
+gotchas:
+  - "Page-layout vs word-processing documents behave differently for text insertion"
+  - "Template chooser only appears for new documents"
+scripting:
+  run_applescript: "Pages supports AppleScript for text/export"

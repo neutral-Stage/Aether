@@ -47,6 +47,9 @@ class LLMResponse:
     raw_content: list               # original content blocks (to echo back)
     stop_reason: str | None
     backend: str = "anthropic"
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
 
 
 class LLMBackend(Protocol):
@@ -113,12 +116,15 @@ class LLM:
                     "name": block.name,
                     "input": dict(block.input or {}),
                 })
+        in_tok, out_tok = _usage_from_anthropic(resp)
         return LLMResponse(
             text="\n".join(text_parts).strip(),
             tool_calls=tool_calls,
             raw_content=resp.content,
             stop_reason=resp.stop_reason,
             backend="anthropic",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
     def analyze_image(self, image_path: str, prompt: str) -> str:
@@ -256,12 +262,15 @@ class OpenAICompatibleClient:
         stop = choice.finish_reason or "end_turn"
         if tool_calls and stop == "tool_calls":
             stop = "tool_use"
+        in_tok, out_tok = _usage_from_openai(resp)
         return LLMResponse(
             text=text if not tool_calls else "",
             tool_calls=tool_calls,
             raw_content=raw_blocks,
             stop_reason=stop,
             backend=self.backend,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
     def analyze_image(self, image_path: str, prompt: str) -> str:
@@ -324,12 +333,14 @@ class LocalHTTPClient:
         max_tokens: int = 512,
         temperature: float = 0.0,
         timeout: float = 30.0,
+        native_tools: bool = False,
     ):
         self.endpoint = endpoint.rstrip("/")
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
+        self.native_tools = native_tools
         self._available: bool | None = None
 
     def available(self) -> bool:
@@ -375,16 +386,19 @@ class LocalHTTPClient:
             else:
                 ollama_messages.append({"role": role, "content": str(content)})
 
-        tool_hint = _format_tools_for_local(tools)
-        if tool_hint:
-            ollama_messages[0]["content"] += "\n\n" + tool_hint
-
         payload = {
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
             "options": {"temperature": self.temperature, "num_predict": self.max_tokens},
         }
+        if self.native_tools and tools:
+            payload["tools"] = _anthropic_tools_to_openai(tools)
+        else:
+            tool_hint = _format_tools_for_local(tools)
+            if tool_hint:
+                ollama_messages[0]["content"] += "\n\n" + tool_hint
+
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             self.endpoint,
@@ -406,14 +420,19 @@ class LocalHTTPClient:
         elif "choices" in body:
             text = body["choices"][0]["message"].get("content", "") or ""
 
-        tool_calls = _parse_tool_calls_from_text(text)
+        tool_calls = _parse_ollama_tool_calls(body) if self.native_tools else []
+        if not tool_calls:
+            tool_calls = _parse_tool_calls_from_text(text)
         raw = [{"type": "text", "text": text}] if text else []
+        in_tok, out_tok = _usage_from_ollama(body)
         return LLMResponse(
             text=text if not tool_calls else "",
             tool_calls=tool_calls,
             raw_content=raw,
             stop_reason="tool_use" if tool_calls else "end_turn",
             backend="local_http",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
 
@@ -432,6 +451,7 @@ class VisionLLM:
         self.vlm_endpoint = vlm_endpoint
         self.vlm_model = vlm_model
         self._last_vision_context: str = ""
+        self.last_content_class: str = "unknown"
 
     @property
     def last_vision_context(self) -> str:
@@ -451,10 +471,13 @@ class VisionLLM:
     def analyze_screenshot(self, image_path: str, prompt: str | None = None) -> str:
         from ..perception import ocr as ocr_mod
 
-        ocr_text = ocr_mod.recognize_text_formatted(image_path)
-        parts = [f"Screenshot: {image_path}", ocr_text]
+        formatted, regions, (w, h) = ocr_mod.recognize(image_path)
+        content = ocr_mod.classify_screen_content(regions, w, h)
+        self.last_content_class = content["label"]
+        parts = [f"Screenshot: {image_path}", formatted]
 
-        if self.ocr_only:
+        text_heavy = content["label"] == "text_heavy"
+        if self.ocr_only or text_heavy:
             self._last_vision_context = "\n".join(parts)
             return self._last_vision_context
 
@@ -513,6 +536,31 @@ class VisionLLM:
         return body["choices"][0]["message"]["content"]
 
 
+def _usage_from_anthropic(resp: Any) -> tuple[int | None, int | None]:
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return (None, None)
+    return (getattr(usage, "input_tokens", None), getattr(usage, "output_tokens", None))
+
+
+def _usage_from_openai(resp: Any) -> tuple[int | None, int | None]:
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return (None, None)
+    return (getattr(usage, "prompt_tokens", None), getattr(usage, "completion_tokens", None))
+
+
+def _usage_from_ollama(body: dict) -> tuple[int | None, int | None]:
+    if not isinstance(body, dict):
+        return (None, None)
+    if "prompt_eval_count" in body or "eval_count" in body:
+        return (body.get("prompt_eval_count"), body.get("eval_count"))
+    usage = body.get("usage")
+    if isinstance(usage, dict):
+        return (usage.get("prompt_tokens"), usage.get("completion_tokens"))
+    return (None, None)
+
+
 def _format_tools_for_local(tools: list[dict]) -> str:
     if not tools:
         return ""
@@ -539,6 +587,30 @@ def _parse_tool_calls_from_text(text: str) -> list[dict]:
         if tc:
             tool_calls.append(tc)
     return tool_calls
+
+
+def _parse_ollama_tool_calls(body: dict) -> list[dict]:
+    """Parse Ollama native message.tool_calls into [{id, name, input}]."""
+    msg = body.get("message") if isinstance(body, dict) else None
+    if not isinstance(msg, dict):
+        return []
+    calls: list[dict] = []
+    for tc in msg.get("tool_calls") or []:
+        fn = tc.get("function") if isinstance(tc, dict) else None
+        if not isinstance(fn, dict):
+            continue
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {}
+        calls.append({
+            "id": f"local_{uuid.uuid4().hex[:12]}",
+            "name": fn.get("name", ""),
+            "input": dict(args or {}),
+        })
+    return calls
 
 
 def _json_to_tool_call(raw: str) -> dict | None:

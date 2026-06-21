@@ -1,0 +1,20 @@
+# Maps.app knowledge pack — Phase 1
+app: Maps
+tier: 2
+bundle_ids:
+  - com.apple.Maps
+aliases:
+  - maps
+shortcuts:
+  - "⌘F — search for a place"
+  - "⌘L — show your location"
+  - "⌘+ / ⌘- — zoom in/out"
+recipes:
+  search_place:
+    - "Prefer URL scheme via safari_open_url, e.g. maps://?q=<place>"
+    - "Or ⌘F, type the place, Return"
+  get_directions:
+    - "maps://?saddr=<from>&daddr=<to>, or click Directions after selecting a place"
+gotchas:
+  - "Driving/walking mode is a toggle in the directions panel"
+  - "URL-scheme queries are the most deterministic way to drive Maps"

@@ -1,0 +1,20 @@
+# Discord knowledge pack — Phase 1
+app: Discord
+tier: 2
+bundle_ids:
+  - com.hnc.Discord
+aliases:
+  - discord
+shortcuts:
+  - "⌘K — quick switcher (jump to server/channel/DM)"
+  - "↩ — send the typed message"
+  - "⇧↩ — newline without sending"
+  - "⌘/ — keyboard shortcuts help"
+recipes:
+  send_message:
+    - "⌘K, type the channel or person, Return to jump, then type the message and press Return"
+  jump_to_channel:
+    - "⌘K, type the channel name, Return"
+gotchas:
+  - "Discord is Electron; AX labels are generic — prefer ⌘K navigation over clicking"
+  - "Markdown in messages: **bold**, *italic*, ``code`` are rendered on send"

@@ -7,10 +7,14 @@ production path (see the spec, section 6.2) and slots in behind this interface.
 from __future__ import annotations
 
 import base64
+import logging
 import subprocess
 import tempfile
 import time
 from pathlib import Path
+
+log = logging.getLogger(__name__)
+_warned_capture = False
 
 
 def capture_to_file(path: str | None = None) -> str:
@@ -21,6 +25,22 @@ def capture_to_file(path: str | None = None) -> str:
     # -x = no sound, -C = capture cursor off by default
     subprocess.run(["screencapture", "-x", path], check=True, timeout=15)
     return path
+
+
+def try_capture_to_file(path: str | None = None) -> str | None:
+    """Capture the screen, returning None (not raising) on failure.
+
+    Degrades gracefully when Screen Recording permission is denied or the
+    capture times out, so the vision tier falls back to AX-only context.
+    """
+    global _warned_capture
+    try:
+        return capture_to_file(path)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        if not _warned_capture:
+            log.warning("Screen capture failed (Screen Recording permission?): %s", e)
+            _warned_capture = True
+        return None
 
 
 def capture_base64() -> str:

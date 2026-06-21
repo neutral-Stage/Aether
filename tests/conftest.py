@@ -33,6 +33,16 @@ def _reset_mcp_active_client() -> Generator[None, None, None]:
         client.close()
 
 
+@pytest.fixture(autouse=True)
+def _reset_metrics() -> Generator[None, None, None]:
+    """Reset the MetricsCollector singleton so counters don't leak across tests."""
+    from aether.core.metrics import MetricsCollector
+
+    MetricsCollector._instance = None  # noqa: SLF001
+    yield
+    MetricsCollector._instance = None  # noqa: SLF001
+
+
 @pytest.fixture
 def minimal_config() -> Config:
     """Config without secrets — safe for unit tests."""
@@ -65,6 +75,9 @@ def world() -> WorldModel:
     w.ax_rendered = "Finder window with OK button"
     w.ax_insufficient = False
     w.is_novel_goal = False
+    w.screen_content_class = "unknown"
+    w.text_heavy_score = 0.0
+    w.ax_text_ratio = 1.0
     return w
 
 

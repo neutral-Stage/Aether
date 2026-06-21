@@ -1,0 +1,22 @@
+# Arc browser knowledge pack — Phase 1
+app: Arc
+tier: 2
+bundle_ids:
+  - company.thebrowser.Browser
+aliases:
+  - arc
+shortcuts:
+  - "⌘T — new tab"
+  - "⌘L — focus the URL/command bar"
+  - "⌘S — toggle the sidebar"
+  - "⌃⌘↑/↓ — switch spaces / move tabs"
+recipes:
+  open_url:
+    - "⌘L, type or paste the URL, Return"
+  new_tab:
+    - "⌘T, type the query/URL, Return"
+  search_tabs:
+    - "⌘L opens the unified command bar; type to filter open tabs"
+gotchas:
+  - "Arc is Chromium-based; many Chrome shortcuts apply but the sidebar/spaces model differs"
+  - "Pinned vs today tabs live in different sidebar sections"

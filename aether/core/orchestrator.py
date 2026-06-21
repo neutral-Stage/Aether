@@ -32,6 +32,20 @@ from ..core.metrics import MetricsCollector
 if TYPE_CHECKING:
     from ..hud.overlay import HUD
 
+def record_usage_for_response(metrics, resp) -> None:  # noqa: ANN001
+    """Record token usage for an LLMResponse if the backend reported any."""
+    if resp is None:
+        return
+    in_tok = getattr(resp, "input_tokens", None)
+    out_tok = getattr(resp, "output_tokens", None)
+    if in_tok is None and out_tok is None:
+        return
+    try:
+        metrics.record_llm_usage(getattr(resp, "backend", "unknown"), in_tok, out_tok)
+    except Exception:  # noqa: BLE001 — metrics must never break the agent loop
+        pass
+
+
 BASE_SYSTEM_PROMPT = """You are Aether, an AI agent that operates a real macOS computer \
 on the user's behalf using the provided tools.
 
@@ -180,11 +194,21 @@ class Agent:
         if decision.tier != RouteTier.VISION:
             return None
         path = self.world.capture_screenshot()
+        if not path:
+            return None
         vision_client = self.router.pick_client(decision)
         if hasattr(vision_client, "analyze_screenshot"):
-            return await asyncio.to_thread(vision_client.analyze_screenshot, path)
+            ctx = await asyncio.to_thread(vision_client.analyze_screenshot, path)
+            self.world.screen_content_class = getattr(
+                vision_client, "last_content_class", "unknown"
+            )
+            return ctx
         from ..perception import ocr
-        return await asyncio.to_thread(ocr.recognize_text_formatted, path)
+        formatted, regions, (w, h) = await asyncio.to_thread(ocr.recognize, path)
+        content = ocr.classify_screen_content(regions, w, h)
+        self.world.screen_content_class = content["label"]
+        self.world.text_heavy_score = content["score"]
+        return formatted
 
     async def _reason_step(
         self,
@@ -251,6 +275,7 @@ class Agent:
                 )
             else:
                 raise
+        record_usage_for_response(self.metrics, resp)
         return resp, decision.tier.value
 
     def _verification_for_tool(self, name: str, args: dict) -> VerificationExpectation | None:

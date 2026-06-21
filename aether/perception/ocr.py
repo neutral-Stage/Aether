@@ -83,21 +83,35 @@ def recognize_text(image_path: str) -> list[TextRegion]:
     return results_holder
 
 
-def recognize_text_formatted(image_path: str, limit: int = 40) -> str:
-    """OCR with a compact string for LLM context."""
-    regions = recognize_text(image_path)
+def _format_regions(
+    regions: list[TextRegion],
+    w: int,
+    h: int,
+    limit: int = 40,
+) -> str:
     if not regions:
-        if not _VISION_OK:
-            return "OCR unavailable (install pyobjc-framework-Vision)."
-        return "No text detected."
-    w, h = image_dimensions(image_path)
+        return "No text detected." if _VISION_OK else "OCR unavailable (install pyobjc-framework-Vision)."
     if w > 0 and h > 0:
-        regions = scale_regions_to_pixels(regions, w, h)
-        lines = [r.describe(pixel_coords=True) for r in regions[:limit]]
+        scaled = scale_regions_to_pixels(regions, w, h)
+        lines = [r.describe(pixel_coords=True) for r in scaled[:limit]]
     else:
         lines = [r.describe() for r in regions[:limit]]
     more = f"\n…({len(regions) - limit} more)" if len(regions) > limit else ""
     return f"OCR found {len(regions)} regions:\n" + "\n".join(lines) + more
+
+
+def recognize_text_formatted(image_path: str, limit: int = 40) -> str:
+    """OCR with a compact string for LLM context."""
+    regions = recognize_text(image_path)
+    w, h = image_dimensions(image_path)
+    return _format_regions(regions, w, h, limit)
+
+
+def recognize(image_path: str) -> tuple[str, list[TextRegion], tuple[int, int]]:
+    """Single OCR pass: returns (formatted_string, raw_regions, (w, h))."""
+    regions = recognize_text(image_path)
+    w, h = image_dimensions(image_path)
+    return _format_regions(regions, w, h), regions, (w, h)
 
 
 def scale_region_to_pixels(
@@ -180,3 +194,43 @@ def regions_to_dicts(
         }
         for r in scaled
     ]
+
+
+def classify_screen_content(
+    regions: list[TextRegion],
+    image_w: int,
+    image_h: int,
+    *,
+    min_conf: float = 0.3,
+) -> dict[str, Any]:
+    """Classify a screen as text_heavy / sparse / graphical / empty / unknown.
+
+    `regions` are normalized (0–1) TextRegions as returned by recognize_text.
+    Pure function — no I/O. Filters low-confidence boxes (Vision emits spurious
+    boxes on graphics). 'unknown' when image dims are unavailable.
+    """
+    kept = [r for r in regions if r.confidence >= min_conf]
+    region_count = len(kept)
+    char_count = sum(len(r.text) for r in kept)
+    mean_conf = (sum(r.confidence for r in kept) / region_count) if region_count else 0.0
+    coverage = min(sum(max(r.w, 0.0) * max(r.h, 0.0) for r in kept), 1.0)
+
+    base = {
+        "char_count": char_count,
+        "text_coverage": round(coverage, 4),
+        "region_count": region_count,
+        "mean_confidence": round(mean_conf, 3),
+    }
+    if image_w <= 0 or image_h <= 0:
+        return {"label": "unknown", "score": 0.0, **base}
+    if region_count == 0 or char_count == 0:
+        return {"label": "empty", "score": 0.0, **base}
+
+    score = min(1.0, (char_count / 400.0) * 0.6 + coverage * 0.4)
+    if char_count >= 200 and coverage >= 0.05 and mean_conf >= 0.4:
+        label = "text_heavy"
+    elif coverage < 0.02 and char_count < 60:
+        label = "graphical"
+    else:
+        label = "sparse"
+    return {"label": label, "score": round(score, 3), **base}

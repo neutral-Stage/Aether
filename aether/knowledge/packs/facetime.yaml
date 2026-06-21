@@ -1,0 +1,20 @@
+# FaceTime.app knowledge pack — Phase 1
+app: FaceTime
+tier: 2
+bundle_ids:
+  - com.apple.FaceTime
+aliases:
+  - facetime
+shortcuts:
+  - "⌘N — new FaceTime"
+  - "⌘L — toggle the left sidebar"
+  - "⌘W — close window / end call view"
+recipes:
+  start_call:
+    - "⌘N, type the contact name or number, then click the FaceTime/Audio button"
+    - "Or use the facetime:// URL scheme via safari_open_url, e.g. facetime://<number>"
+  join_link:
+    - "Open the FaceTime web/link with safari_open_url, then click Join"
+gotchas:
+  - "FaceTime has very limited AppleScript support — prefer AX clicks + URL scheme"
+  - "Starting a call may show a confirmation; element labels vary by macOS version"

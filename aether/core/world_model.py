@@ -69,6 +69,9 @@ class WorldModel:
         self._task_steps: list[str] = []
         self._tool_trace: list[dict[str, Any]] = []
         self.screen_stream_summary: str = ""
+        self.screen_content_class: str = "unknown"
+        self.text_heavy_score: float = 0.0
+        self.ax_text_ratio: float = 1.0  # ax_text_ratio: reserved — not yet computed in the perception loop (AX-present-but-wrong stays dormant until then)
 
     def set_goal(self, goal: str) -> None:
         self.active_goal = goal
@@ -183,9 +186,10 @@ class WorldModel:
     def record_observation(self, text: str) -> None:
         self._history.append(HistoryEntry("observation", text[:500]))
 
-    def capture_screenshot(self) -> str:
-        path = screen_cap.capture_to_file()
-        self.last_screenshot = path
+    def capture_screenshot(self) -> str | None:
+        path = screen_cap.try_capture_to_file()
+        if path:
+            self.last_screenshot = path
         return path
 
     def begin_action_verification(

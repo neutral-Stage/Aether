@@ -543,6 +543,18 @@ async def dashboard(_auth: None = Depends(require_auth)) -> str:
     counter_rows = "".join(
         f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in sorted(counters.items())
     )
+    provider_costs = snap.get("provider_costs", {})
+    total_cost = snap.get("total_cost_usd", 0.0)
+    cost_rows = "".join(
+        f"<tr><td>{p}</td><td>{c.get('tokens_in')}</td>"
+        f"<td>{c.get('tokens_out')}</td><td>{c.get('calls')}</td>"
+        f"<td>${c.get('cost_usd', 0.0):.4f}</td></tr>"
+        for p, c in sorted(provider_costs.items())
+    )
+    cost_rows += (
+        f"<tr><td><b>TOTAL</b></td><td></td><td></td><td></td>"
+        f"<td><b>${total_cost:.4f}</b></td></tr>"
+    )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Aether Metrics</title>
 <style>
@@ -557,6 +569,9 @@ th {{ background: #161b22; }}
 <p class="meta">Local-only dashboard — 127.0.0.1 · refresh to update</p>
 <h2>Counters</h2><table><tr><th>Metric</th><th>Value</th></tr>{counter_rows}</table>
 <h2>Latency histograms (ms)</h2><table><tr><th>Name</th><th>Count</th><th>p50</th><th>p95</th></tr>{hist_rows}</table>
+<h2>Cost &amp; tokens (estimated)</h2>
+<p class="meta">Estimates from provider token counts — not billing-accurate.</p>
+<table><tr><th>Provider</th><th>Tokens in</th><th>Tokens out</th><th>Calls</th><th>Cost USD</th></tr>{cost_rows}</table>
 <h2>Recent runs</h2><table><tr><th>Goal</th><th>Status</th><th>Steps</th><th>Tools</th><th>Duration ms</th></tr>{rows}</table>
 </body></html>"""
 
