@@ -202,6 +202,8 @@ def classify_screen_content(
     image_h: int,
     *,
     min_conf: float = 0.3,
+    char_threshold: int = 200,
+    coverage_threshold: float = 0.05,
 ) -> dict[str, Any]:
     """Classify a screen as text_heavy / sparse / graphical / empty / unknown.
 
@@ -227,7 +229,7 @@ def classify_screen_content(
         return {"label": "empty", "score": 0.0, **base}
 
     score = min(1.0, (char_count / 400.0) * 0.6 + coverage * 0.4)
-    if char_count >= 200 and coverage >= 0.05 and mean_conf >= 0.4:
+    if char_count >= char_threshold and coverage >= coverage_threshold and mean_conf >= 0.4:
         label = "text_heavy"
     elif coverage < 0.02 and char_count < 60:
         label = "graphical"

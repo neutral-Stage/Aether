@@ -14,6 +14,23 @@ from ..perception import accessibility as ax
 from ..perception import screen as screen_cap
 
 
+# AX roles that carry real text content (not chrome like buttons/menus).
+TEXT_ROLES = frozenset({"AXStaticText", "AXTextArea", "AXTextField", "AXTextView"})
+
+
+def compute_ax_text_ratio(elements: list[dict], element_count: int) -> float:
+    """Fraction of surfaced AX elements that are real text content.
+
+    Low ratio + populated AX = 'AX present but wrong' (canvas/Electron apps that
+    expose chrome but not document text). Pure / no OCR. Returns 1.0 when AX is
+    empty (the ax_insufficient path handles empty AX separately).
+    """
+    if element_count <= 0:
+        return 1.0
+    text_elems = sum(1 for e in elements if e.get("role") in TEXT_ROLES)
+    return text_elems / element_count
+
+
 @dataclass
 class HistoryEntry:
     kind: str  # "action" | "observation" | "verify_fail"
@@ -71,7 +88,7 @@ class WorldModel:
         self.screen_stream_summary: str = ""
         self.screen_content_class: str = "unknown"
         self.text_heavy_score: float = 0.0
-        self.ax_text_ratio: float = 1.0  # ax_text_ratio: reserved — not yet computed in the perception loop (AX-present-but-wrong stays dormant until then)
+        self.ax_text_ratio: float = 1.0  # pre-refresh default; updated by compute_ax_text_ratio in refresh()
 
     def set_goal(self, goal: str) -> None:
         self.active_goal = goal
@@ -127,6 +144,7 @@ class WorldModel:
         self.ax_rendered = data.get("rendered", "")
         self.element_count = int(data.get("element_count", 0))
         self.ax_insufficient = self.element_count < 3
+        self.ax_text_ratio = compute_ax_text_ratio(self.elements, self.element_count)
         self._cached_percept = data
         self._last_refresh_ts = now
         return data

@@ -205,7 +205,13 @@ class Agent:
             return ctx
         from ..perception import ocr
         formatted, regions, (w, h) = await asyncio.to_thread(ocr.recognize, path)
-        content = ocr.classify_screen_content(regions, w, h)
+        routing = self.router.cfg.routing
+        content = ocr.classify_screen_content(
+            regions, w, h,
+            min_conf=float(routing.get("min_region_confidence", 0.3)),
+            char_threshold=int(routing.get("text_heavy_char_threshold", 200)),
+            coverage_threshold=float(routing.get("text_coverage_threshold", 0.05)),
+        )
         self.world.screen_content_class = content["label"]
         self.world.text_heavy_score = content["score"]
         return formatted
