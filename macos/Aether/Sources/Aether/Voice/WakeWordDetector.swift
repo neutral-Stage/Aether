@@ -23,20 +23,41 @@ final class WakeWordDetector: ObservableObject {
 
     var onWake: (() -> Void)?
 
+    /// Real Porcupine backend, lazily created; nil when the library/key are
+    /// absent, in which case `.porcupine` mode degrades to the energy heuristic.
+    private(set) lazy var porcupine: PorcupineWakeWord? = PorcupineWakeWord()
+    private var frameBuffer: [Int16] = []
     private var highEnergyStreak = 0
+
+    /// True only when Porcupine is selected AND actually loaded.
+    var porcupineActive: Bool { engine == .porcupine && (porcupine?.isAvailable ?? false) }
+
+    var requiredSampleRate: Int { porcupine?.sampleRate ?? 16000 }
 
     func reset() {
         highEnergyStreak = 0
+        frameBuffer.removeAll(keepingCapacity: true)
     }
 
     func processEnergy(_ energy: Float) {
         guard isListening else { return }
-        switch engine {
-        case .energy:
+        // Energy mode, or Porcupine selected but unavailable → energy fallback.
+        if engine == .energy || !(porcupine?.isAvailable ?? false) {
             processEnergyWake(energy)
-        case .porcupine:
-            // Porcupine hook — load keyword model and call process(frame) here.
-            processEnergyWake(energy)
+        }
+    }
+
+    /// Feed 16 kHz mono Int16 samples when Porcupine is active.
+    func processFrame(_ samples: [Int16]) {
+        guard isListening, let pv = porcupine, pv.isAvailable, engine == .porcupine
+        else { return }
+        frameBuffer.append(contentsOf: samples)
+        while frameBuffer.count >= pv.frameLength {
+            let frame = Array(frameBuffer.prefix(pv.frameLength))
+            frameBuffer.removeFirst(pv.frameLength)
+            if pv.process(frame) {
+                triggerWake()
+            }
         }
     }
 

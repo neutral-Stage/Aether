@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 @MainActor
@@ -12,6 +12,9 @@ final class AudioEngine: ObservableObject {
     private let sampleRate: Double = 16_000
     private var monitoring = false
     private var energyHandler: ((Float) -> Void)?
+    private var frameHandler: (([Int16]) -> Void)?
+    private var wakeConverter: AVAudioConverter?
+    private var wakeFormat: AVAudioFormat?
     private var energyThreshold: Float = 0.02
     /// Mic gate: suppress energy callbacks during TTS unless barge-in threshold exceeded.
     private(set) var micGated = false
@@ -75,22 +78,39 @@ final class AudioEngine: ObservableObject {
     /// I/O unit or WebRTC AEC — see docs/VOICE.md. Current path is energy-only.
     func startContinuousMonitoring(
         threshold: Float = 0.02,
-        onEnergy: @escaping (Float) -> Void
+        wakeSampleRate: Int = 0,
+        onEnergy: @escaping (Float) -> Void,
+        onFrame: (([Int16]) -> Void)? = nil
     ) throws {
         guard !monitoring else { return }
         monitoring = true
         energyThreshold = threshold
         energyHandler = onEnergy
+        frameHandler = onFrame
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
+        // Set up a converter to the wake engine's rate (e.g. Porcupine 16 kHz mono Int16).
+        var target: AVAudioFormat?
+        var converter: AVAudioConverter?
+        if onFrame != nil, wakeSampleRate > 0,
+           let fmt = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                   sampleRate: Double(wakeSampleRate),
+                                   channels: 1, interleaved: true) {
+            target = fmt
+            converter = AVAudioConverter(from: format, to: fmt)
+        }
+        wakeFormat = target
+        wakeConverter = converter
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self else { return }
             guard let channel = buffer.floatChannelData?[0] else { return }
             let frames = Int(buffer.frameLength)
             let energy = Self.rms(channel: channel, count: frames)
+            let pcm = Self.convertForWake(buffer, converter: converter, target: target)
             Task { @MainActor in
                 self.micEnergy = energy
+                if let pcm, !pcm.isEmpty { self.frameHandler?(pcm) }
                 if self.micGated && energy < self.energyThreshold * self.gateThresholdMultiplier {
                     return
                 }
@@ -106,11 +126,37 @@ final class AudioEngine: ObservableObject {
         guard monitoring else { return }
         monitoring = false
         energyHandler = nil
+        frameHandler = nil
+        wakeConverter = nil
+        wakeFormat = nil
         engine.inputNode.removeTap(onBus: 0)
         if !isRecording {
             engine.stop()
         }
         micEnergy = 0
+    }
+
+    /// Resample a mic buffer to the wake engine's Int16 PCM (nil if no converter).
+    private nonisolated static func convertForWake(
+        _ buffer: AVAudioPCMBuffer,
+        converter: AVAudioConverter?,
+        target: AVAudioFormat?
+    ) -> [Int16]? {
+        guard let converter, let target else { return nil }
+        let ratio = target.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16
+        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity)
+        else { return nil }
+        var fed = false
+        var error: NSError?
+        converter.convert(to: out, error: &error) { _, status in
+            if fed { status.pointee = .noDataNow; return nil }
+            fed = true
+            status.pointee = .haveData
+            return buffer
+        }
+        guard error == nil, let ch = out.int16ChannelData else { return nil }
+        return Array(UnsafeBufferPointer(start: ch[0], count: Int(out.frameLength)))
     }
 
     private static func rms(channel: UnsafePointer<Float>, count: Int) -> Float {

@@ -1,0 +1,37 @@
+{
+  "name": "delegate_to_coder",
+  "description": "Tier-0: delegate a coding task to a specialist CLI agent (claude, codex, opencode, cursor) and wait for it to finish. For long-running or PARALLEL work, prefer spawn_agent (fleet) which runs in the background and is steerable.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "Detailed task spec"
+      },
+      "agent": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "claude",
+          "codex",
+          "opencode",
+          "cursor"
+        ],
+        "description": "Which coding CLI to use (auto picks first available)"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "Project directory (default: cwd)"
+      },
+      "timeout_sec": {
+        "type": "integer",
+        "description": "Max seconds to wait (default 300)"
+      }
+    },
+    "required": [
+      "prompt"
+    ]
+  },
+  "permission": "shell",
+  "impact": "reversible"
+}

@@ -1,0 +1,17 @@
+{
+  "name": "stop_agent",
+  "description": "Stop an agent session (SIGINT\u2192SIGTERM\u2192SIGKILL).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "session_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id"
+    ]
+  },
+  "permission": "agents",
+  "impact": "reversible"
+}

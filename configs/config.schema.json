@@ -33,6 +33,38 @@
         "planner_use_llm": { "type": "boolean" }
       }
     },
+    "mcp_server": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "expose_to_fleet": { "type": "boolean" },
+        "url": { "type": "string" },
+        "expose_tools": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "fleet": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "max_sessions": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "output_buffer_lines": { "type": "integer", "minimum": 100 },
+        "session_timeout_sec": { "type": "integer", "minimum": 10 },
+        "cost_cap_usd": { "type": "number", "minimum": 0 },
+        "claude_permission_mode": { "type": "string" },
+        "claude_allowed_tools": { "type": "array", "items": { "type": "string" } },
+        "allow_bypass_permissions": { "type": "boolean" },
+        "env_allowlist": { "type": "array", "items": { "type": "string" } },
+        "idle_detect_sec": { "type": "number", "minimum": 0.5 },
+        "worktrees": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "keep": { "type": "boolean" }
+          }
+        },
+        "require_isolation": { "type": "boolean" }
+      }
+    },
     "delegation": {
       "type": "object",
       "properties": {
@@ -66,12 +98,14 @@
       "properties": {
         "mode": { "enum": ["pipeline", "realtime"] },
         "realtime_provider": { "type": "string" },
-        "tts": { "enum": ["groq", "macos", "none"] },
+        "tts": { "enum": ["groq", "kokoro", "macos", "none"] },
         "tts_stream": { "type": "boolean" },
         "tts_model": { "type": "string" },
         "tts_voice": { "type": "string" },
-        "stt": { "enum": ["groq", "openai", "none"] },
+        "stt": { "enum": ["groq", "openai", "local", "none"] },
         "stt_model": { "type": "string" },
+        "ack": { "type": "boolean" },
+        "ack_text": { "type": "string" },
         "record_seconds": { "type": "number", "minimum": 1 },
         "barge_in": { "type": "boolean" },
         "vad_energy_threshold": { "type": "number", "minimum": 0, "maximum": 1 }

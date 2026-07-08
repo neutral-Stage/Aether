@@ -130,6 +130,14 @@ class Config:
         return bool(self.get("browser", "headless", default=True))
 
     @property
+    def browser_attach_mode(self) -> str:
+        return str(self.get("browser", "attach_mode", default="headless"))
+
+    @property
+    def browser_cdp_url(self) -> str:
+        return str(self.get("browser", "cdp_url", default="http://127.0.0.1:9222"))
+
+    @property
     def local_only(self) -> bool:
         return bool(self.get("agent", "local_only", default=False))
 

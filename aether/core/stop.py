@@ -40,6 +40,12 @@ def unregister_http_closer(closer: Callable[[], None]) -> None:
             pass
 
 
+# Generic aliases — the closer machinery is not HTTP-specific; any zero-arg
+# aborter (kill a subprocess, cancel a task) can be registered (Phase 9).
+register_closer = register_http_closer
+unregister_closer = unregister_http_closer
+
+
 def _cancel_in_flight() -> None:
     with _closers_lock:
         closers = list(_active_closers)

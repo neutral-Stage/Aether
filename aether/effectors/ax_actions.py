@@ -13,6 +13,8 @@ except Exception:  # pragma: no cover
 
 # Cache AXUIElement handles keyed by element index (refreshed each tree read).
 _element_handles: dict[int, Any] = {}
+# Per-app namespaces for background apps (refreshed by get_app_context).
+_app_handles: dict[str, dict[int, Any]] = {}
 
 
 def clear_handles() -> None:
@@ -22,6 +24,14 @@ def clear_handles() -> None:
 def register_handles(handles: dict[int, Any]) -> None:
     _element_handles.clear()
     _element_handles.update(handles)
+
+
+def register_app_handles(app_name: str, handles: dict[int, Any]) -> None:
+    _app_handles[app_name.lower()] = dict(handles)
+
+
+def app_handle(app_name: str, element_index: int) -> Any | None:
+    return _app_handles.get(app_name.lower(), {}).get(int(element_index))
 
 
 def _press_action_const():
@@ -63,3 +73,25 @@ def set_value(element_index: int, value: str) -> str:
     if err != 0:
         raise RuntimeError(f"AX set value failed (error {err})")
     return f"Set value on element [{element_index}] ({len(value)} chars)."
+
+
+# -- background-app actions on retained handles (AX ignores focus) --
+
+def press_handle(handle: Any, label: str = "") -> str:
+    """AXPress a retained AXUIElement from any app, focused or not."""
+    if not _OK:
+        raise RuntimeError("Accessibility unavailable.")
+    err = AX.AXUIElementPerformAction(handle, _press_action_const())
+    if err != 0:
+        raise RuntimeError(f"background AXPress failed (error {err}) {label}")
+    return f"AXPress {label} (background)."
+
+
+def set_value_handle(handle: Any, value: str, label: str = "") -> str:
+    """Set AXValue on a retained AXUIElement from any app."""
+    if not _OK:
+        raise RuntimeError("Accessibility unavailable.")
+    err = AX.AXUIElementSetAttributeValue(handle, ax.A_VALUE, value)
+    if err != 0:
+        raise RuntimeError(f"background AX set value failed (error {err}) {label}")
+    return f"Set value {label} ({len(value)} chars, background)."

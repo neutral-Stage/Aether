@@ -26,12 +26,22 @@ final class AmbientListeningController: ObservableObject {
         indicatorVisible = true
         wake.isListening = true
         wake.energyThreshold = max(threshold * 1.5, 0.03)
+        let wakeRate = wake.porcupineActive ? wake.requiredSampleRate : 0
         do {
-            try audio.startContinuousMonitoring(threshold: threshold) { [weak self] energy in
-                Task { @MainActor in
-                    self?.wake.processEnergy(energy)
-                }
-            }
+            try audio.startContinuousMonitoring(
+                threshold: threshold,
+                wakeSampleRate: wakeRate,
+                onEnergy: { [weak self] energy in
+                    Task { @MainActor in
+                        self?.wake.processEnergy(energy)
+                    }
+                },
+                onFrame: wakeRate > 0 ? { [weak self] pcm in
+                    Task { @MainActor in
+                        self?.wake.processFrame(pcm)
+                    }
+                } : nil
+            )
         } catch {
             isActive = false
             indicatorVisible = false

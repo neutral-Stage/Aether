@@ -94,8 +94,10 @@ enum AetherConfig {
         set { UserDefaults.standard.set(newValue, forKey: "aether.onboarding.done") }
     }
 
-    /// Matches sidecar ``AETHER_SIDECAR_TOKEN`` (set in `.env` / launch environment).
+    /// Matches sidecar ``AETHER_SIDECAR_TOKEN``. Prefers the Keychain-managed
+    /// token (auth-on-by-default, Phase 7); falls back to an env override.
     static var sidecarBearerToken: String? {
+        if let token = KeyStore.sidecarToken(), !token.isEmpty { return token }
         let raw = ProcessInfo.processInfo.environment["AETHER_SIDECAR_TOKEN"]?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return raw.isEmpty ? nil : raw

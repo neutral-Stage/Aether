@@ -56,6 +56,10 @@ the screen, so your targets are current.
 - Prefer clicking by `element_index` (from get_screen_context) over raw coordinates.
 - For web tasks prefer `browser_*` tools; for Mail/Safari/Finder prefer tier-1 tools.
 - For complex coding tasks use `delegate_to_coder` (Tier-0 CLI agents).
+- For long or parallel work, `spawn_agent` runs coding agents (claude, codex, \
+opencode, kilo) or terminals in the background: monitor with get_agent_output / \
+wait_for_agent, steer with send_to_agent, and report results when they finish. \
+Spawn multiple agents for independent subtasks.
 - Reuse learned skills from memory when they match the goal.
 - Do ONE tool call at a time and observe the result before the next.
 - If verification fails, try a different approach (vision, AppleScript, browser).
@@ -153,7 +157,33 @@ class Agent:
             world=self.world,
             memory=self.memory,
             browser_headless=config.browser_headless,
+            browser_attach_mode=config.browser_attach_mode,
+            browser_cdp_url=config.browser_cdp_url,
         )
+
+    def _record_pack_learning(self, goal: str) -> None:
+        """Distill a successful run into an app-specific learned recipe (Phase 10)."""
+        try:
+            from ..knowledge import learned
+            from ..knowledge import loader as kloader
+            key = kloader.resolve_pack_key(self.world.frontmost_app, self.world.bundle_id)
+            if not key:
+                return
+            name = learned.record_success(key, goal, self.world.task_trace())
+            if name:
+                print(f"📖 Learned recipe '{name}' for {self.world.frontmost_app}")
+        except Exception:  # noqa: BLE001 — learning must never break a run
+            pass
+
+    def _context_is_untrusted(self) -> bool:
+        """True when the current on-screen text trips the injection scanner —
+        i.e. the model is looking at potentially adversarial content."""
+        try:
+            from .security import InjectionSeverity, scan_injection
+            scan = scan_injection(self.world.ax_rendered or "")
+            return scan.severity in (InjectionSeverity.HIGH, InjectionSeverity.MEDIUM)
+        except Exception:  # noqa: BLE001
+            return False
 
     def _system_prompt(self, goal: str) -> str:
         parts = [BASE_SYSTEM_PROMPT]
@@ -164,7 +194,9 @@ class Agent:
                 bundle_id=self.world.bundle_id,
             )
             if pack:
-                parts.append(pack)
+                # Redact: learned recipes (Phase 10) may carry text from prior
+                # runs; run it through the same secret filter as the AX context.
+                parts.append(self.policy.redact_text(pack))
         if self.memory:
             mem = self.memory.prompt_slice(goal)
             if mem:
@@ -173,6 +205,13 @@ class Agent:
             sk = self.skills.prompt_slice(goal)
             if sk:
                 parts.append(sk)
+        try:
+            from ..fleet.manager import SessionManager
+            fleet = SessionManager.get().summary_line()
+            if fleet:
+                parts.append(fleet)
+        except Exception:  # noqa: BLE001 — fleet must never break the loop
+            pass
         ctx = self.world.context_block()
         if ctx:
             parts.append(self.policy.prepare_context_for_model(ctx))
@@ -300,8 +339,24 @@ class Agent:
         """Sync entry point (backward compatible)."""
         return asyncio.run(self.run_async(goal))
 
-    async def run_async(self, goal: str, *, run_id: str | None = None) -> str:
-        stop_ctl.reset()
+    async def run_async(
+        self, goal: str, *, run_id: str | None = None, reset_stop: bool = True,
+    ) -> str:
+        try:
+            return await self._run_async_inner(
+                goal, run_id=run_id, reset_stop=reset_stop)
+        finally:
+            # Crash-safe browser cleanup (in cdp mode this only disconnects).
+            from ..effectors import browser as browser_fx
+            browser_fx.close_session()
+
+    async def _run_async_inner(
+        self, goal: str, *, run_id: str | None = None, reset_stop: bool = True,
+    ) -> str:
+        # Under concurrent runs the sidecar passes reset_stop=False so a new run
+        # can't clear a sibling's pending STOP (the stop signal is process-global).
+        if reset_stop:
+            stop_ctl.reset()
         self.world.set_goal(goal)
         self._hud_update(goal=goal, status="working", step="Starting…")
 
@@ -325,6 +380,13 @@ class Agent:
             return msg
 
         self.audit.record("run_start", run_id=rid, summary=goal[:500])
+
+        # Immediate ack shrinks perceived voice latency (Phase 3);
+        # ref kept on self so the fire-and-forget task isn't GC'd mid-flight
+        if bool(self.cfg.get("voice", "ack", default=False)):
+            self._ack_task = asyncio.ensure_future(
+                self.say_async(str(self.cfg.get("voice", "ack_text", default="On it.")))
+            )
 
         explicit_planner = bool(self.cfg.get("agent", "explicit_planner", default=False))
         planner_use_llm = bool(self.cfg.get("agent", "planner_use_llm", default=True))
@@ -454,17 +516,31 @@ class Agent:
                         })
                         continue
 
-                if spec and self.policy.requires_confirm(spec, args):
-                    if self.confirm_async is not None:
-                        ok = await self.confirm_async(desc)
+                untrusted = self._context_is_untrusted()
+                ro2 = bool(spec and self.policy.is_rule_of_two_risk(spec, args, untrusted))
+                if spec and (self.policy.requires_confirm(spec, args) or ro2):
+                    # Surface the EXACT operation for destructive / rule-of-two
+                    # actions so injected screen text can't disguise the ask.
+                    if ro2 or self.policy.impact_of(spec, args) == "destructive":
+                        confirm_text = self.policy.describe_operation(spec, args)
+                        if ro2:
+                            confirm_text = (
+                                "⚠️ Untrusted on-screen content is present. Approve "
+                                "this EXACT action?\n" + confirm_text
+                            )
                     else:
-                        ok = await asyncio.to_thread(self.policy.confirm, desc)
+                        confirm_text = desc
+                    if self.confirm_async is not None:
+                        ok = await self.confirm_async(confirm_text)
+                    else:
+                        ok = await asyncio.to_thread(self.policy.confirm, confirm_text)
                     self.audit.record(
                         "confirmation",
                         run_id=rid,
                         tool=name,
                         confirmed=ok,
-                        summary=desc[:200],
+                        summary=confirm_text[:200],
+                        extra={"rule_of_two": ro2},
                     )
                     if not ok:
                         results.append({
@@ -582,6 +658,13 @@ class Agent:
                 if skill_id:
                     print(f"📚 Learned skill id={skill_id}")
 
+        # Pack write-back: distill this run into an app-specific learned recipe
+        # (Phase 10). Gated by knowledge.learn (default on when knowledge enabled).
+        if task_success and self.cfg.knowledge_enabled and self.cfg.get(
+            "knowledge", "learn", default=True,
+        ):
+            self._record_pack_learning(goal)
+
         self.metrics.end_run("idle" if task_success else "incomplete")
         self.audit.record(
             "run_end",
@@ -589,8 +672,4 @@ class Agent:
             summary=final[:300],
             extra={"success": task_success},
         )
-
-        from ..effectors import browser as browser_fx
-        browser_fx.close_session()
-
         return final

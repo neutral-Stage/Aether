@@ -13,6 +13,7 @@ from ..effectors import shell as shell_fx
 from ..effectors import ax_actions
 from ..effectors import applescript as ascript
 from ..effectors import browser as browser_fx
+from ..effectors import executor
 from ..tools import delegation as delegate_fx
 from ..core import stop as stop_ctl
 
@@ -28,6 +29,8 @@ class AgentContext:
     world: Any = None  # WorldModel, optional
     memory: Any = None  # MemoryStore, optional
     browser_headless: bool = True
+    browser_attach_mode: str = "headless"  # headless | cdp
+    browser_cdp_url: str = "http://127.0.0.1:9222"
 
 
 @dataclass
@@ -84,12 +87,23 @@ class Registry:
 
     def describe_call(self, name: str, args: dict) -> str:
         if name == "click" and "element_index" in args:
-            return f"click element [{args['element_index']}]"
+            suffix = f" in {args['app']}" if args.get("app") else ""
+            return f"click element [{args['element_index']}]{suffix}"
+        if name == "get_app_context":
+            return f"read UI of {args.get('app', '')}"
+        if name == "watch_app":
+            return f"watch {args.get('app', '')} for changes"
+        if name == "unwatch_app":
+            return f"stop watching {args.get('app', '')}"
+        if name == "list_windows":
+            return "list app windows"
         if name == "open_app":
             return f"open {args.get('name')}"
         if name == "type_text":
+            # Never echo the literal text — it can be a password/secret and this
+            # description is stored in the trace + learned recipes (Phase 10).
             t = args.get("text", "")
-            return f"type \"{t[:40]}{'…' if len(t) > 40 else ''}\""
+            return f"type {len(t)} chars"
         if name == "press_key":
             mods = "+".join(args.get("modifiers", []))
             return f"press {mods + '+' if mods else ''}{args.get('key')}"
@@ -119,6 +133,19 @@ class Registry:
             return "browser screenshot"
         if name == "delegate_to_coder":
             return f"delegate to {args.get('agent', 'auto')} coder"
+        if name == "spawn_agent":
+            p = args.get("prompt", "")
+            return f"spawn {args.get('agent_type')} agent: \"{p[:50]}{'…' if len(p) > 50 else ''}\""
+        if name == "send_to_agent":
+            return f"send to agent [{args.get('session_id', '')[:12]}]"
+        if name == "get_agent_output":
+            return f"read agent output [{args.get('session_id', '')[:12]}]"
+        if name == "list_agents":
+            return "list agent sessions"
+        if name == "stop_agent":
+            return f"stop agent [{args.get('session_id', '')[:12]}]"
+        if name == "wait_for_agent":
+            return f"wait for agent [{args.get('session_id', '')[:12]}]"
         if name.startswith("mcp_"):
             return name.replace("_", " ", 1)
         return name
@@ -187,6 +214,9 @@ def _try_native_effector(tool: str, args: dict) -> str | None:
 
 
 def _h_click(args: dict, ctx: AgentContext) -> str:
+    app = (args.get("app") or "").strip()
+    if app:
+        return _background_click(app, args)
     native = _try_native_effector("click", args)
     if native:
         time.sleep(0.2)
@@ -197,23 +227,106 @@ def _h_click(args: dict, ctx: AgentContext) -> str:
             return ax_actions.press_element(int(idx))
     x, y = _resolve_click_target(args, ctx)
     count = 2 if args.get("double") else 1
-    kbd.click(x, y, button=args.get("button", "left"), count=count)
+    with executor.HID_LOCK:
+        kbd.click(x, y, button=args.get("button", "left"), count=count)
     time.sleep(0.3)
     return f"Clicked at ({int(x)}, {int(y)})."
 
 
+def _background_click(app: str, args: dict) -> str:
+    """AX-first background click; guarded focus-juggle fallback for x,y."""
+    idx = args.get("element_index")
+    if idx is not None:
+        handle = ax_actions.app_handle(app, int(idx))
+        if handle is None:
+            return (f"ERROR: no element [{idx}] cached for '{app}' — "
+                    f"call get_app_context first.")
+        try:
+            return ax_actions.press_handle(handle, label=f"[{idx}] in {app}")
+        except Exception as e:  # noqa: BLE001 — fall through to focus-juggle
+            fallback_reason = str(e)
+    else:
+        fallback_reason = "coordinate click needs focus"
+    info = ax.resolve_app(app)
+    if info is None:
+        return f"ERROR: app not running: {app}"
+    if "x" not in args or "y" not in args:
+        return (f"ERROR: background AXPress failed ({fallback_reason}) and no x,y "
+                f"for focus-switch fallback.")
+    x, y = float(args["x"]), float(args["y"])
+    try:
+        executor.focused_action(
+            info["pid"],
+            lambda: kbd.click(x, y, button=args.get("button", "left"),
+                              count=2 if args.get("double") else 1),
+        )
+        return f"Clicked ({int(x)},{int(y)}) in {app} via brief focus switch."
+    except RuntimeError as e:
+        return f"ERROR: {e}"
+
+
 def _h_type_text(args: dict, _ctx: AgentContext) -> str:
+    app = (args.get("app") or "").strip()
+    if app:
+        idx = args.get("element_index")
+        if idx is None:
+            return "ERROR: typing into a background app needs element_index (AXSetValue)."
+        handle = ax_actions.app_handle(app, int(idx))
+        if handle is None:
+            return (f"ERROR: no element [{idx}] cached for '{app}' — "
+                    f"call get_app_context first.")
+        return ax_actions.set_value_handle(
+            handle, args["text"], label=f"[{idx}] in {app}")
     native = _try_native_effector("type_text", args)
     if native:
         return native
-    kbd.type_text(args["text"])
+    with executor.HID_LOCK:
+        kbd.type_text(args["text"])
     return f"Typed {len(args['text'])} characters."
 
 
 def _h_press_key(args: dict, _ctx: AgentContext) -> str:
-    kbd.press_key(args["key"], modifiers=args.get("modifiers"))
+    with executor.HID_LOCK:
+        kbd.press_key(args["key"], modifiers=args.get("modifiers"))
     time.sleep(0.2)
     return f"Pressed {args['key']}."
+
+
+def _h_get_app_context(args: dict, _ctx: AgentContext) -> str:
+    data = ax.app_context(args["app"])
+    if data.get("error"):
+        return f"ERROR: {data['error']}"
+    state = "frontmost" if data.get("active") else "background"
+    return (f"App: {data['app']} ({state}, {data['element_count']} elements)\n"
+            f"{data['rendered']}")
+
+
+def _h_watch_app(args: dict, _ctx: AgentContext) -> str:
+    from ..perception.app_watcher import AppWatcher
+    watcher = AppWatcher.get()
+    then_goal = (args.get("then_goal") or "").strip()
+    if then_goal:
+        return watcher.add_trigger(
+            args["app"], contains=(args.get("when") or "").strip(),
+            goal=then_goal, auto=bool(args.get("auto", False)),
+        )
+    return watcher.watch(args["app"])
+
+
+def _h_unwatch_app(args: dict, _ctx: AgentContext) -> str:
+    from ..perception.app_watcher import AppWatcher
+    return AppWatcher.get().unwatch(args["app"])
+
+
+def _h_list_windows(_args: dict, _ctx: AgentContext) -> str:
+    rows = ax.list_windows()
+    if not rows:
+        return "No running apps visible (or Accessibility unavailable)."
+    lines = []
+    for r in rows[:20]:
+        wins = "; ".join(r["windows"][:3]) or "(no windows)"
+        lines.append(f"{r['app']}: {wins}")
+    return "\n".join(lines)
 
 
 def _h_run_shell(args: dict, _ctx: AgentContext) -> str:
@@ -265,38 +378,86 @@ def _h_remember_fact(args: dict, ctx: AgentContext) -> str:
     return f"Remembered ({kind}) id={row_id}: {text[:80]}"
 
 
+def _browser_session(ctx: AgentContext):
+    return browser_fx.get_session(
+        headless=ctx.browser_headless,
+        attach_mode=ctx.browser_attach_mode,
+        cdp_url=ctx.browser_cdp_url,
+    )
+
+
 def _h_browser_navigate(args: dict, ctx: AgentContext) -> str:
-    if not browser_fx.get_session(headless=ctx.browser_headless).available():
+    if not _browser_session(ctx).available():
         return (
             "Playwright not installed. Run: pip install playwright && "
             "playwright install chromium"
         )
-    return browser_fx.navigate(args["url"], headless=ctx.browser_headless)
+    return browser_fx.navigate(args["url"], headless=ctx.browser_headless,
+                               tab_id=args.get("tab_id"))
 
 
 def _h_browser_click(args: dict, ctx: AgentContext) -> str:
-    if not browser_fx.get_session().available():
+    if not _browser_session(ctx).available():
         return "Playwright not installed."
-    return browser_fx.click(args["selector"])
+    return browser_fx.click(args["selector"], tab_id=args.get("tab_id"))
 
 
 def _h_browser_fill(args: dict, ctx: AgentContext) -> str:
-    if not browser_fx.get_session().available():
+    if not _browser_session(ctx).available():
         return "Playwright not installed."
-    return browser_fx.fill(args["selector"], args["text"])
+    return browser_fx.fill(args["selector"], args["text"], tab_id=args.get("tab_id"))
 
 
 def _h_browser_get_text(args: dict, ctx: AgentContext) -> str:
-    if not browser_fx.get_session().available():
+    if not _browser_session(ctx).available():
         return "Playwright not installed."
-    return browser_fx.get_text(args["selector"])
+    return browser_fx.get_text(args["selector"], tab_id=args.get("tab_id"))
+
+
+def _h_browser_tabs(_args: dict, ctx: AgentContext) -> str:
+    if not _browser_session(ctx).available():
+        return "Playwright not installed."
+    return browser_fx.list_tabs()
+
+
+def _h_browser_activate_tab(args: dict, ctx: AgentContext) -> str:
+    if not _browser_session(ctx).available():
+        return "Playwright not installed."
+    return browser_fx.activate_tab(int(args["tab_id"]))
+
+
+def _h_browser_new_tab(args: dict, ctx: AgentContext) -> str:
+    if not _browser_session(ctx).available():
+        return "Playwright not installed."
+    return browser_fx.new_tab(args.get("url"))
+
+
+def _h_browser_attach(_args: dict, ctx: AgentContext) -> str:
+    from ..effectors import chrome_launcher
+    result = chrome_launcher.launch_with_debug_port()
+    # Switch this run's session to CDP mode so subsequent browser_* attach.
+    ctx.browser_attach_mode = "cdp"
+    browser_fx.close_session()
+    return result
 
 
 def _h_browser_screenshot(_args: dict, ctx: AgentContext) -> str:
-    if not browser_fx.get_session().available():
+    if not _browser_session(ctx).available():  # prime singleton in the right attach mode
         return "Playwright not installed."
     path = browser_fx.screenshot()
     return path
+
+
+def _h_computer_use_step(args: dict, _ctx: AgentContext) -> str:
+    from ..core.config import load_config
+    from ..effectors import computer_use
+    key = load_config(validate=False).anthropic_api_key
+    if not key:
+        return "ERROR: computer_use_step needs ANTHROPIC_API_KEY."
+    try:
+        return computer_use.computer_use_step(args["instruction"], api_key=key)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR: computer-use failed: {e}"
 
 
 def _h_finish(args: dict, _ctx: AgentContext) -> str:
@@ -370,7 +531,9 @@ def build_default_registry() -> Registry:
         ToolSpec(
             name="click",
             description=("Click a UI element. Prefer element_index from get_screen_context; "
-                         "uses AXPress when available, else CGEvent. Or pass x,y coordinates."),
+                         "uses AXPress when available, else CGEvent. Or pass x,y coordinates. "
+                         "Pass app='Name' to click in a BACKGROUND app (element_index from "
+                         "get_app_context; AX-first, no focus steal)."),
             json_schema={
                 "type": "object",
                 "properties": {
@@ -379,6 +542,7 @@ def build_default_registry() -> Registry:
                     "y": {"type": "number"},
                     "button": {"type": "string", "enum": ["left", "right"]},
                     "double": {"type": "boolean"},
+                    "app": {"type": "string"},
                 },
             },
             permission="input",
@@ -387,15 +551,75 @@ def build_default_registry() -> Registry:
         ),
         ToolSpec(
             name="type_text",
-            description="Type text into the currently focused field.",
+            description=("Type text into the currently focused field. For a BACKGROUND app "
+                         "pass app='Name' + element_index (sets the field value via AX "
+                         "without stealing focus)."),
             json_schema={
                 "type": "object",
-                "properties": {"text": {"type": "string"}},
+                "properties": {
+                    "text": {"type": "string"},
+                    "app": {"type": "string"},
+                    "element_index": {"type": "integer"},
+                },
                 "required": ["text"],
             },
             permission="input",
             impact="reversible",
             handler=_h_type_text,
+        ),
+        ToolSpec(
+            name="get_app_context",
+            description=("Read the UI elements of ANY running app by name — foreground or "
+                         "background — without changing focus. Use before background click/"
+                         "type_text with app=."),
+            json_schema={
+                "type": "object",
+                "properties": {"app": {"type": "string"}},
+                "required": ["app"],
+            },
+            permission="screen",
+            impact="read",
+            handler=_h_get_app_context,
+        ),
+        ToolSpec(
+            name="watch_app",
+            description=("Watch a background app for changes. With then_goal, set a "
+                         "PROACTIVE trigger: when the app changes (optionally matching "
+                         "`when` text) Aether suggests (or auto-runs) that goal. "
+                         "E.g. watch Xcode when='Build Succeeded' then_goal='run the tests'."),
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "app": {"type": "string"},
+                    "when": {"type": "string", "description": "Substring the change must contain"},
+                    "then_goal": {"type": "string", "description": "Goal to suggest/run on match"},
+                    "auto": {"type": "boolean", "description": "Auto-run vs suggest (default suggest)"},
+                },
+                "required": ["app"],
+            },
+            permission="screen",
+            impact="read",
+            handler=_h_watch_app,
+        ),
+        ToolSpec(
+            name="unwatch_app",
+            description="Stop watching a background app.",
+            json_schema={
+                "type": "object",
+                "properties": {"app": {"type": "string"}},
+                "required": ["app"],
+            },
+            permission="screen",
+            impact="read",
+            handler=_h_unwatch_app,
+        ),
+        ToolSpec(
+            name="list_windows",
+            description="List running apps and their window titles (all apps, not just frontmost).",
+            json_schema={"type": "object", "properties": {}},
+            permission="screen",
+            impact="read",
+            handler=_h_list_windows,
         ),
         ToolSpec(
             name="press_key",
@@ -465,10 +689,15 @@ def build_default_registry() -> Registry:
         ),
         ToolSpec(
             name="browser_navigate",
-            description="Open a URL in headless Chromium (Playwright).",
+            description=("Open a URL in the browser (headless Chromium, or the user's "
+                         "real Chrome when attached). Optional tab_id targets a tab "
+                         "from browser_tabs."),
             json_schema={
                 "type": "object",
-                "properties": {"url": {"type": "string"}},
+                "properties": {
+                    "url": {"type": "string"},
+                    "tab_id": {"type": "integer"},
+                },
                 "required": ["url"],
             },
             permission="network",
@@ -477,10 +706,13 @@ def build_default_registry() -> Registry:
         ),
         ToolSpec(
             name="browser_click",
-            description="Click an element in the Playwright browser by CSS selector.",
+            description="Click an element in the browser by CSS selector (optional tab_id).",
             json_schema={
                 "type": "object",
-                "properties": {"selector": {"type": "string"}},
+                "properties": {
+                    "selector": {"type": "string"},
+                    "tab_id": {"type": "integer"},
+                },
                 "required": ["selector"],
             },
             permission="network",
@@ -489,12 +721,13 @@ def build_default_registry() -> Registry:
         ),
         ToolSpec(
             name="browser_fill",
-            description="Fill a form field in the Playwright browser.",
+            description="Fill a form field in the browser (optional tab_id).",
             json_schema={
                 "type": "object",
                 "properties": {
                     "selector": {"type": "string"},
                     "text": {"type": "string"},
+                    "tab_id": {"type": "integer"},
                 },
                 "required": ["selector", "text"],
             },
@@ -504,10 +737,13 @@ def build_default_registry() -> Registry:
         ),
         ToolSpec(
             name="browser_get_text",
-            description="Read text from an element in the Playwright browser.",
+            description="Read text from an element in the browser (optional tab_id).",
             json_schema={
                 "type": "object",
-                "properties": {"selector": {"type": "string"}},
+                "properties": {
+                    "selector": {"type": "string"},
+                    "tab_id": {"type": "integer"},
+                },
                 "required": ["selector"],
             },
             permission="network",
@@ -516,11 +752,53 @@ def build_default_registry() -> Registry:
         ),
         ToolSpec(
             name="browser_screenshot",
-            description="Screenshot the Playwright browser viewport.",
+            description="Screenshot the browser viewport.",
             json_schema={"type": "object", "properties": {}},
             permission="screen",
             impact="read",
             handler=_h_browser_screenshot,
+        ),
+        ToolSpec(
+            name="browser_tabs",
+            description=("List open browser tabs with ids, titles, urls. In attached "
+                         "mode these are the user's real Chrome tabs."),
+            json_schema={"type": "object", "properties": {}},
+            permission="network",
+            impact="read",
+            handler=_h_browser_tabs,
+        ),
+        ToolSpec(
+            name="browser_activate_tab",
+            description="Switch the active browser tab by tab_id (from browser_tabs).",
+            json_schema={
+                "type": "object",
+                "properties": {"tab_id": {"type": "integer"}},
+                "required": ["tab_id"],
+            },
+            permission="network",
+            impact="reversible",
+            handler=_h_browser_activate_tab,
+        ),
+        ToolSpec(
+            name="browser_new_tab",
+            description="Open a new browser tab, optionally at a URL.",
+            json_schema={
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+            },
+            permission="network",
+            impact="reversible",
+            handler=_h_browser_new_tab,
+        ),
+        ToolSpec(
+            name="browser_attach",
+            description=("Attach to the user's REAL Chrome: quits and relaunches Chrome "
+                         "with remote debugging (tabs restore), then browser_* tools "
+                         "control actual tabs. Ask the user before using this."),
+            json_schema={"type": "object", "properties": {}},
+            permission="network",
+            impact="destructive",
+            handler=_h_browser_attach,
         ),
         ToolSpec(
             name="run_applescript",
@@ -598,9 +876,9 @@ def build_default_registry() -> Registry:
                 name="delegate_to_coder",
                 description=(
                     "Tier-0: delegate a coding task to a specialist CLI agent "
-                    "(claude, codex, opencode, cursor). Provide a precise task spec; "
-                    "supervise output. Use for multi-file refactors, tests, or "
-                    "complex code generation — not simple shell one-liners."
+                    "(claude, codex, opencode, cursor) and wait for it to finish. "
+                    "For long-running or PARALLEL work, prefer spawn_agent (fleet) "
+                    "which runs in the background and is steerable."
                 ),
                 json_schema={
                     "type": "object",
@@ -627,6 +905,36 @@ def build_default_registry() -> Registry:
                 handler=_h_delegate_to_coder,
             )
         )
+    fleet_cfg = cfg.get("fleet") or {}
+    if bool(fleet_cfg.get("enabled", True)):
+        from ..fleet.manager import SessionManager
+        from ..fleet.tools import register_fleet_tools
+
+        policy_cfg = cfg.get("policy") or {}
+        SessionManager.get().configure(
+            fleet_cfg,
+            approved_roots=policy_cfg.get("approved_file_roots"),
+            mcp_cfg=cfg.get("mcp_server") or {},
+        )
+        register_fleet_tools(reg)
+        # Bridge global STOP → kill fleet subprocesses + cancel graphs (Phase 9).
+        from ..fleet.manager import register_stop_bridge
+        register_stop_bridge()
+    if bool((cfg.get("beta") or {}).get("computer_use_api", False)):
+        reg.register(ToolSpec(
+            name="computer_use_step",
+            description=("LAST RESORT when AX + OCR both fail: send a screenshot to "
+                         "Anthropic's computer-use model and execute the ONE action it "
+                         "proposes. Slower and costs tokens — prefer AX/vision tools."),
+            json_schema={
+                "type": "object",
+                "properties": {"instruction": {"type": "string"}},
+                "required": ["instruction"],
+            },
+            permission="input",
+            impact="reversible",
+            handler=_h_computer_use_step,
+        ))
     return reg
 
 

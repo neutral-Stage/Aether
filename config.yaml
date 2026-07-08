@@ -33,6 +33,14 @@ skills:
 observability:
   enabled: true
 
+# Sidecar HTTP server
+sidecar:
+  # >1 lets multiple agent runs run concurrently (see GET /runs). STOP stays a
+  # global panic button that halts ALL in-flight runs. 1 = classic single-run.
+  max_concurrent_runs: 1
+  # Phase 9: run/graph state is persisted to data/state_events.jsonl and a boot
+  # reconcile flips any mid-flight record to 'interrupted' (no phantom 'running').
+
 # Vision / OCR fallback
 vision:
   enabled: true
@@ -40,6 +48,8 @@ vision:
 # Playwright browser automation
 browser:
   headless: true
+  attach_mode: headless   # headless | cdp (attach to the user's real Chrome)
+  cdp_url: http://127.0.0.1:9222
 
 # Expanded safety policy (§6.7)
 policy:
@@ -60,8 +70,8 @@ audit:
 beta:
   continuous_screen_stream: false   # ScreenCaptureKit continuous stream (Swift)
   ambient_listening: false          # always-on mic + wake word
-  wake_word: false                   # energy-based placeholder; Porcupine-ready hook
-  wake_word_engine: energy           # energy | porcupine (future)
+  wake_word: false                   # energy placeholder or Porcupine (see wake_word_engine)
+  wake_word_engine: energy           # energy | porcupine
   screen_stream_fps: 0.5            # max frames/sec when continuous stream enabled
   native_effectors: false            # route click/type to Swift HTTP bridge
   realtime_voice: false              # OpenAI Realtime API path (Phase 10)
@@ -70,6 +80,7 @@ beta:
   sparkle_appcast_url: ""            # Sparkle 2 appcast XML (Phase 9)
   crash_reporting: false             # Phase 12: POST /crash-report (opt-in)
   plugins_enabled: false             # Phase 12: load ~/.aether/plugins and plugins/
+  computer_use_api: false            # Phase 5: Anthropic computer-use as last-resort effector
 
 # Plugin SDK (Phase 12)
 plugins:
@@ -105,6 +116,45 @@ mcp:
   #     Authorization: "Bearer YOUR_TOKEN"
   #   enabled: false
 
+# Aether as an MCP server — lets fleet agents drive the screen through Aether
+# (policy gate + audit apply). Off by default: it grants GUI control to
+# spawned subprocesses. Endpoint: POST /mcp on the sidecar (localhost, auth-gated).
+mcp_server:
+  enabled: false               # turn on the /mcp endpoint
+  expose_to_fleet: false       # inject --mcp-config into spawned Claude Code sessions
+  url: http://127.0.0.1:8765/mcp
+  expose_tools:                # curated subset; all read/reversible
+    - get_screen_context
+    - screenshot
+    - analyze_screen
+    - click
+    - type_text
+    - open_app
+
+# Multi-agent task graphs (Phase 8) — decompose a goal into a DAG of agent
+# nodes; independent, non-conflicting nodes run in parallel, results merge into
+# one integration branch. spawn_graph tool; GET /fleet/graphs.
+graph:
+  default_budget_usd: 5.0   # stop scheduling new nodes past this fleet cost (0 = no cap)
+
+# Agent fleet — concurrent CLI agent sessions (Phase 2)
+fleet:
+  enabled: true
+  max_sessions: 4              # concurrent active sessions
+  output_buffer_lines: 2000    # ring buffer per session
+  session_timeout_sec: 1800    # watchdog kills sessions after this
+  cost_cap_usd: 5.0            # per-session; watchdog stops session when exceeded
+  claude_permission_mode: acceptEdits   # plan | acceptEdits | dontAsk
+  claude_allowed_tools: []     # e.g. ["Bash(git diff *)", "Read", "Edit"]
+  allow_bypass_permissions: false  # required for bypassPermissions mode (worktree only)
+  env_allowlist:               # extra env vars passed to agent subprocesses
+    - ANTHROPIC_API_KEY
+  idle_detect_sec: 3.0         # PTY quiescence → awaiting_input heuristic
+  worktrees:
+    enabled: true              # isolate code agents in git worktrees
+    keep: true                 # keep worktree dir after stop (branch always kept)
+  require_isolation: false     # refuse spawn if worktree unavailable
+
 # Tier-0 coding agent delegation (§6.10)
 delegation:
   enabled: true
@@ -116,12 +166,14 @@ delegation:
 voice:
   mode: pipeline                   # pipeline | realtime (Phase 10 beta)
   realtime_provider: openai        # openai (requires OPENAI_API_KEY)
-  tts: groq                    # groq | macos | none
+  tts: groq                    # groq | kokoro (local, pip install kokoro) | macos | none
   tts_stream: true               # prefer POST /tts/stream when available
   tts_model: canopylabs/orpheus-v1-english   # Groq Orpheus TTS model ID
-  tts_voice: troy              # Orpheus English voice (troy, hannah, austin, …)
-  stt: groq                    # groq | openai | none  (none => typed input)
-  stt_model: whisper-large-v3-turbo          # Groq Whisper model ID
+  tts_voice: troy              # Orpheus voice; Kokoro voices look like af_heart
+  stt: groq                    # groq | openai | local (mlx-whisper/pywhispercpp) | none
+  stt_model: whisper-large-v3-turbo          # Groq Whisper model ID (local: base/small)
+  ack: true                    # speak an immediate "On it." at run start (Phase 3)
+  ack_text: "On it."
   record_seconds: 8            # max push-to-talk capture length
   barge_in: true               # Phase 4: interrupt TTS when user speaks
   vad_energy_threshold: 0.02   # mic RMS threshold for barge-in detection
@@ -144,6 +196,14 @@ stop:
 knowledge:
   enabled: true                # inject App Knowledge Packs (Mail, Safari, Office, IDEs, …)
   sideload_dir: ~/.aether/packs  # Phase 11: user-installed packs
+  learn: true                  # Phase 10: write successful runs back as learned recipes
+
+# Proactive watched-app triggers (Phase 10): watch_app(app, when, then_goal, auto)
+app_watcher:
+  # When a trigger fires, Aether SUGGESTS the goal by default. Auto-running an
+  # action from a screen change is risky (see Phase 9 safety) — opt in here AND
+  # per-trigger with auto=true.
+  auto_run_triggers: false
 
 # Per-capability permission toggles (false = block tool calls)
 capabilities:
@@ -152,3 +212,4 @@ capabilities:
   shell: true
   files: true
   network: true
+  agents: true                 # fleet tools (spawn_agent, …)

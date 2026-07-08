@@ -1,0 +1,10 @@
+{
+  "name": "list_agents",
+  "description": "List all agent sessions (active and finished) with state and cost.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "permission": "agents",
+  "impact": "read"
+}

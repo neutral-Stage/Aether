@@ -31,6 +31,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -87,6 +88,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from . import run_store  # noqa: E402
+from .apps_api import register_sink as _register_apps_sink  # noqa: E402
+from .apps_api import router as _apps_router  # noqa: E402
+from .fleet_api import register_sink as _register_fleet_sink  # noqa: E402
+from .fleet_api import router as _fleet_router  # noqa: E402
+from .mcp_server import router as _mcp_router  # noqa: E402
+
+app.include_router(_fleet_router)
+app.include_router(_mcp_router)
+app.include_router(_apps_router)
+
+
+@app.on_event("startup")
+async def _fleet_startup() -> None:
+    _register_fleet_sink(asyncio.get_running_loop(), _broadcast)
+    _register_apps_sink(asyncio.get_running_loop(), _broadcast)
+    _reconcile_persisted_state()
+
+
+def _reconcile_persisted_state() -> None:
+    """On boot, flip any run/graph the store left mid-flight to 'interrupted' so
+    a crashed/killed sidecar never leaves a phantom 'running' record, and /runs
+    reports it honestly instead of silently dropping it (Phase 9)."""
+    for ev in run_store.non_terminal():
+        kind, rid = ev.get("kind"), str(ev.get("id"))
+        run_store.append(kind, rid, "interrupted", reason="sidecar restarted")
+        if kind == "run":
+            state = RunState(run_id=rid, goal=str(ev.get("goal", "")))
+            state.status = "interrupted"
+            state.finished_at = time.time()
+            state.result = "Interrupted by a sidecar restart."
+            _run_registry.register(state)
 
 
 def _client_key(request: Request) -> str:
@@ -156,6 +190,7 @@ class VoiceMetricsRequest(BaseModel):
     stt_ms: float | None = None
     tts_ms: float | None = None
     voice_rtt_ms: float | None = None
+    first_audio_ms: float | None = None
     run_id: str | None = None
 
 
@@ -178,6 +213,10 @@ class FeedbackRequest(BaseModel):
 class StopMetricsRequest(BaseModel):
     stop_latency_ms: float
     source: str = "swift"
+
+
+class StopRequest(BaseModel):
+    run_id: str | None = None  # None → mark all active runs stopped
 
 
 class CrashReportRequest(BaseModel):
@@ -207,21 +246,106 @@ class RunState:
 
 
 _run_lock = threading.Lock()
-_current: RunState | None = None
-_streaming_hud = StreamingHUD()
 _event_subscribers: list[asyncio.Queue[dict[str, Any]]] = []
 _subscribers_lock = asyncio.Lock()
 
+# Default concurrency cap (overridable via config sidecar.max_concurrent_runs).
+# 1 preserves the historical single-run behaviour exactly.
+_DEFAULT_MAX_RUNS = 1
+_DEFAULT_RUN_HISTORY = 20
 
-def _set_current(state: RunState | None) -> None:
-    global _current
-    with _run_lock:
-        _current = state
+
+class _RunRegistry:
+    """Thread-safe registry of agent runs, replacing the single `_current` global.
+
+    Keeps every active run plus a bounded tail of finished ones (for `/runs`
+    history). STOP remains global (a panic button) — see `/stop`.
+    """
+
+    def __init__(self, history: int = _DEFAULT_RUN_HISTORY) -> None:
+        self._runs: "OrderedDict[str, RunState]" = OrderedDict()
+        self._order: list[str] = []  # insertion order (newest last)
+        self.history = history
+
+    def register(self, state: RunState) -> None:
+        with _run_lock:
+            self._runs[state.run_id] = state
+            self._order.append(state.run_id)
+            self._prune_locked()
+
+    def get(self, run_id: str) -> RunState | None:
+        with _run_lock:
+            return self._runs.get(run_id)
+
+    def latest(self) -> RunState | None:
+        with _run_lock:
+            for rid in reversed(self._order):
+                st = self._runs.get(rid)
+                if st is not None:
+                    return st
+            return None
+
+    def active(self) -> list[RunState]:
+        with _run_lock:
+            return [s for s in self._runs.values() if s.status == "running"]
+
+    def all(self) -> list[RunState]:
+        with _run_lock:
+            return list(self._runs.values())
+
+    def _prune_locked(self) -> None:
+        # Drop oldest FINISHED runs beyond the history cap; never drop active.
+        finished = [rid for rid in self._order
+                    if (s := self._runs.get(rid)) is not None and s.status != "running"]
+        excess = len(self._runs) - self.history
+        for rid in finished:
+            if excess <= 0:
+                break
+            self._runs.pop(rid, None)
+            excess -= 1
+        self._order = [rid for rid in self._order if rid in self._runs]
+
+
+_run_registry = _RunRegistry()
 
 
 def _get_current() -> RunState | None:
-    with _run_lock:
-        return _current
+    """Most-recent run (back-compat for /status and single-run return values)."""
+    return _run_registry.latest()
+
+
+def _max_concurrent_runs() -> int:
+    cfg = load_config(validate=False)
+    sc = cfg.get("sidecar") or {}
+    try:
+        return max(1, int(sc.get("max_concurrent_runs", _DEFAULT_MAX_RUNS)))
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_RUNS
+
+
+def _run_gate() -> None:
+    """Raise 409 when the concurrency cap is reached."""
+    if len(_run_registry.active()) >= _max_concurrent_runs():
+        raise HTTPException(409, "Max concurrent runs reached; try again shortly.")
+
+
+def _persist_run(state: RunState) -> None:
+    """Durably record a run's current status (Phase 9 — survives restart)."""
+    run_store.append("run", state.run_id, state.status, goal=state.goal[:200])
+
+
+def _run_state_dict(st: RunState) -> dict[str, Any]:
+    return {
+        "id": st.run_id,
+        "goal": st.goal,
+        "status": st.status,
+        "started_at": st.started_at,
+        "finished_at": st.finished_at,
+        "result": st.result,
+        "error": st.error,
+        "hud": st.last_hud,
+        "world": st.world_snapshot,
+    }
 
 
 async def _broadcast(event: dict[str, Any]) -> None:
@@ -249,7 +373,8 @@ async def _run_agent_task(
     loop: asyncio.AbstractEventLoop,
 ) -> None:
     state = RunState(run_id=run_id, goal=goal)
-    _set_current(state)
+    _run_registry.register(state)
+    _persist_run(state)
 
     cfg = load_config()
     if careful:
@@ -263,14 +388,19 @@ async def _run_agent_task(
         cfg.raw.setdefault("agent", {})["narrate"] = True
 
     stream_summary = percept_store.summary_for_context()
-    agent = Agent(cfg, hud=_streaming_hud)
+    # Per-run HUD so concurrent runs don't fight over one bound queue.
+    hud = StreamingHUD()
+    agent = Agent(cfg, hud=hud)
     if stream_summary:
         agent.world.set_screen_stream(stream_summary)
-    patch_agent_for_sidecar(agent, _streaming_hud, event_queue, loop)
+    patch_agent_for_sidecar(agent, hud, event_queue, loop)
     if not narrate:
         agent.cfg.raw.setdefault("agent", {})["narrate"] = False
 
-    stop_ctl.reset()
+    # Global STOP is a panic button: only reset it when starting a run with no
+    # other run in flight, so a new run can't clear a sibling's pending STOP.
+    # The reset itself happens inside agent.run_async (single source of truth).
+    reset_stop = len(_run_registry.active()) <= 1  # this run is already registered
     await _broadcast({"type": "run_start", "run_id": run_id, "goal": goal})
 
     async def pump_events() -> None:
@@ -294,10 +424,11 @@ async def _run_agent_task(
     pump_task = asyncio.create_task(pump_events())
 
     try:
-        result = await agent.run_async(goal, run_id=run_id)
+        result = await agent.run_async(goal, run_id=run_id, reset_stop=reset_stop)
         state.status = "idle"
         state.result = result
         state.finished_at = time.time()
+        _persist_run(state)
         try:
             state.world_snapshot = agent.world.snapshot()
         except Exception:
@@ -314,11 +445,12 @@ async def _run_agent_task(
         state.status = "error"
         state.error = str(exc)
         state.finished_at = time.time()
+        _persist_run(state)
         err_event = {"type": "error", "run_id": run_id, "message": str(exc)}
         event_queue.put_nowait(err_event)
         await _broadcast(err_event)
     finally:
-        _streaming_hud.unbind()
+        hud.unbind()
         pump_task.cancel()
         try:
             await pump_task
@@ -327,6 +459,7 @@ async def _run_agent_task(
         if state.status == "running":
             state.status = "stopped"
             state.finished_at = time.time()
+            _persist_run(state)
 
 
 def _skill_store():
@@ -395,9 +528,7 @@ async def replay_skill(
             raise HTTPException(404, f"Skill {skill_id} not found")
 
         if body.via_orchestrator:
-            cur = _get_current()
-            if cur and cur.status == "running":
-                raise HTTPException(409, "A run is already in progress")
+            _run_gate()
             goal = body.goal_override or store.build_replay_goal(skill, body.args)
             run_id = uuid.uuid4().hex[:12]
             queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -412,13 +543,13 @@ async def replay_skill(
                 event_queue=queue,
                 loop=loop,
             )
-            cur = _get_current()
+            done = _run_registry.get(run_id)
             return {
                 "mode": "orchestrator",
                 "run_id": run_id,
                 "goal": goal,
-                "status": cur.status if cur else "idle",
-                "result": cur.result if cur else None,
+                "status": done.status if done else "idle",
+                "result": done.result if done else None,
             }
 
         from aether.tools.registry import DEFAULT_REGISTRY, AgentContext
@@ -555,6 +686,16 @@ async def dashboard(_auth: None = Depends(require_auth)) -> str:
         f"<tr><td><b>TOTAL</b></td><td></td><td></td><td></td>"
         f"<td><b>${total_cost:.4f}</b></td></tr>"
     )
+    fleet = snap.get("fleet", {})
+    fleet_agent_rows = "".join(
+        f"<tr><td>{a}</td><td>${c:.4f}</td></tr>"
+        for a, c in sorted((fleet.get("cost_usd_by_agent") or {}).items())
+    ) or "<tr><td colspan=2>—</td></tr>"
+    fleet_meta = (
+        f"active: {fleet.get('active_sessions', 0)} · "
+        f"spawned: {fleet.get('spawned_total', 0)} · "
+        f"total: ${fleet.get('total_cost_usd', 0.0):.4f}"
+    )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Aether Metrics</title>
 <style>
@@ -572,6 +713,9 @@ th {{ background: #161b22; }}
 <h2>Cost &amp; tokens (estimated)</h2>
 <p class="meta">Estimates from provider token counts — not billing-accurate.</p>
 <table><tr><th>Provider</th><th>Tokens in</th><th>Tokens out</th><th>Calls</th><th>Cost USD</th></tr>{cost_rows}</table>
+<h2>Agent fleet</h2>
+<p class="meta">{fleet_meta}</p>
+<table><tr><th>Agent</th><th>Cost USD</th></tr>{fleet_agent_rows}</table>
 <h2>Recent runs</h2><table><tr><th>Goal</th><th>Status</th><th>Steps</th><th>Tools</th><th>Duration ms</th></tr>{rows}</table>
 </body></html>"""
 
@@ -581,18 +725,50 @@ async def status() -> dict[str, Any]:
     cur = _get_current()
     if cur is None:
         return {"status": "idle", "run": None}
+    run = _run_state_dict(cur)
     return {
         "status": cur.status,
-        "run": {
-            "id": cur.run_id,
-            "goal": cur.goal,
-            "started_at": cur.started_at,
-            "finished_at": cur.finished_at,
-            "result": cur.result,
-            "error": cur.error,
-            "hud": cur.last_hud,
-            "world": cur.world_snapshot,
-        },
+        "run": run,
+        "active_runs": len(_run_registry.active()),
+        "max_concurrent_runs": _max_concurrent_runs(),
+    }
+
+
+@app.get("/runs")
+async def list_runs() -> dict[str, Any]:
+    """All tracked runs (active + bounded history), newest last."""
+    runs = _run_registry.all()
+    return {
+        "runs": [_run_state_dict(s) for s in runs],
+        "active": len([s for s in runs if s.status == "running"]),
+        "max_concurrent_runs": _max_concurrent_runs(),
+    }
+
+
+@app.get("/runs/{run_id}")
+async def get_run(run_id: str) -> dict[str, Any]:
+    st = _run_registry.get(run_id)
+    if st is None:
+        raise HTTPException(404, f"no run {run_id!r}")
+    return _run_state_dict(st)
+
+
+@app.get("/catalog")
+async def catalog() -> dict[str, Any]:
+    """What Aether can do: supported apps (knowledge packs) + available tools.
+    Powers the in-app discoverability surface."""
+    from aether.knowledge import loader as kloader
+    from aether.tools.registry import DEFAULT_REGISTRY
+
+    tools = [
+        {"name": s.name, "description": s.description,
+         "impact": s.impact, "permission": s.permission}
+        for s in DEFAULT_REGISTRY._tools.values()
+    ]
+    return {
+        "apps": kloader.catalog_apps(),
+        "tools": sorted(tools, key=lambda t: t["name"]),
+        "tool_count": len(tools),
     }
 
 
@@ -613,21 +789,35 @@ async def tool_schema(name: str) -> JSONResponse:
 
 
 @app.post("/stop")
-async def stop(request: Request, _auth: None = Depends(require_auth)) -> dict[str, Any]:
+async def stop(
+    request: Request,
+    body: StopRequest | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
     started = time.perf_counter()
-    stop_ctl.trigger("sidecar")
-    cur = _get_current()
-    if cur and cur.status == "running":
-        cur.status = "stopped"
-        cur.finished_at = time.time()
-        cur.result = "Stopped by user."
-    await _broadcast({"type": "stopped", "reason": "user"})
+    # STOP is a global panic button: it always halts ALL in-flight runs (the
+    # stop signal is process-global). run_id only narrows which run rows we mark.
+    # Off the event loop: the fleet bridge does blocking per-session proc.wait().
+    await asyncio.to_thread(stop_ctl.trigger, "sidecar")
+    run_id = body.run_id if body else None
+    targets = ([_run_registry.get(run_id)] if run_id
+               else _run_registry.active())
+    stopped_ids = []
+    for st in targets:
+        if st and st.status == "running":
+            st.status = "stopped"
+            st.finished_at = time.time()
+            st.result = "Stopped by user."
+            _persist_run(st)
+            stopped_ids.append(st.run_id)
+    await _broadcast({"type": "stopped", "reason": "user", "run_ids": stopped_ids})
     latency_ms = (time.perf_counter() - started) * 1000
     m = MetricsCollector.get()
     m.observe("stop_latency_ms", latency_ms)
     m.warn_if_slow("stop_latency_ms", latency_ms)
     m.inc("stop_requests")
-    return {"status": "stopped", "stop_latency_ms": round(latency_ms, 2)}
+    return {"status": "stopped", "run_ids": stopped_ids,
+            "stop_latency_ms": round(latency_ms, 2)}
 
 
 @app.get("/config/voice")
@@ -731,6 +921,13 @@ async def stt(body: STTRequest, _auth: None = Depends(require_auth)) -> dict[str
             501,
             "STT unavailable: set voice.stt=openai and OPENAI_API_KEY in .env.",
         )
+    if engine == "local":
+        from aether.voice.stt_local import LocalSTT
+        if not LocalSTT().available():
+            raise HTTPException(
+                501,
+                "Local STT unavailable: pip install mlx-whisper or pywhispercpp.",
+            )
     try:
         raw = base64.b64decode(body.audio_base64)
     except Exception as exc:
@@ -774,7 +971,13 @@ async def tts(body: TTSRequest, _auth: None = Depends(require_auth)) -> Streamin
             501,
             "TTS unavailable: set voice.tts=groq and GROQ_API_KEY in .env.",
         )
-    if engine not in {"groq"}:
+    if engine == "kokoro":
+        from aether.voice.tts_local import LocalTTS
+        if not LocalTTS().available():
+            raise HTTPException(
+                501, "Kokoro TTS unavailable: pip install kokoro (needs espeak-ng).",
+            )
+    elif engine not in {"groq"}:
         raise HTTPException(
             501,
             f"TTS engine {engine!r} is not available via sidecar (use macOS AVSpeech locally).",
@@ -813,7 +1016,13 @@ async def tts_stream(body: TTSRequest, _auth: None = Depends(require_auth)) -> S
             501,
             "TTS unavailable: set voice.tts=groq and GROQ_API_KEY in .env.",
         )
-    if engine not in {"groq"}:
+    if engine == "kokoro":
+        from aether.voice.tts_local import LocalTTS
+        if not LocalTTS().available():
+            raise HTTPException(
+                501, "Kokoro TTS unavailable: pip install kokoro (needs espeak-ng).",
+            )
+    elif engine not in {"groq"}:
         raise HTTPException(
             501,
             f"TTS engine {engine!r} streaming not available via sidecar.",
@@ -927,7 +1136,11 @@ async def voice_metrics(
         m.observe("tts_ms", body.tts_ms)
     if body.voice_rtt_ms is not None:
         m.observe("voice_rtt_ms", body.voice_rtt_ms)
+        m.warn_if_slow("voice_rtt_ms", body.voice_rtt_ms)
         m.inc("voice_roundtrips")
+    if body.first_audio_ms is not None:
+        m.observe("first_audio_ms", body.first_audio_ms)
+        m.warn_if_slow("first_audio_ms", body.first_audio_ms)
     return {"status": "ok"}
 
 
@@ -938,9 +1151,11 @@ async def percept_screen(
 ) -> dict[str, str]:
     percept_store.update(body.model_dump())
     summary = percept_store.summary_for_context()
-    cur = _get_current()
-    if cur and cur.world_snapshot is not None:
-        cur.world_snapshot["screen_stream"] = summary
+    # Screen percept is global; fan it out to every active run's world snapshot
+    # (under cap=1 that's the single run, as before).
+    for st in _run_registry.active():
+        if st.world_snapshot is not None:
+            st.world_snapshot["screen_stream"] = summary
     return {"status": "ok", "summary": summary}
 
 
@@ -1050,9 +1265,7 @@ async def run_agent(
     if not goal:
         raise HTTPException(400, "goal is required")
 
-    cur = _get_current()
-    if cur and cur.status == "running":
-        raise HTTPException(409, "A run is already in progress")
+    _run_gate()
 
     cfg = load_config()
     if not cfg.has_cloud_llm() and not body.local_only:
@@ -1092,12 +1305,12 @@ async def run_agent(
         event_queue=queue,
         loop=loop,
     )
-    cur = _get_current()
+    done = _run_registry.get(run_id)
     return {
         "run_id": run_id,
-        "status": cur.status if cur else "idle",
-        "result": cur.result if cur else None,
-        "error": cur.error if cur else None,
+        "status": done.status if done else "idle",
+        "result": done.result if done else None,
+        "error": done.error if done else None,
     }
 
 

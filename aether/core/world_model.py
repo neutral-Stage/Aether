@@ -187,9 +187,19 @@ class WorldModel:
             lines.append(f"Last action: {snap['last_action']}")
         if self.screen_stream_summary:
             lines.append(f"Screen stream: {self.screen_stream_summary}")
+        watched = self._watched_apps_lines()
+        if watched:
+            lines.append("WATCHED APPS (background):\n" + "\n".join(watched))
         if snap["recent_history"]:
             lines.append("Recent:\n" + "\n".join(snap["recent_history"][-6:]))
         return "\n".join(lines)
+
+    def _watched_apps_lines(self) -> list[str]:
+        try:
+            from ..perception.app_watcher import AppWatcher
+            return AppWatcher.get().summary_lines(budget=5)
+        except Exception:
+            return []
 
     def record_action(self, description: str) -> None:
         self.last_action = description

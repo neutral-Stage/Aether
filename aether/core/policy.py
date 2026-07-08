@@ -140,6 +140,36 @@ class Policy:
     def allows_tool(self, spec: "ToolSpec") -> bool:
         return self.config.allows(spec.permission)
 
+    def describe_operation(self, spec: "ToolSpec", args: dict) -> str:
+        """The EXACT operation for a confirmation dialog — the literal command,
+        not a model summary. Defeats 'Lies-in-the-Loop', where injected text
+        makes the model describe a destructive action as something benign."""
+        name = spec.name
+        if name == "run_shell":
+            return f"run shell command:\n  {str(args.get('command', ''))[:400]}"
+        if name == "run_applescript":
+            return f"run AppleScript:\n  {str(args.get('source', ''))[:400]}"
+        if name == "browser_navigate":
+            return f"open URL: {str(args.get('url', ''))[:300]}"
+        if name in ("delegate_to_coder",):
+            return f"delegate to {args.get('agent', 'auto')}: {str(args.get('prompt', ''))[:200]}"
+        if name in ("spawn_agent", "spawn_graph"):
+            return f"spawn {args.get('agent_type', 'agent')}: {str(args.get('prompt', ''))[:200]}"
+        if name == "type_text":
+            return f"type text: {str(args.get('text', ''))[:200]}"
+        shown = ", ".join(f"{k}={str(v)[:60]}" for k, v in args.items())
+        return f"{name}({shown})"
+
+    def is_rule_of_two_risk(
+        self, spec: "ToolSpec", args: dict, untrusted_present: bool,
+    ) -> bool:
+        """The prompt-injection trifecta: untrusted content in context + a
+        destructive action. Such actions must be confirmed with the EXACT op
+        shown, regardless of careful mode (Meta 'Rule of Two')."""
+        if not untrusted_present:
+            return False
+        return self.impact_of(spec, args) == "destructive"
+
     def allows_shell_path(self, command: str) -> bool:
         """Check if shell command touches paths outside approved roots."""
         if not self.config.approved_file_roots:

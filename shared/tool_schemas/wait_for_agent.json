@@ -1,0 +1,21 @@
+{
+  "name": "wait_for_agent",
+  "description": "Block until a session finishes or awaits input (timeout \u2264120s), then return status + output tail.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "session_id": {
+        "type": "string"
+      },
+      "timeout_sec": {
+        "type": "integer",
+        "description": "max 120"
+      }
+    },
+    "required": [
+      "session_id"
+    ]
+  },
+  "permission": "agents",
+  "impact": "read"
+}

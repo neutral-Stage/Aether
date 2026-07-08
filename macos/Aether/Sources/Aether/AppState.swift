@@ -11,6 +11,13 @@ final class AppState: ObservableObject {
     @Published var bargeInEnabled = true
     @Published var ambientActive = false
     @Published var feedbackText = ""
+    @Published var fleetSessionStates: [String: String] = [:]
+
+    var fleetActiveCount: Int {
+        fleetSessionStates.values.filter {
+            ["starting", "running", "awaiting_input"].contains($0)
+        }.count
+    }
 
     private var voiceSettings = VoiceSettings()
     private var betaSettings = BetaSettings()
@@ -34,6 +41,7 @@ final class AppState: ObservableObject {
     private let pttHotkey = PTTHotkeyController()
     private let commandBarHotkey = CommandBarHotkeyController()
     let updateChecker = SparkleUpdateController()
+    let sidecar = SidecarSupervisor()
     lazy var realtimeSession = RealtimeVoiceSession()
     lazy var screenStream = ScreenStreamManager()
 
@@ -62,6 +70,7 @@ final class AppState: ObservableObject {
 
     func bootstrap() {
         _ = AuditKeychain.ensureKey()
+        sidecar.start()  // launch + supervise our own sidecar (Phase 7)
         stopController.start()
         pttHotkey.start()
         commandBarHotkey.start()
@@ -151,6 +160,7 @@ final class AppState: ObservableObject {
             isRunning: client.isRunning,
             sidecarOK: client.healthOK,
             ambientActive: ambientActive,
+            fleetActiveCount: fleetActiveCount,
             onStop: { [weak self] in self?.handleStop() }
         )
         hud.setClickThrough(!client.isRunning && !audio.isRecording && pendingConfirmId == nil)
@@ -193,6 +203,11 @@ final class AppState: ObservableObject {
                 break
             case .confirmRequest(let requestId, let description):
                 self.showConfirmation(requestId: requestId, description: description)
+            case .fleet(let payload):
+                if let sid = payload["session_id"] as? String,
+                   let state = payload["state"] as? String {
+                    self.fleetSessionStates[sid] = state
+                }
             }
             self.refreshHUD()
         }
@@ -348,6 +363,22 @@ final class AppState: ObservableObject {
     }
 }
 
+struct SidecarStatusLabel: View {
+    @ObservedObject var supervisor: SidecarSupervisor
+
+    var body: some View {
+        Text(label).font(.caption).foregroundStyle(.secondary)
+    }
+
+    private var label: String {
+        switch supervisor.status {
+        case .healthy, .external: return "Sidecar OK"
+        case .starting, .idle: return "Starting sidecar…"
+        case .failed(let why): return "Sidecar: \(why)"
+        }
+    }
+}
+
 struct MainWindowView: View {
     @ObservedObject var app: AppState
 
@@ -400,9 +431,20 @@ struct MainWindowView: View {
                 Circle()
                     .fill(app.client.healthOK ? Color.green : Color.orange)
                     .frame(width: 8, height: 8)
-                Text(app.client.healthOK ? "Sidecar OK" : "Start sidecar")
-                    .font(.caption)
+                SidecarStatusLabel(supervisor: app.sidecar)
             }
+
+            Divider()
+            CatalogView(client: app.client)
+
+            Divider()
+            KeysView(onSaved: { app.sidecar.restart() })
+
+            Divider()
+            FleetView(client: app.client)
+
+            Divider()
+            GraphView(client: app.client)
 
             Divider()
             MCPSettingsView(client: app.client)

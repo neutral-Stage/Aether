@@ -1,0 +1,45 @@
+{
+  "name": "spawn_agent",
+  "description": "Spawn a concurrent agent session: a Claude Code / Codex / OpenCode / Kilo coding agent, or a persistent terminal. Runs in the background \u2014 you keep working while it does. Prefer isolate=true (git worktree) for code changes. Use for long or parallel work; delegate_to_coder for quick one-shots.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "agent_type": {
+        "type": "string",
+        "enum": [
+          "claude",
+          "codex",
+          "opencode",
+          "cursor",
+          "kilo",
+          "terminal"
+        ]
+      },
+      "prompt": {
+        "type": "string",
+        "description": "Task spec or initial command"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "Project dir (default: cwd)"
+      },
+      "label": {
+        "type": "string",
+        "description": "Short human label"
+      },
+      "isolate": {
+        "type": "boolean",
+        "description": "Git worktree isolation"
+      },
+      "timeout_sec": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "agent_type",
+      "prompt"
+    ]
+  },
+  "permission": "agents",
+  "impact": "reversible"
+}

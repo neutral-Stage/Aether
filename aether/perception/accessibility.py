@@ -141,6 +141,40 @@ def frontmost_app() -> dict:
     }
 
 
+def list_running_apps() -> list[dict]:
+    """Regular (Dock-visible) running apps: {'name', 'pid', 'bundle', 'active'}."""
+    if not _IMPORT_OK:
+        return []
+    out = []
+    for app in NSWorkspace.sharedWorkspace().runningApplications():
+        try:
+            if int(app.activationPolicy()) != 0:  # NSApplicationActivationPolicyRegular
+                continue
+            out.append({
+                "name": _to_str(app.localizedName()),
+                "pid": int(app.processIdentifier()),
+                "bundle": _to_str(app.bundleIdentifier()),
+                "active": bool(app.isActive()),
+            })
+        except Exception:
+            continue
+    return out
+
+
+def resolve_app(name: str) -> dict | None:
+    """Find a running app by (case-insensitive) name or bundle id."""
+    needle = (name or "").strip().lower()
+    if not needle:
+        return None
+    for app in list_running_apps():
+        if app["name"].lower() == needle or app["bundle"].lower() == needle:
+            return app
+    for app in list_running_apps():  # substring fallback
+        if needle in app["name"].lower():
+            return app
+    return None
+
+
 def _focused_window(app_el):
     for attr in (A_FOCUSED_WINDOW, A_MAIN_WINDOW):
         win = _copy(app_el, attr)
@@ -156,15 +190,23 @@ def _focused_window(app_el):
 
 
 def read_tree(max_elements: int = 250, max_depth: int = 14,
-              capture_handles: bool = False) -> list[Element]:
-    """Walk the focused window's AX tree -> flat list of Elements."""
+              capture_handles: bool = False, pid: int | None = None,
+              handles_out: dict[int, Any] | None = None) -> list[Element]:
+    """Walk an app's focused/main window AX tree -> flat list of Elements.
+
+    pid=None reads the frontmost app (works for background apps too — AX
+    reads ignore focus). handles_out, when given, receives idx->AXUIElement
+    instead of registering into the global frontmost handle cache.
+    """
     if not _IMPORT_OK:
         return []
-    info = frontmost_app()
-    if info["pid"] < 0:
+    if pid is None:
+        info = frontmost_app()
+        pid = info["pid"]
+    if pid < 0:
         return []
 
-    app_el = AX.AXUIElementCreateApplication(info["pid"])
+    app_el = AX.AXUIElementCreateApplication(pid)
     root = _focused_window(app_el) or app_el
 
     out: list[Element] = []
@@ -204,11 +246,14 @@ def read_tree(max_elements: int = 250, max_depth: int = 14,
     except Exception:
         pass
     if capture_handles:
-        try:
-            from ..effectors import ax_actions
-            ax_actions.register_handles(handles)
-        except Exception:
-            pass
+        if handles_out is not None:
+            handles_out.update(handles)
+        else:
+            try:
+                from ..effectors import ax_actions
+                ax_actions.register_handles(handles)
+            except Exception:
+                pass
     return out
 
 
@@ -223,6 +268,56 @@ def screen_context(max_elements: int = 60, capture_handles: bool = True) -> dict
         "elements": [asdict(e) for e in els],
         "rendered": "\n".join(e.describe() for e in els),
     }
+
+
+def app_context(app_name: str, max_elements: int = 60,
+                capture_handles: bool = True) -> dict:
+    """AX summary of a named app — foreground or background (AX ignores focus).
+
+    Captured handles are namespaced per app in ax_actions so background
+    press/set-value can target them without disturbing the frontmost cache.
+    """
+    app = resolve_app(app_name)
+    if app is None:
+        return {"app": app_name, "error": f"app not running: {app_name}",
+                "element_count": 0, "elements": [], "rendered": ""}
+    handles: dict[int, Any] = {}
+    els = read_tree(max_elements=max_elements, capture_handles=capture_handles,
+                    pid=app["pid"], handles_out=handles)
+    if capture_handles and handles:
+        try:
+            from ..effectors import ax_actions
+            ax_actions.register_app_handles(app["name"], handles)
+        except Exception:
+            pass
+    return {
+        "app": app["name"],
+        "bundle_id": app["bundle"],
+        "pid": app["pid"],
+        "active": app["active"],
+        "element_count": len(els),
+        "elements": [asdict(e) for e in els],
+        "rendered": "\n".join(e.describe() for e in els),
+    }
+
+
+def list_windows() -> list[dict]:
+    """Window titles per running app: [{'app', 'pid', 'windows': [...]}]."""
+    if not _IMPORT_OK:
+        return []
+    out = []
+    for app in list_running_apps():
+        titles: list[str] = []
+        try:
+            app_el = AX.AXUIElementCreateApplication(app["pid"])
+            for win in (_copy(app_el, A_WINDOWS) or []):
+                t = _to_str(_copy(win, A_TITLE))
+                if t:
+                    titles.append(t[:80])
+        except Exception:
+            pass
+        out.append({"app": app["name"], "pid": app["pid"], "windows": titles})
+    return out
 
 
 if __name__ == "__main__":

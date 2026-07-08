@@ -1,0 +1,21 @@
+{
+  "name": "get_agent_output",
+  "description": "Status + recent output of an agent session.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "session_id": {
+        "type": "string"
+      },
+      "tail_lines": {
+        "type": "integer",
+        "description": "default 40"
+      }
+    },
+    "required": [
+      "session_id"
+    ]
+  },
+  "permission": "agents",
+  "impact": "read"
+}

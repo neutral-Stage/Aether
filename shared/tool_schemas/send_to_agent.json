@@ -1,0 +1,22 @@
+{
+  "name": "send_to_agent",
+  "description": "Send a follow-up instruction to a running agent session.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "session_id": {
+        "type": "string",
+        "description": "Session id or label"
+      },
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "text"
+    ]
+  },
+  "permission": "agents",
+  "impact": "reversible"
+}

@@ -13,6 +13,7 @@ final class HUDPanel: NSObject {
         isRunning: Bool,
         sidecarOK: Bool,
         ambientActive: Bool,
+        fleetActiveCount: Int = 0,
         onStop: @escaping () -> Void
     ) {
         let view = HUDView(
@@ -22,6 +23,7 @@ final class HUDPanel: NSObject {
             isRunning: isRunning,
             sidecarOK: sidecarOK,
             ambientActive: ambientActive,
+            fleetActiveCount: fleetActiveCount,
             onStop: onStop
         )
         if let hosting {

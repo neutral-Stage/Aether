@@ -10,6 +10,7 @@ enum SidecarEvent {
     case stopped
     case ping
     case confirmRequest(requestId: String, description: String)
+    case fleet([String: Any])
 }
 
 struct RunOptions {
@@ -210,6 +211,51 @@ final class OrchestratorClient: ObservableObject {
         return raw.compactMap { SkillSummary(dict: $0) }
     }
 
+    func fetchFleet() async throws -> [FleetSession] {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("fleet")
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return []
+        }
+        let raw = json["sessions"] as? [[String: Any]] ?? []
+        return raw.compactMap { FleetSession(dict: $0) }
+    }
+
+    private func fleetPost(_ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
+        let url = AetherConfig.sidecarBaseURL
+            .appendingPathComponent("fleet")
+            .appendingPathComponent(path)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applySidecarAuth(&request)
+        if let body {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    }
+
+    func sendToAgent(id: String, text: String) async throws -> Bool {
+        let json = try await fleetPost("\(id)/send", body: ["text": text])
+        return json["delivered"] as? Bool ?? false
+    }
+
+    func stopAgent(id: String) async throws {
+        _ = try await fleetPost("\(id)/stop")
+    }
+
+    func stopAllAgents() async throws -> Int {
+        let json = try await fleetPost("stop_all")
+        return json["stopped"] as? Int ?? 0
+    }
+
     func replaySkill(id: Int, args: [String: String], viaOrchestrator: Bool) async throws -> String {
         let url = AetherConfig.sidecarBaseURL
             .appendingPathComponent("skills")
@@ -300,6 +346,54 @@ final class OrchestratorClient: ObservableObject {
             data.append(byte)
         }
         return data
+    }
+
+    struct Catalog: Decodable {
+        struct App: Decodable, Identifiable { let key: String; let app: String; var id: String { key } }
+        struct Tool: Decodable, Identifiable { let name: String; let description: String; let impact: String; var id: String { name } }
+        let apps: [App]
+        let tools: [Tool]
+        let tool_count: Int
+    }
+
+    struct TaskGraph: Decodable, Identifiable {
+        struct Node: Decodable, Identifiable {
+            let id: String
+            let title: String
+            let status: String
+            let depends_on: [String]
+        }
+        let graph_id: String
+        let goal: String
+        let status: String
+        let integration_branch: String?
+        let nodes: [Node]
+        var id: String { graph_id }
+    }
+
+    /// Live task graphs (Phase 8 orchestration).
+    func fetchGraphs() async -> [TaskGraph] {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("fleet/graphs")
+        var request = URLRequest(url: url)
+        applySidecarAuth(&request)
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let decoded = try? JSONDecoder().decode([String: [TaskGraph]].self, from: data) else {
+            return []
+        }
+        return decoded["graphs"] ?? []
+    }
+
+    /// What Aether can do — supported apps + tools (Phase 7 discoverability).
+    func fetchCatalog() async -> Catalog? {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("catalog")
+        var request = URLRequest(url: url)
+        applySidecarAuth(&request)
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            return nil
+        }
+        return try? JSONDecoder().decode(Catalog.self, from: data)
     }
 
     func stop() async -> Double {
@@ -423,6 +517,8 @@ final class OrchestratorClient: ObservableObject {
                         onEvent(.hud(obj))
                     case "say":
                         if let text = obj["text"] as? String { onEvent(.say(text)) }
+                    case "fleet":
+                        onEvent(.fleet(obj))
                     case "done":
                         let result = obj["result"] as? String ?? "Done."
                         var world: WorldSnapshot?

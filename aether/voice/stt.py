@@ -28,9 +28,22 @@ class STT:
         self.groq_api_key = groq_api_key or os.getenv("GROQ_API_KEY")
         self.sample_rate = sample_rate
         self.record_seconds = record_seconds
+        self._local = None  # lazy LocalSTT
+
+    def _local_stt(self):
+        if self._local is None:
+            from .stt_local import LocalSTT
+            self._local = LocalSTT(model=self.model if self.engine == "local" else "base")
+        return self._local
 
     # --- public ---
     def listen(self, prompt: str = "You: ") -> str:
+        if self.engine == "local" and self._can_record() and self._local_stt().available():
+            try:
+                path = self._record_wav()
+                return self._postprocess(self._local_stt().transcribe(path))
+            except Exception as e:  # noqa: BLE001
+                print(f"[STT error, falling back to text: {e}]")
         if self.engine == "groq" and self._can_record() and self.groq_api_key:
             try:
                 return self._listen_groq()
@@ -45,6 +58,8 @@ class STT:
 
     def transcribe_file(self, path: str | Path) -> str:
         """Transcribe an on-disk WAV (or other supported) audio file."""
+        if self.engine == "local" and self._local_stt().available():
+            return self._local_stt().transcribe(path)
         if self.engine == "groq" and self.groq_api_key:
             return self._transcribe_groq(path)
         if self.engine == "openai" and self.openai_api_key:

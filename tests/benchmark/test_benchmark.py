@@ -34,3 +34,15 @@ class TestBenchmarkHarness:
         summary = summarize_repeat(comparisons)
         assert summary["total"] == 10
         assert summary["skill_pass_rate_pct"] == 100.0
+
+
+@pytest.mark.benchmark
+class TestFleetBenchmark:
+    def test_concurrent_sessions_all_reach(self) -> None:
+        from tests.benchmark.fleet_bench import run_fleet_benchmark, summarize_fleet
+
+        summary = summarize_fleet(run_fleet_benchmark(n=3, timeout=20.0))
+        assert summary["total"] == 3
+        assert summary["reached"] == 3
+        assert summary["success_rate_pct"] == 100.0
+        assert summary["total_cost_usd"] > 0  # cost rolled up from the CLI

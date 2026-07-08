@@ -124,6 +124,16 @@ def list_packs() -> list[str]:
     return sorted(keys)
 
 
+def catalog_apps() -> list[dict[str, str]]:
+    """[{key, app}] for every discoverable pack — powers the in-app 'what can
+    I control' surface (GET /catalog)."""
+    out: list[dict[str, str]] = []
+    for key in list_packs():
+        pack = _load_pack_file(key) or {}
+        out.append({"key": key, "app": str(pack.get("app", key))})
+    return sorted(out, key=lambda d: d["app"].lower())
+
+
 def prewarm_packs() -> int:
     """Load every available pack so its bundle_ids/aliases self-register."""
     count = 0
@@ -215,4 +225,14 @@ def prompt_slice(
             "Prefer these scripting tools when applicable: "
             + ", ".join(snippets.keys())
         )
+    # Merge in recipes learned from the user's own successful runs (Phase 10).
+    key = resolve_pack_key(app_name, bundle_id)
+    if key:
+        try:
+            from . import learned
+            learned_block = learned.learned_prompt_slice(key)
+            if learned_block:
+                lines.append(learned_block)
+        except Exception:  # noqa: BLE001 — learning is additive, never fatal
+            pass
     return "\n".join(lines)

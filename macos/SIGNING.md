@@ -70,3 +70,30 @@ xcrun stapler staple "$APP"
 For production auto-update, integrate [Sparkle 2](https://sparkle-project.org/) SPM dependency and set
 `beta.sparkle_appcast_url` in `config.yaml`. Phase 9 ships `SparkleUpdateController.swift` (appcast XML
 parser stub) until full Sparkle is wired — see `UpdateChecker.swift` GitHub fallback.
+
+## Phase 7 — self-contained packaging
+
+The app now **starts and supervises its own sidecar** (`SidecarSupervisor.swift`),
+reads API keys from the **Keychain** (Settings → API Keys, `KeyStore.swift`), and
+**auth is on by default** (a per-install token is generated on first run and
+injected into the sidecar). A shipped user needs no terminal, no `.env`, and no
+Python checkout — *if* the sidecar is bundled.
+
+**Build a distributable DMG:**
+```bash
+pip install pyinstaller          # once; needed to freeze the sidecar
+macos/scripts/build-dmg.sh       # stamps VERSION, builds app, freezes+bundles sidecar, makes DMG
+macos/scripts/sign-and-notarize.sh macos/build/Aether.app   # your Developer ID
+```
+`build-dmg.sh` runs `stamp-version.sh` so `Info.plist` always matches `VERSION`
+(no more drift), and PyInstaller-freezes the sidecar into
+`Aether.app/Contents/Resources/sidecar/aether-sidecar`. The supervisor prefers
+that binary and falls back to a dev checkout's `python3 -m sidecar.server` when
+it's absent (so the `swift build` dev flow is unchanged).
+
+**Requires your machine / Apple account (cannot be done in CI without secrets):**
+- A **Developer ID Application** certificate + a notarytool app-specific password.
+- Validate the frozen sidecar launches on a clean machine — PyInstaller bundling
+  of pyobjc/uvicorn is environment-sensitive; test the DMG on a second Mac before
+  distributing.
+- Keep Hardened Runtime + the automation entitlements (see above).

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 19,
+  "tool_count": 26,
   "tools": [
     {
       "name": "get_screen_context",
@@ -77,6 +77,34 @@
     {
       "name": "finish",
       "file": "finish.json"
+    },
+    {
+      "name": "delegate_to_coder",
+      "file": "delegate_to_coder.json"
+    },
+    {
+      "name": "spawn_agent",
+      "file": "spawn_agent.json"
+    },
+    {
+      "name": "send_to_agent",
+      "file": "send_to_agent.json"
+    },
+    {
+      "name": "get_agent_output",
+      "file": "get_agent_output.json"
+    },
+    {
+      "name": "list_agents",
+      "file": "list_agents.json"
+    },
+    {
+      "name": "stop_agent",
+      "file": "stop_agent.json"
+    },
+    {
+      "name": "wait_for_agent",
+      "file": "wait_for_agent.json"
     }
   ]
 }

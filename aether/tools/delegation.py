@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import tempfile
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -148,17 +150,75 @@ def delegate_to_coder_structured(
     env = _build_sandbox_env(env_allowlist)
     cwd = str(cwd_path)
 
+    # Popen (not subprocess.run) so the global STOP can kill it in-flight: we
+    # register a closer that terminates the process, and also poll stop_ctl in
+    # the wait loop (belt-and-suspenders for the register-after-STOP race).
+    from ..core import stop as stop_ctl
     try:
-        proc = subprocess.run(
-            full_cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-            env=env,
+        proc = subprocess.Popen(  # noqa: S603
+            full_cmd, cwd=cwd, env=env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+            start_new_session=True,
         )
-        stdout = (proc.stdout or "")[:8000]
-        stderr = (proc.stderr or "")[:4000]
+    except FileNotFoundError:
+        return DelegationResult(
+            stdout="", stderr="", exit_code=127,
+            summary=f"command not found: {full_cmd[0]}",
+            cwd=cwd, agent=full_cmd[0], error=f"command not found: {full_cmd[0]}",
+        )
+
+    def _killpg(sig: int) -> None:
+        # start_new_session=True gave the child its own process group; signal the
+        # WHOLE group so a coder's git/npm/test grandchildren die too, not just
+        # the CLI leader (else they orphan and keep mutating the workspace).
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except (ProcessLookupError, OSError):
+            try:
+                proc.terminate() if sig != signal.SIGKILL else proc.kill()
+            except (ProcessLookupError, OSError):
+                pass
+
+    def _kill() -> None:
+        _killpg(signal.SIGTERM)
+
+    stop_ctl.register_closer(_kill)
+    try:
+        if stop_ctl.is_set():
+            _kill()
+        deadline = time.monotonic() + timeout_sec
+        raw_out = raw_err = ""
+        while True:
+            remaining = deadline - time.monotonic()
+            try:
+                raw_out, raw_err = proc.communicate(timeout=min(0.2, max(0.0, remaining)))
+                break
+            except subprocess.TimeoutExpired:
+                if stop_ctl.is_set():
+                    _kill()
+                    try:
+                        proc.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        _killpg(signal.SIGKILL)
+                    return DelegationResult(
+                        stdout="", stderr="", exit_code=130,
+                        summary="stopped by user", cwd=cwd, agent=full_cmd[0],
+                        error="STOP — delegation cancelled",
+                    )
+                if remaining <= 0:
+                    _kill()
+                    try:
+                        proc.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        _killpg(signal.SIGKILL)
+                    return DelegationResult(
+                        stdout="", stderr="", exit_code=124,
+                        summary=f"timed out after {timeout_sec}s",
+                        cwd=cwd, agent=full_cmd[0], timed_out=True,
+                        error=f"{full_cmd[0]} timed out after {timeout_sec}s",
+                    )
+        stdout = (raw_out or "")[:8000]
+        stderr = (raw_err or "")[:4000]
         summary = _summarize_output(stdout, stderr, proc.returncode)
         return DelegationResult(
             stdout=stdout,
@@ -168,37 +228,13 @@ def delegate_to_coder_structured(
             cwd=cwd,
             agent=resolved_agent if agent != "auto" else full_cmd[0],
         )
-    except subprocess.TimeoutExpired:
-        return DelegationResult(
-            stdout="",
-            stderr="",
-            exit_code=124,
-            summary=f"timed out after {timeout_sec}s",
-            cwd=cwd,
-            agent=full_cmd[0],
-            timed_out=True,
-            error=f"{full_cmd[0]} timed out after {timeout_sec}s",
-        )
-    except FileNotFoundError:
-        return DelegationResult(
-            stdout="",
-            stderr="",
-            exit_code=127,
-            summary=f"command not found: {full_cmd[0]}",
-            cwd=cwd,
-            agent=full_cmd[0],
-            error=f"command not found: {full_cmd[0]}",
-        )
     except Exception as exc:  # noqa: BLE001
         return DelegationResult(
-            stdout="",
-            stderr="",
-            exit_code=1,
-            summary=str(exc),
-            cwd=cwd,
-            agent=full_cmd[0],
-            error=f"running {full_cmd[0]}: {exc}",
+            stdout="", stderr="", exit_code=1, summary=str(exc),
+            cwd=cwd, agent=full_cmd[0], error=f"running {full_cmd[0]}: {exc}",
         )
+    finally:
+        stop_ctl.unregister_closer(_kill)
 
 
 def _resolve_workspace(
@@ -237,6 +273,12 @@ def _build_sandbox_env(allowlist: list[str] | None) -> dict[str, str]:
         if val is not None:
             env[key] = val
     env.setdefault("NO_COLOR", "1")
+    # Propagate + increment spawn depth so a child that itself runs Aether is
+    # caught by the fork-bomb guard in SessionManager.spawn (Phase 9).
+    try:
+        env["AETHER_SPAWN_DEPTH"] = str(int(os.environ.get("AETHER_SPAWN_DEPTH", "0")) + 1)
+    except ValueError:
+        env["AETHER_SPAWN_DEPTH"] = "1"
     return env
 
 

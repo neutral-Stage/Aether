@@ -50,3 +50,24 @@ class TestRecordUsage:
         m.record_llm_usage("anthropic", None, None, model="claude-sonnet-4-6")
         snap = m.snapshot()
         assert "anthropic" not in snap["provider_costs"]
+
+    def test_concurrent_runs_attribute_independently(self) -> None:
+        """Overlapping runs must not cross-contaminate per-run metrics (cap>1)."""
+        import asyncio
+
+        m = MetricsCollector()
+
+        async def run(rid: str, steps: int) -> None:
+            m.start_run(rid, f"goal-{rid}")
+            for _ in range(steps):
+                await asyncio.sleep(0)  # interleave with the sibling task
+                m.record_step("cloud_frontier", 10.0)
+            m.end_run("idle")
+
+        async def both() -> None:
+            await asyncio.gather(run("A", 3), run("B", 5))
+
+        asyncio.run(both())
+        by_id = {r["run_id"]: r for r in m.snapshot()["recent_runs"]}
+        assert by_id["A"]["steps"] == 3  # not polluted by B's 5 steps
+        assert by_id["B"]["steps"] == 5

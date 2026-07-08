@@ -7,6 +7,7 @@ struct HUDView: View {
     var isRunning: Bool
     var sidecarOK: Bool
     var ambientActive: Bool
+    var fleetActiveCount: Int = 0
     var onStop: () -> Void
 
     var body: some View {
@@ -17,6 +18,12 @@ struct HUDView: View {
                     .frame(width: 10, height: 10)
                 Text("Aether")
                     .font(.headline)
+                if fleetActiveCount > 0 {
+                    Label("\(fleetActiveCount)", systemImage: "gearshape.2")
+                        .font(.caption)
+                        .foregroundStyle(.cyan)
+                        .help("\(fleetActiveCount) agent session(s) active")
+                }
                 Spacer()
                 if audio.isRecording {
                     Label("Listening", systemImage: "mic.fill")

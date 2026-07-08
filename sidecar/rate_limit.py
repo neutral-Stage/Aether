@@ -59,6 +59,12 @@ class RateLimiter:
         with self._lock:
             self._buckets[name] = TokenBucket(rate_per_minute, capacity)
 
+    def reset(self, name: str) -> None:
+        """Drop per-client buckets for a named limit (test helper)."""
+        with self._lock:
+            for key in [k for k in self._buckets if k.startswith(f"{name}:")]:
+                del self._buckets[key]
+
     def allow(self, name: str, key: str = "default") -> tuple[bool, float]:
         bucket_key = f"{name}:{key}"
         with self._lock:
@@ -80,6 +86,7 @@ class RateLimiter:
 _default_limiter = RateLimiter()
 _default_limiter.configure("run", rate_per_minute=12.0, capacity=6.0)
 _default_limiter.configure("feedback", rate_per_minute=6.0, capacity=3.0)
+_default_limiter.configure("fleet_spawn", rate_per_minute=12.0, capacity=6.0)
 
 
 def get_limiter() -> RateLimiter:
