@@ -35,7 +35,15 @@ _SECRET_VALUE_RE = re.compile(
 _EXTRA_DESTRUCTIVE = [
     r"\brm\s+-", r"\btrash\b", r"\bdelete\b", r"\bsend\b.*\bmail\b",
     r"\bchmod\b", r"\bmv\b.*/dev/null", r"\bstripe\b", r"\bpayment\b",
-    r"\bcurl\b.*\|\s*(sh|bash)", r"\bwget\b.*\|\s*(sh|bash)",
+    # remote-code execution: piping the network into a shell
+    r"\bcurl\b.*\|\s*(sh|bash|zsh)", r"\bwget\b.*\|\s*(sh|bash|zsh)",
+    # data exfiltration: uploading with curl, or netcat, or scp
+    r"\bcurl\b.*(-T\b|--upload-file|--data\b|-d\s+@)", r"\b(nc|netcat|ncat)\b",
+    r"\bscp\b.*@", r"\bsftp\b",
+    # credential material combined with egress (pipe/redirect/network) = exfil;
+    # a bare `cat .env.example` / `ls ~/.aws` is NOT flagged (avoid over-blocking)
+    r"(\.ssh/|id_rsa|id_ed25519|\.aws/|\.env\b|credentials|\.pem\b|keychain\b)"
+    r".*(\||>|curl|wget|\bnc\b|scp|http)",
 ]
 _EXTRA_DESTRUCTIVE_RE = re.compile("|".join(_EXTRA_DESTRUCTIVE), re.IGNORECASE)
 
@@ -149,8 +157,12 @@ class Policy:
             return f"run shell command:\n  {str(args.get('command', ''))[:400]}"
         if name == "run_applescript":
             return f"run AppleScript:\n  {str(args.get('source', ''))[:400]}"
-        if name == "browser_navigate":
+        if name in ("browser_navigate", "safari_open_url"):
             return f"open URL: {str(args.get('url', ''))[:300]}"
+        if name == "browser_fill":
+            return f"fill '{str(args.get('selector', ''))[:60]}' → {str(args.get('text', ''))[:120]}"
+        if name == "browser_click":
+            return f"click '{str(args.get('selector', ''))[:120]}' in the browser"
         if name in ("delegate_to_coder",):
             return f"delegate to {args.get('agent', 'auto')}: {str(args.get('prompt', ''))[:200]}"
         if name in ("spawn_agent", "spawn_graph"):
@@ -160,15 +172,25 @@ class Policy:
         shown = ", ".join(f"{k}={str(v)[:60]}" for k, v in args.items())
         return f"{name}({shown})"
 
+    # Network-egress tools: under untrusted content these can exfiltrate even
+    # though impact_of doesn't classify them 'destructive' (no allowlist set).
+    _EGRESS_TOOLS = frozenset({
+        "browser_navigate", "browser_fill", "browser_click", "safari_open_url",
+    })
+
     def is_rule_of_two_risk(
         self, spec: "ToolSpec", args: dict, untrusted_present: bool,
     ) -> bool:
-        """The prompt-injection trifecta: untrusted content in context + a
-        destructive action. Such actions must be confirmed with the EXACT op
-        shown, regardless of careful mode (Meta 'Rule of Two')."""
+        """The prompt-injection trifecta: untrusted content in context + an
+        action that can destroy or exfiltrate. Such actions must be confirmed
+        with the EXACT op shown, regardless of careful mode (Meta 'Rule of Two').
+        Egress (browser navigation/form-fill) counts even when not 'destructive',
+        because injected content directing a navigation is the classic exfil path."""
         if not untrusted_present:
             return False
-        return self.impact_of(spec, args) == "destructive"
+        if self.impact_of(spec, args) == "destructive":
+            return True
+        return spec.name in self._EGRESS_TOOLS
 
     def allows_shell_path(self, command: str) -> bool:
         """Check if shell command touches paths outside approved roots."""
@@ -182,7 +204,9 @@ class Policy:
         return True
 
     def _network_allowed(self, url: str) -> bool:
-        if not self.config.careful or not self.config.network_allowlist:
+        # Enforce a configured allowlist ALWAYS, not only in careful mode — an
+        # off-allowlist navigation is an exfiltration vector regardless (Phase 11).
+        if not self.config.network_allowlist:
             return True
         try:
             host = urlparse(url).hostname or ""

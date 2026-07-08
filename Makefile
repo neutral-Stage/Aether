@@ -1,6 +1,6 @@
 PYTHON ?= python3.11
 
-.PHONY: compile test benchmark lint lint-fix ci swift schemas validate-packs
+.PHONY: compile test benchmark redteam lint lint-fix ci swift schemas validate-packs
 
 compile:
 	$(PYTHON) -m compileall -q aether sidecar tests aether/plugins plugins
@@ -16,6 +16,9 @@ test-integration:
 
 benchmark:
 	$(PYTHON) scripts/benchmark_tasks.py --mock
+
+redteam:
+	$(PYTHON) -m tests.benchmark.redteam
 
 lint:
 	ruff check aether sidecar tests

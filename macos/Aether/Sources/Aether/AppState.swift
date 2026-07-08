@@ -71,6 +71,16 @@ final class AppState: ObservableObject {
     func bootstrap() {
         _ = AuditKeychain.ensureKey()
         sidecar.start()  // launch + supervise our own sidecar (Phase 7)
+        // Persistent event stream: proactive triggers can auto-run when idle
+        // (Phase 11). Server-side double-gates auto_run, so a run_request here
+        // is already approved to execute.
+        Task { [weak self] in
+            await self?.client.subscribeEvents { event in
+                if case let .runRequest(goal) = event, self?.client.isRunning == false {
+                    self?.submitGoal(goal)
+                }
+            }
+        }
         stopController.start()
         pttHotkey.start()
         commandBarHotkey.start()
@@ -208,6 +218,8 @@ final class AppState: ObservableObject {
                    let state = payload["state"] as? String {
                     self.fleetSessionStates[sid] = state
                 }
+            case .runRequest:
+                break  // proactive auto-run is handled by the persistent /events stream
             }
             self.refreshHUD()
         }

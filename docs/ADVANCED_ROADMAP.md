@@ -169,6 +169,33 @@ exact operation for approval instead of executing.
 - **Proactive `app_watcher` triggers** — watched-app events kick off actions, not
   just alerts.
 
+### Phase 11 — Prove it (evals + live validation) · effort M · in progress
+**Context:** Phases 2–10 shipped and are committed, but almost everything was
+verified with mocks/fakes/fixtures — it has never run against real keys, real
+coding CLIs, or a real signed build. This phase converts "built" into "proven"
+and gets the objective safety number.
+
+- **11.1 Scored safety harness** — a deterministic, in-repo red-team suite
+  (`tests/benchmark/redteam.py` + `redteam_cases.yaml`) that measures the Phase-9
+  Rule-of-Two defense: for a corpus of injected-destructive scenarios (untrusted
+  on-screen content + a destructive tool call), what fraction is **surfaced for
+  confirmation with the exact op** vs **auto-executed (a leak)**. Reports a single
+  injection-defense rate + exact-op-shown rate + by-category + a defense-off
+  contrast. `make redteam`. No keys — exercises `policy`/confirm logic directly.
+- **11.2 Live e2e smoke** (`scripts/live_smoke.py` + runbook) — the keyless parts
+  self-test here (sidecar boot, `/catalog`, run_store reconcile); the real-CLI/key
+  steps (fleet spawn, a graph, STOP kill-latency) are scripted for the user to run
+  on a real Mac, confirming the exit criteria hold against reality.
+- **11.3 Close `run_request`** — wire the Swift SSE consumer so a proactive
+  trigger's auto-run actually fires end-to-end (the review found the event has no
+  consumer today).
+
+**Exit:** `make redteam` reports a defense rate (target 100% surfaced / 0 leaked
+on destructive cases, no false-surfacing on benign) with a defense-off contrast;
+`live_smoke.py` passes its keyless checks and documents the real-CLI checklist;
+proactive auto-run is functional end-to-end. Follow-on (external, needs infra):
+OSWorld + AgentDojo/RedTeamCUA for headline capability + third-party safety numbers.
+
 ---
 
 ## What to NOT build (ponytail judgment)

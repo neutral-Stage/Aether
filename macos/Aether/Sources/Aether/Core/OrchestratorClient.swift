@@ -11,6 +11,7 @@ enum SidecarEvent {
     case ping
     case confirmRequest(requestId: String, description: String)
     case fleet([String: Any])
+    case runRequest(goal: String)   // proactive trigger auto-run (Phase 11)
 }
 
 struct RunOptions {
@@ -455,6 +456,55 @@ final class OrchestratorClient: ObservableObject {
         Task { await stop() }
     }
 
+    /// Persistent subscribe-only stream for proactive/global events (Phase 11).
+    /// Reconnects after drops (e.g. a sidecar restart). Delivers run_request,
+    /// say, and fleet events that fire outside any /run.
+    func subscribeEvents(onEvent: @escaping (SidecarEvent) -> Void) async {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("events")
+        while !Task.isCancelled {
+            do {
+                var request = URLRequest(url: url)
+                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                request.timeoutInterval = 3600
+                applySidecarAuth(&request)
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
+                }
+                var lineBuffer = ""
+                for try await byte in bytes {
+                    try Task.checkCancellation()
+                    let ch = Character(UnicodeScalar(byte))
+                    if ch == "\n" {
+                        let line = lineBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                        lineBuffer = ""
+                        guard line.hasPrefix("data:") else { continue }
+                        let jsonStr = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                        guard let data = jsonStr.data(using: .utf8),
+                              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              let type = obj["type"] as? String else { continue }
+                        switch type {
+                        case "run_request":
+                            if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
+                        case "say":
+                            if let t = obj["text"] as? String { onEvent(.say(t)) }
+                        case "fleet":
+                            onEvent(.fleet(obj))
+                        default:
+                            break
+                        }
+                    } else {
+                        lineBuffer.append(ch)
+                    }
+                }
+            } catch {
+                if Task.isCancelled { break }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)  // reconnect
+            }
+        }
+    }
+
     private func streamRun(
         goal: String,
         options: RunOptions,
@@ -519,6 +569,8 @@ final class OrchestratorClient: ObservableObject {
                         if let text = obj["text"] as? String { onEvent(.say(text)) }
                     case "fleet":
                         onEvent(.fleet(obj))
+                    case "run_request":
+                        if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
                     case "done":
                         let result = obj["result"] as? String ?? "Done."
                         var world: WorldSnapshot?

@@ -23,6 +23,12 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], InjectionSeverity]] = [
     (re.compile(r"(?i)print\s+(your|the)\s+(system\s+)?instructions"), InjectionSeverity.HIGH),
     (re.compile(r"(?i)override\s+(safety|policy|confirmation)"), InjectionSeverity.HIGH),
     (re.compile(r"(?i)do\s+not\s+(ask|require)\s+confirm"), InjectionSeverity.HIGH),
+    # realistic injection phrasing beyond rigid literals (Phase 11 red-team)
+    (re.compile(r"(?i)ignore\s+(your|the)\s+(system\s+)?(prompt|instructions)"), InjectionSeverity.HIGH),
+    (re.compile(r"(?i)disregard\s+(safety|the\s+rules|all\s+safety)"), InjectionSeverity.HIGH),
+    (re.compile(r"(?i)no\s+need\s+to\s+(ask|confirm|check)"), InjectionSeverity.MEDIUM),
+    (re.compile(r"(?i)proceed\s+without\s+(asking|confirmation|permission)"), InjectionSeverity.MEDIUM),
+    (re.compile(r"(?i)the\s+user\s+(has\s+)?(approved|consented|said\s+yes|authorized)"), InjectionSeverity.MEDIUM),
     (re.compile(r"(?i)call\s+tool\s*:\s*\w+"), InjectionSeverity.MEDIUM),
     (re.compile(r"(?i)<\s*/?\s*system\s*>"), InjectionSeverity.MEDIUM),
     (re.compile(r"(?i)\[INST\]|\[/INST\]"), InjectionSeverity.MEDIUM),

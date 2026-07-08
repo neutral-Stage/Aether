@@ -1254,6 +1254,39 @@ async def _sse_stream(run_coro) -> AsyncIterator[str]:
                 _event_subscribers.remove(queue)
 
 
+_EVENTS_PING_SEC = 30.0  # keep-alive interval for the subscribe-only stream
+
+
+async def _events_stream() -> AsyncIterator[str]:
+    """Subscribe-only SSE: broadcasts (fleet, app_event, run_request, say) with no
+    run attached, so proactive triggers reach an idle client (Phase 11)."""
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
+    async with _subscribers_lock:
+        _event_subscribers.append(queue)
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=_EVENTS_PING_SEC)
+            except asyncio.TimeoutError:
+                # If _broadcast evicted us on QueueFull, this queue is now dead
+                # (nothing will ever put to it) — end the stream so the client
+                # reconnects with a fresh subscription instead of ping-forever.
+                if queue not in _event_subscribers:
+                    break
+                yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+                continue
+            yield f"data: {json.dumps(event)}\n\n"
+    finally:
+        async with _subscribers_lock:
+            if queue in _event_subscribers:
+                _event_subscribers.remove(queue)
+
+
+@app.get("/events")
+async def events(_auth: None = Depends(require_auth)) -> StreamingResponse:
+    return StreamingResponse(_events_stream(), media_type="text/event-stream")
+
+
 @app.post("/run")
 async def run_agent(
     body: RunRequest,
