@@ -20,6 +20,9 @@ benchmark:
 redteam:
 	$(PYTHON) -m tests.benchmark.redteam
 
+doctor:
+	$(PYTHON) -m aether.app --doctor
+
 lint:
 	ruff check aether sidecar tests
 

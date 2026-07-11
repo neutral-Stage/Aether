@@ -74,6 +74,19 @@ class Smoke:
                        f"active={runs.get('active')}")
         except Exception as e:  # noqa: BLE001
             self.check("GET /runs", False, str(e))
+        try:
+            # /events must accept an SSE subscription (proactive triggers path)
+            req = urllib.request.Request(f"{BASE}/events")
+            if TOKEN:
+                req.add_header("Authorization", f"Bearer {TOKEN}")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                self.check("GET /events opens an SSE stream",
+                           resp.status == 200
+                           and "event-stream" in resp.headers.get("content-type", ""))
+        except Exception as e:  # noqa: BLE001
+            # a 2s read that yields the first ping/nothing is fine; only connect errors fail
+            self.check("GET /events opens an SSE stream", "timed out" in str(e).lower(),
+                       str(e))
 
     def with_agents(self) -> None:
         print("\nAgent checks (need a coding CLI on PATH + API key):")

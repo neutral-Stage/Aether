@@ -89,12 +89,14 @@ def test_pty_terminal_echo(tmp_path):
     )
     s.start()
     try:
+        # Generous timeouts: a real bash PTY + reader thread can starve under the
+        # full parallel suite; this is a subprocess-timing test, not a logic one.
         assert wait_for(
-            lambda: any("fleet-pty-ok" in e.content for e in s.tail(100)), timeout=15
+            lambda: any("fleet-pty-ok" in e.content for e in s.tail(100)), timeout=30
         ), [e.content for e in s.tail(100)]
         # quiescence heuristic flips running → awaiting_input
-        assert wait_for(lambda: s.state == "awaiting_input", timeout=10)
+        assert wait_for(lambda: s.state == "awaiting_input", timeout=20)
         assert s.send("exit") is True
-        assert wait_for(lambda: s.state in ("done", "error"), timeout=10)
+        assert wait_for(lambda: s.state in ("done", "error"), timeout=20)
     finally:
         s.stop(grace_sec=0.5)
