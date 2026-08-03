@@ -7,10 +7,13 @@ from dataclasses import dataclass
 
 # Patterns that should require explicit user confirmation in Phase 0.
 _DESTRUCTIVE = [
-    r"\brm\s+-rf?\b", r"\bsudo\b", r"\bmkfs\b", r"\bdd\s+if=", r":\(\)\s*\{",
+    r"\brm\s+-rf?\b", r"\bsudo\b", r"\bmkfs\b", r"\bdd\s+if=",
     r"\bshutdown\b", r"\breboot\b", r"\bkillall\b", r">\s*/dev/sd",
     r"\bgit\s+push\b", r"\bgit\s+reset\s+--hard\b", r"\bbrew\s+uninstall\b",
     r"\bdiskutil\b", r"\bchmod\s+-R\b", r"\bchown\s+-R\b", r"\bcurl\b.*\|\s*(sh|bash)",
+    # fork bomb: a function body with a backgrounded pipe — `:(){ :|:& };:`,
+    # `bomb(){ bomb|bomb& }` (the recursion token may be ':' or a name)
+    r"\(\s*\)\s*\{[^}]*\|[^}]*&",
 ]
 _DESTRUCTIVE_RE = re.compile("|".join(_DESTRUCTIVE), re.IGNORECASE)
 

