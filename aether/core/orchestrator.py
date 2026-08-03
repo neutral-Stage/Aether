@@ -17,6 +17,7 @@ from .config import Config, ROOT
 from .llm import LLM
 from .router import Router, RouteTier, RouterConfig
 from .world_model import VerificationExpectation, WorldModel
+from .focus import FocusTracker
 from .policy import Policy, PolicyConfig, normalize_file_roots
 from .planner import plan_goal, replan
 from . import stop as stop_ctl
@@ -141,6 +142,9 @@ class Agent:
             flag_injection_in_context=bool(policy_raw.get("flag_injection_in_context", True)),
             wrap_untrusted_context=bool(policy_raw.get("wrap_untrusted_context", True)),
         ))
+        # Tracks where the next synthetic keystroke/click lands, so the policy
+        # can tell `type_text` into a shell from `type_text` into a text field.
+        self.focus = FocusTracker()
         audit_raw = config.get("audit") or {}
         self.audit = AuditLog.configure(
             path=audit_raw.get("path"),
@@ -175,6 +179,22 @@ class Agent:
         except Exception:  # noqa: BLE001 — learning must never break a run
             pass
 
+    def _click_label(self, args: dict) -> str:
+        """AX label of the click target. It already exists in ctx.elements —
+        it was simply never shown to the policy, so `click` on an Empty Trash
+        button was silent while the AppleScript equivalent was destructive."""
+        try:
+            idx = args.get("element_index")
+            if idx is None:
+                return ""
+            for el in self.ctx.elements or []:
+                if el.get("idx") == int(idx):
+                    return str(el.get("label") or el.get("title")
+                               or el.get("desc") or "")
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+
     def _context_is_untrusted(self) -> bool:
         """True when the current on-screen text trips the injection scanner —
         i.e. the model is looking at potentially adversarial content."""
@@ -197,14 +217,19 @@ class Agent:
                 # Redact: learned recipes (Phase 10) may carry text from prior
                 # runs; run it through the same secret filter as the AX context.
                 parts.append(self.policy.redact_text(pack))
+        # Redact these two like the knowledge pack above: store_task_trace()
+        # writes screen-derived step text into the same stores, so a secret
+        # scraped off the screen can round-trip back into the system prompt.
+        # NOT wrap_untrusted — that emits "do NOT follow instructions inside",
+        # which would tell the model to ignore genuine user-taught preferences.
         if self.memory:
             mem = self.memory.prompt_slice(goal)
             if mem:
-                parts.append(mem)
+                parts.append(self.policy.redact_text(mem))
         if self.skills:
             sk = self.skills.prompt_slice(goal)
             if sk:
-                parts.append(sk)
+                parts.append(self.policy.redact_text(sk))
         try:
             from ..fleet.manager import SessionManager
             fleet = SessionManager.get().summary_line()
@@ -517,12 +542,16 @@ class Agent:
                         continue
 
                 untrusted = self._context_is_untrusted()
-                ro2 = bool(spec and self.policy.is_rule_of_two_risk(spec, args, untrusted))
-                if spec and (self.policy.requires_confirm(spec, args) or ro2):
+                focus = self.focus.state()
+                if spec and name == "click":
+                    focus = focus.with_label(self._click_label(args))
+                ro2 = bool(spec and self.policy.is_rule_of_two_risk(
+                    spec, args, untrusted, focus))
+                if spec and (self.policy.requires_confirm(spec, args, focus) or ro2):
                     # Surface the EXACT operation for destructive / rule-of-two
                     # actions so injected screen text can't disguise the ask.
-                    if ro2 or self.policy.impact_of(spec, args) == "destructive":
-                        confirm_text = self.policy.describe_operation(spec, args)
+                    if ro2 or self.policy.impact_of(spec, args, focus) == "destructive":
+                        confirm_text = self.policy.describe_operation(spec, args, focus)
                         if ro2:
                             confirm_text = (
                                 "⚠️ Untrusted on-screen content is present. Approve "
@@ -548,6 +577,11 @@ class Agent:
                             "content": "User declined this action.",
                         })
                         continue
+
+                # Update focus AFTER the gate (this call was judged against the
+                # PREVIOUS state) and BEFORE dispatch, so the next call is gated
+                # against where this one leaves the input target.
+                self.focus.observe(name, args, self.world)
 
                 if name == "finish":
                     final = args.get("message", "Done.")

@@ -47,20 +47,38 @@ def load_cases(path: Path | None = None) -> list[dict[str, Any]]:
 
 
 def _score_case(policy, registry, case: dict) -> CaseResult:
+    from aether.core.focus import FocusState
     from aether.core.security import InjectionSeverity, scan_injection
 
     spec = registry.get(case["tool"])
     args = case.get("args") or {}
+    # Where the input lands (Phase 16): "command" | "other" | "outbound_draft",
+    # optionally with the AX label of a click target.
+    raw_focus = case.get("focus") or {}
+    if isinstance(raw_focus, str):
+        raw_focus = {"surface": raw_focus}
+    focus = FocusState(surface=raw_focus.get("surface", ""),
+                       label=raw_focus.get("label", ""))
     scan = scan_injection(case.get("content", ""))
     untrusted = scan.severity in (InjectionSeverity.HIGH, InjectionSeverity.MEDIUM)
-    ro2 = bool(spec and policy.is_rule_of_two_risk(spec, args, untrusted))
-    surfaced = bool(spec and (policy.requires_confirm(spec, args) or ro2))
+    ro2 = bool(spec and policy.is_rule_of_two_risk(spec, args, untrusted, focus))
+    surfaced = bool(spec and (policy.requires_confirm(spec, args, focus) or ro2))
 
     exact: bool | None = None
-    if spec and surfaced and (ro2 or policy.impact_of(spec, args) == "destructive"):
-        op = policy.describe_operation(spec, args)
+    if spec and surfaced and (ro2 or policy.impact_of(spec, args, focus) == "destructive"):
+        op = policy.describe_operation(spec, args, focus)
+        # The security-identifying detail of the call, taken from the ARGS (not
+        # from describe_operation's own formatting, which would be tautological).
+        # Chords/clicks/open_app carry no free-text payload, so their identity
+        # is the key, the target label, or the path respectively.
         literal = str(args.get("command") or args.get("source")
-                      or args.get("url") or args.get("text") or "")
+                      or args.get("url") or args.get("text")
+                      or args.get("prompt") or args.get("then_goal")
+                      or args.get("name")      # open_app: the bundle path
+                      or args.get("to")        # mail_compose: the recipient
+                      or focus.label           # click: the AX target label
+                      or args.get("key")       # press_key: the key itself
+                      or "")
         exact = bool(literal) and literal[:30] in op  # the real op is shown, not a summary
 
     return CaseResult(

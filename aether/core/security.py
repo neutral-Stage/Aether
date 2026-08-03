@@ -22,6 +22,11 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], InjectionSeverity]] = [
     (re.compile(r"(?i)reveal\s+(your|the)\s+(system\s+)?prompt"), InjectionSeverity.HIGH),
     (re.compile(r"(?i)print\s+(your|the)\s+(system\s+)?instructions"), InjectionSeverity.HIGH),
     (re.compile(r"(?i)override\s+(safety|policy|confirmation)"), InjectionSeverity.HIGH),
+    # Authority-claim framing ("SYSTEM OVERRIDE:", "ADMIN OVERRIDE"). Requires the
+    # authority noun so ordinary dev prose — "override the CSS", "method
+    # override", "override the default timeout" — stays clean. (Phase 16)
+    (re.compile(r"(?i)\b(system|admin|administrator|root|security|developer)"
+                r"\s+override\b"), InjectionSeverity.HIGH),
     (re.compile(r"(?i)do\s+not\s+(ask|require)\s+confirm"), InjectionSeverity.HIGH),
     # realistic injection phrasing beyond rigid literals (Phase 11 red-team)
     (re.compile(r"(?i)ignore\s+(your|the)\s+(system\s+)?(prompt|instructions)"), InjectionSeverity.HIGH),

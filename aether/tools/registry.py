@@ -16,6 +16,7 @@ from ..effectors import browser as browser_fx
 from ..effectors import executor
 from ..tools import delegation as delegate_fx
 from ..core import stop as stop_ctl
+from ..core.policy import normalize_file_roots
 
 Handler = Callable[[dict, "AgentContext"], str]
 
@@ -499,7 +500,9 @@ def _h_delegate_to_coder(args: dict, _ctx: AgentContext) -> str:
         timeout_sec=int(args.get("timeout_sec", deleg.get("timeout_sec", 300))),
         structured=bool(deleg.get("structured_output", True)),
         env_allowlist=deleg.get("env_allowlist"),
-        approved_roots=policy.get("approved_file_roots"),
+        # normalize: a bare `~` in YAML parses to None, and the raw value would
+        # blow up allows_shell_path with a TypeError (see normalize_file_roots).
+        approved_roots=normalize_file_roots(policy.get("approved_file_roots")),
     )
 
 
@@ -913,7 +916,7 @@ def build_default_registry() -> Registry:
         policy_cfg = cfg.get("policy") or {}
         SessionManager.get().configure(
             fleet_cfg,
-            approved_roots=policy_cfg.get("approved_file_roots"),
+            approved_roots=normalize_file_roots(policy_cfg.get("approved_file_roots")),
             mcp_cfg=cfg.get("mcp_server") or {},
         )
         register_fleet_tools(reg)

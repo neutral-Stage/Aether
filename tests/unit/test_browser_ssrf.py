@@ -14,7 +14,9 @@ from aether.tools.registry import ToolSpec
 _TOOLS = {
     name: ToolSpec(name=name, json_schema={}, permission="network",
                    impact="reversible", description="", handler=lambda a, c: "")
-    for name in ("browser_navigate", "safari_open_url")
+    # browser_new_tab (Phase 16) calls the same page.goto() as browser_navigate
+    # but was absent from the branch, so it bypassed this whole gate.
+    for name in ("browser_navigate", "safari_open_url", "browser_new_tab")
 }
 
 DANGEROUS_URLS = [
@@ -45,16 +47,25 @@ def policy():
     return Policy(PolicyConfig(careful=False))
 
 
-@pytest.mark.parametrize("tool", ["browser_navigate", "safari_open_url"])
+_URL_TOOLS = ["browser_navigate", "safari_open_url", "browser_new_tab"]
+
+
+@pytest.mark.parametrize("tool", _URL_TOOLS)
 @pytest.mark.parametrize("url", DANGEROUS_URLS)
 def test_dangerous_url_caught(policy, tool, url):
     assert policy.impact_of(_TOOLS[tool], {"url": url}) == "destructive", f"{tool} {url}"
 
 
-@pytest.mark.parametrize("tool", ["browser_navigate", "safari_open_url"])
+@pytest.mark.parametrize("tool", _URL_TOOLS)
 @pytest.mark.parametrize("url", BENIGN_URLS)
 def test_public_url_not_over_blocked(policy, tool, url):
     assert policy.impact_of(_TOOLS[tool], {"url": url}) == "reversible", f"{tool} {url}"
+
+
+@pytest.mark.parametrize("args", [{}, {"url": None}, {"url": ""}])
+def test_blank_new_tab_not_over_blocked(policy, args):
+    """CONTROL: opening an empty tab carries no URL to judge."""
+    assert policy.impact_of(_TOOLS["browser_new_tab"], args) == "reversible"
 
 
 def test_localhost_allowlist_override():

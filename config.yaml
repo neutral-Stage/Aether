@@ -58,7 +58,7 @@ policy:
   flag_injection_in_context: true
   wrap_untrusted_context: true
   approved_file_roots:
-    - ~                          # expanded to current user home at runtime
+    - "~"                        # QUOTED: bare ~ is YAML null → [None] (breaks the path guard)
   network_allowlist: []          # empty = allow all; set hosts in careful mode
 
 # Signed append-only audit log (§6.7 FR-29)

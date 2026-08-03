@@ -282,7 +282,11 @@ class SkillStore:
                         success=False,
                         error="shell command blocked: path outside approved roots",
                     )
-                if policy.requires_confirm(spec, step_args):
+                # Skills are model-distilled, not user-recorded, so a replayed
+                # step carries the same provenance risk as the run that learned it.
+                if (policy.requires_confirm(spec, step_args)
+                        or policy.is_rule_of_two_risk(
+                            spec, step_args, untrusted_present=True)):
                     if confirm is None:
                         return SkillReplayResult(
                             skill_id=skill_id,
@@ -396,7 +400,11 @@ class SkillStore:
                         success=False,
                         error="shell command blocked: path outside approved roots",
                     )
-                if policy.requires_confirm(spec, step_args):
+                # Skills are model-distilled, not user-recorded, so a replayed
+                # step carries the same provenance risk as the run that learned it.
+                if (policy.requires_confirm(spec, step_args)
+                        or policy.is_rule_of_two_risk(
+                            spec, step_args, untrusted_present=True)):
                     if confirm is None:
                         return SkillReplayResult(
                             skill_id=skill_id,
