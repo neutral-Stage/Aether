@@ -503,6 +503,11 @@ def _h_delegate_to_coder(args: dict, _ctx: AgentContext) -> str:
         # normalize: a bare `~` in YAML parses to None, and the raw value would
         # blow up allows_shell_path with a TypeError (see normalize_file_roots).
         approved_roots=normalize_file_roots(policy.get("approved_file_roots")),
+        # Honour the same mode the fleet path already passes; this path ignored
+        # it entirely and spawned `claude -p <PROMPT>` with no constraint flags.
+        permission_mode=str(deleg.get("permission_mode")
+                            or (cfg.get("fleet") or {}).get("claude_permission_mode")
+                            or "acceptEdits"),
     )
 
 

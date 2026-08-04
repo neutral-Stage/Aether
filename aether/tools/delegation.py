@@ -19,6 +19,36 @@ AGENT_COMMANDS: dict[str, list[str]] = {
     "cursor": ["cursor", "agent"],
 }
 
+# Constraint flags passed to the child CLI (Phase 17c). Aether's own policy —
+# careful mode, capabilities, network_allowlist, approved_file_roots — governs
+# only THIS process; a spawned CLI inherits none of it. Where the child exposes
+# its own gate we set it, so an approved delegation is still bounded.
+#
+# opencode and cursor expose no equivalent flag. For those two the only
+# enforcement is process-level: validated cwd, scrubbed env, timeout, killpg.
+# That is stated rather than papered over.
+_CONSTRAINT_FLAGS: dict[str, dict[str, list[str]]] = {
+    "claude": {
+        "plan": ["--permission-mode", "plan"],
+        "acceptEdits": ["--permission-mode", "acceptEdits"],
+        "bypassPermissions": [],          # explicit opt-out, no flag added
+    },
+    "codex": {
+        "plan": ["--sandbox", "read-only"],
+        "acceptEdits": ["--sandbox", "workspace-write"],
+        "bypassPermissions": [],
+    },
+}
+
+
+def _constraint_flags(agent: str, mode: str) -> list[str]:
+    """Child-CLI constraint flags for `mode`, or [] when the CLI has none."""
+    table = _CONSTRAINT_FLAGS.get(agent)
+    if not table or not mode:
+        return []
+    return list(table.get(mode, []))
+
+
 # Safe defaults: strip sensitive env vars from subprocess
 _DEFAULT_ENV_ALLOWLIST = frozenset({
     "PATH",
@@ -79,11 +109,13 @@ def delegate_to_coder(
     env_allowlist: list[str] | None = None,
     structured: bool = True,
     approved_roots: list[str] | None = None,
+    permission_mode: str = "",
 ) -> str:
     """Run a supervised coding-agent CLI subprocess and return output."""
     result = delegate_to_coder_structured(
         prompt,
         agent=agent,
+        permission_mode=permission_mode,
         workspace=workspace,
         timeout_sec=timeout_sec,
         env_allowlist=env_allowlist,
@@ -102,6 +134,7 @@ def delegate_to_coder_structured(
     timeout_sec: int = 300,
     env_allowlist: list[str] | None = None,
     approved_roots: list[str] | None = None,
+    permission_mode: str = "",
 ) -> DelegationResult:
     """Run delegation and return structured result."""
     prompt = sanitize_prompt(prompt)
@@ -146,7 +179,12 @@ def delegate_to_coder_structured(
             error=cwd_err,
         )
 
-    full_cmd = cmd + [prompt]
+    # Constrain the child where its CLI allows it (Phase 17c). Aether's policy
+    # governs only this process; without these the child is ungoverned once the
+    # delegation hop has been approved.
+    # Keyed on cmd[0], not `agent`: with agent="auto" (the default) `agent` is
+    # literally "auto", so keying on it would silently apply no flags at all.
+    full_cmd = cmd + _constraint_flags(cmd[0], permission_mode) + [prompt]
     env = _build_sandbox_env(env_allowlist)
     cwd = str(cwd_path)
 
