@@ -102,3 +102,64 @@ def test_watch_app_auto_goal_is_destructive(policy):
     # CONTROL: suggest-only triggers are the shipped Phase-10 feature.
     assert policy.impact_of(
         spec, {"app": "Xcode", "when": "Build Succeeded"}) == "reversible"
+
+
+# --- Phase 17b: the approved_file_roots guard must follow the shell ----------
+
+class TestShellPayload:
+    """allows_shell_path was keyed on `name == "run_shell"` at three call sites,
+    so a terminal spawn (prompt written into `$SHELL -i`), a steer of that PTY,
+    and `do shell script` all reached a shell without the path check."""
+
+    @pytest.fixture
+    def policy(self):
+        import os
+        return Policy(PolicyConfig(approved_file_roots=[os.path.expanduser("~")]))
+
+    @pytest.mark.parametrize("name,args,expected", [
+        ("run_shell", {"command": "cat /etc/passwd"}, "cat /etc/passwd"),
+        ("spawn_agent", {"agent_type": "terminal", "prompt": "cat /etc/passwd"},
+         "cat /etc/passwd"),
+        ("run_applescript", {"source": 'do shell script "cat /etc/passwd"'},
+         "cat /etc/passwd"),
+    ])
+    def test_extracts_shell_text(self, policy, name, args, expected):
+        assert policy.shell_payload(name, args) == expected
+
+    @pytest.mark.parametrize("name,args", [
+        ("spawn_agent", {"agent_type": "claude", "prompt": "fix /etc/passwd parsing"}),
+        ("browser_navigate", {"url": "https://example.com"}),
+        ("open_app", {"name": "Notes"}),
+        ("type_text", {"text": "cat /etc/passwd"}),
+        ("run_applescript", {"source": 'tell application "Finder" to open home'}),
+    ])
+    def test_non_shell_tools_return_none(self, policy, name, args):
+        """CONTROL: a coding-agent prompt that merely mentions a path is prose,
+        not a shell command."""
+        assert policy.shell_payload(name, args) is None
+
+    @pytest.mark.parametrize("name,args", [
+        ("run_shell", {"command": "cat /etc/passwd"}),
+        ("spawn_agent", {"agent_type": "terminal", "prompt": "cat /etc/passwd"}),
+        ("run_applescript", {"source": 'do shell script "cat /etc/passwd"'}),
+    ])
+    def test_outside_root_blocked(self, policy, name, args):
+        text = policy.shell_payload(name, args)
+        assert text is not None and not policy.allows_shell_path(text)
+
+    def test_in_root_allowed(self, policy):
+        import os
+        home = os.path.expanduser("~")
+        for name, args in [
+            ("run_shell", {"command": f"ls {home}/proj"}),
+            ("spawn_agent", {"agent_type": "terminal", "prompt": f"cd {home}/proj"}),
+        ]:
+            text = policy.shell_payload(name, args)
+            assert text is not None and policy.allows_shell_path(text)
+
+    def test_multiple_do_shell_script_literals_all_checked(self, policy):
+        text = policy.shell_payload(
+            "run_applescript",
+            {"source": 'do shell script "ls ~"\ndo shell script "cat /etc/passwd"'})
+        assert "/etc/passwd" in text
+        assert not policy.allows_shell_path(text)

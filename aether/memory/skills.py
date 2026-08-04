@@ -271,9 +271,10 @@ class SkillStore:
                         success=False,
                         error=f"permission denied for {tool}",
                     )
-                if tool == "run_shell" and not policy.allows_shell_path(
-                    step_args.get("command", "")
-                ):
+                # Same single source of truth as the orchestrator: a terminal
+                # spawn / PTY steer / `do shell script` also reaches a shell.
+                _shell_text = policy.shell_payload(tool, step_args)
+                if _shell_text is not None and not policy.allows_shell_path(_shell_text):
                     return SkillReplayResult(
                         skill_id=skill_id,
                         goal=skill.goal_pattern,
@@ -389,9 +390,10 @@ class SkillStore:
                         success=False,
                         error=f"permission denied for {tool}",
                     )
-                if tool == "run_shell" and not policy.allows_shell_path(
-                    step_args.get("command", "")
-                ):
+                # Same single source of truth as the orchestrator: a terminal
+                # spawn / PTY steer / `do shell script` also reaches a shell.
+                _shell_text = policy.shell_payload(tool, step_args)
+                if _shell_text is not None and not policy.allows_shell_path(_shell_text):
                     return SkillReplayResult(
                         skill_id=skill_id,
                         goal=skill.goal_pattern,

@@ -594,6 +594,26 @@ class Policy:
             return False
         return True
 
+    def shell_payload(self, name: str, args: dict) -> str | None:
+        """The shell text a tool will ACTUALLY run, or None if it runs none.
+
+        Single source of truth for the approved_file_roots check, which was
+        keyed on `name == "run_shell"` at three call sites — so a terminal
+        spawn (whose prompt is written straight into `$SHELL -i`), a steer of
+        that live PTY, and `do shell script` all reached a shell without it."""
+        if name == "run_shell":
+            return str(args.get("command", "") or "")
+        if name == "spawn_agent" and str(args.get("agent_type", "")) == "terminal":
+            return str(args.get("prompt", "") or "")
+        if name == "send_to_agent" and _session_is_terminal(args.get("session_id")):
+            return str(args.get("text", "") or "")
+        if name == "run_applescript":
+            src = str(args.get("source", "") or "")
+            parts = [_as_unescape(m.group(1)) for m in _AS_SHELL_RE.finditer(src)]
+            if parts:
+                return "\n".join(parts)
+        return None
+
     def allows_shell_path(self, command: str) -> bool:
         """Check if shell command touches paths outside approved roots."""
         if not self.config.approved_file_roots:

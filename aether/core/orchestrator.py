@@ -571,8 +571,9 @@ class Agent:
                     })
                     continue
 
-                if spec and name == "run_shell":
-                    if not self.policy.allows_shell_path(args.get("command", "")):
+                shell_text = self.policy.shell_payload(name, args) if spec else None
+                if shell_text is not None:
+                    if not self.policy.allows_shell_path(shell_text):
                         results.append({
                             "tool_use_id": call["id"],
                             "content": "Shell command blocked: path outside approved roots.",
