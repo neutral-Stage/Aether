@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -615,13 +617,37 @@ class Policy:
         return None
 
     def allows_shell_path(self, command: str) -> bool:
-        """Check if shell command touches paths outside approved roots."""
-        if not self.config.approved_file_roots:
+        """Reject commands touching absolute paths outside approved_file_roots.
+
+        Tokenized rather than regex-scanned. The old `re.finditer(r"(/[\\w./-]+)")`
+        matched any slash-run anywhere in the string, so it blocked 9 of 21
+        ordinary commands — every `~` path (it saw the `/proj` inside `~/proj`),
+        every URL (`//example.com/a/b`), every relative path (`./src`), and
+        `sed -e s/foo/bar/` — while `rm -rf /` passed, because a bare `/` has
+        nothing after it to match.
+        """
+        roots = self.config.approved_file_roots
+        if not roots:
             return True
-        # Heuristic: flag absolute paths outside roots
-        for match in re.finditer(r"(/[\w./-]+)", command):
-            path = match.group(1)
-            if not any(path.startswith(root) for root in self.config.approved_file_roots):
+        norm_roots = [os.path.normpath(str(Path(r).expanduser())) for r in roots]
+        try:
+            tokens = shlex.split(command)
+        except ValueError:            # unbalanced quotes — fall back, don't crash
+            tokens = command.split()
+        for tok in tokens:
+            # --file=/etc/passwd → inspect the value half
+            if tok.startswith("-") and "=" in tok:
+                tok = tok.split("=", 1)[1]
+            if "://" in tok:
+                # A URL, not a filesystem path. Egress is the network
+                # allowlist's job (_url_is_dangerous / _network_allowed).
+                continue
+            if not tok.startswith(("/", "~")):
+                continue              # relative → confined to the validated cwd
+            # normpath collapses ..  so `~/../../etc/passwd` is caught, which
+            # the old prefix comparison could not do.
+            cand = os.path.normpath(str(Path(tok).expanduser()))
+            if not any(cand == r or cand.startswith(r + os.sep) for r in norm_roots):
                 return False
         return True
 
