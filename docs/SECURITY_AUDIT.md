@@ -21,6 +21,13 @@ Structured checklist for the Aether codebase with findings and mitigations.
 | MCP SSRF | ✅ Mitigated | `allow_private_urls` default false; `url_safety.validate_outbound_url` |
 | Plugin loading | ⚠️ Opt-in | `beta.plugins_enabled` — trust plugin code |
 | Swift TCC | ℹ️ User grant | Permissions enforced by macOS |
+| Shell classifier evasion | ✅ Phase 14 | De-obfuscation (`${IFS}`, var-assembly, quote-split) + cred-exfil product |
+| AppleScript → shell | ✅ Phase 15 | `do shell script` literals routed through the shell gate |
+| Browser SSRF / schemes | ✅ Phase 15 | `_url_is_dangerous`: metadata IPs, private ranges, `file:`/`javascript:` |
+| UI input → RCE | ✅ Phase 16 | `FocusState` gates keystrokes by target surface, not payload |
+| Fleet / delegation | ✅ Phase 16 | `spawn_agent(terminal)`, `send_to_agent`, `delegate_to_coder` are code-exec |
+| Durable persistence | ✅ Phase 16 | `remember_fact` / `watch_app` confirm under untrusted content |
+| **Untrusted-content source** | ⚠️ **Known gap** | Taint is set by `get_screen_context` ONLY, and is point-in-time. See below. |
 
 ---
 
@@ -124,6 +131,30 @@ Categories: prompt injection, red-team, MCP SSRF/policy, skill replay, sidecar h
 2. **No hardware AEC** — Barge-in uses energy ducking only.
 3. **Python effectors on hot path** — Native Swift migration ongoing.
 4. **No formal third-party pentest** — Self-audit only for rc.1.
+5. **Untrusted-content detection is narrow and point-in-time** (open, Phase 17).
+   `Orchestrator._context_is_untrusted()` scans `world.ax_rendered`, which is
+   written at exactly one site — the `get_screen_context` handler. Two consequences:
+   - **Missing sources.** `browser_get_text` (reading a web page — the canonical
+     injection vector), `get_app_context`, `analyze_screen`, `run_shell` stdout,
+     `get_agent_output` and MCP results all carry attacker-controlled text into
+     the model's context without setting the flag.
+   - **Not sticky.** Re-snapshotting a clean screen clears the flag even though
+     the injected text remains in the conversation, so
+     `read injected page → open Terminal → re-snapshot → type payload` evades the
+     Rule-of-Two blanket that Phases 14–16 depend on.
+
+   This is the ceiling on every untrusted-gated defense in this document: the
+   payload classifiers (`impact_of`) still apply, but the blanket that covers
+   novel/obfuscated payloads may not fire. Calibration is the hard part —
+   measured, ~29% of realistic benign content (ordinary email, code comments,
+   news prose) trips `scan_injection`, so a naive sticky flag over broad sources
+   would confirm most of a normal run and train click-through.
+6. **Sub-agent policy does not propagate.** `delegate_to_coder` / `spawn_agent`
+   launch third-party CLIs that inherit none of `careful`, `capabilities`,
+   `network_allowlist` or `approved_file_roots`. Phase 16 forces a confirm at the
+   spawn hop under untrusted content; the child itself is ungoverned.
+7. **`allows_shell_path` covers only `run_shell`.** A terminal-session spawn or
+   steer reaches a shell without the `approved_file_roots` check.
 
 ---
 
