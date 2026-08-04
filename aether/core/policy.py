@@ -117,6 +117,31 @@ def _shell_impact_destructive(cmd: str) -> bool:
     return False
 
 
+# --- Phase 17: FAIL-CLOSED allowlist of provably read-only shell shapes -----
+# Sticky taint means "read a Jira ticket, then every run_shell confirms" —
+# measured, authority-shaped prose taints ~83% of the time, and run_shell is the
+# one high-frequency tool under the blanket. This exemption buys that back.
+#
+# ALLOWLIST, deliberately, and the direction is the whole argument: Phase 14
+# rejected a denylist because a missed obfuscation executes SILENTLY, whereas a
+# shape missing from this list costs exactly one extra confirmation.
+#
+# Do NOT add anything that executes project-supplied code (pytest loads
+# conftest.py, make reads a Makefile, npm runs lifecycle scripts) or that writes
+# (git add/apply, sed -i). Every addition must be re-measured against
+# tests/benchmark/redteam.
+_INERT_META_RE = re.compile(r"[;&|<>`$()\n\\]")
+_INERT_HEADS = frozenset("""ls cat head tail wc grep rg find file stat pwd date
+ which uname diff tree du df git""".split())
+_INERT_GIT_SUB = frozenset(
+    "status diff log show branch blame rev-parse ls-files describe".split())
+_INERT_DENY_FLAGS = {
+    "tail": ("-f", "-F"),
+    "find": ("-exec", "-execdir", "-delete", "-ok", "-okdir",
+             "-fprintf", "-fls", "-fprint"),
+}
+
+
 # --- Typed text (Phase 16): "is this string SHAPED like a command line?" ---
 # Deliberately NOT _shell_impact_destructive, which answers the different
 # question "does this contain a destructive verb" and so flags ordinary prose:
@@ -510,6 +535,12 @@ class Policy:
         focus = focus or FocusState()
         if self.impact_of(spec, args, focus) == "destructive":
             return True
+        # Provably read-only shell shapes are exempt. Placement AFTER the
+        # destructive check is load-bearing: `printf '\x72\x6d'` is caught
+        # above, and shell_shape_is_inert rejects it independently.
+        if (spec.name == "run_shell"
+                and self.shell_shape_is_inert(str(args.get("command", "") or ""))):
+            return False
         # Keystrokes/clicks aimed at a shell prompt or a send-ready draft are
         # code execution and egress respectively — blanket them THERE, which
         # closes obfuscation and split-across-calls payloads without touching
@@ -532,6 +563,36 @@ class Policy:
         if spec.name in self._PERSISTENCE_TOOLS:
             return True
         return spec.name in self._EGRESS_TOOLS
+
+    def shell_shape_is_inert(self, cmd: str) -> bool:
+        """True only for shapes that cannot fetch, install, persist, write, or
+        execute project-supplied code. See _INERT_HEADS for why this is an
+        allowlist rather than a denylist."""
+        cmd = (cmd or "").strip()
+        if not cmd:
+            return False
+        # No metacharacters, checked on the de-obfuscated copy too.
+        for c in (cmd, _normalize_for_matching(cmd)):
+            if _INERT_META_RE.search(c):
+                return False
+        # _CRED_MATERIAL_RE WITHOUT the egress conjunction of _is_cred_exfil, so
+        # a bare `cat ~/.ssh/id_rsa` is not inert even though it sends nothing.
+        if _shell_impact_destructive(cmd) or _CRED_MATERIAL_RE.search(cmd):
+            return False
+        toks = _normalize_for_matching(cmd).split()
+        if not toks:
+            return False
+        head = toks[0].rsplit("/", 1)[-1]
+        if head not in _INERT_HEADS:
+            return False
+        if head == "git":
+            sub = next((t for t in toks[1:] if not t.startswith("-")), "")
+            if sub not in _INERT_GIT_SUB:
+                return False
+        bad = _INERT_DENY_FLAGS.get(head)
+        if bad and any(t.startswith(bad) for t in toks[1:]):
+            return False
+        return True
 
     def allows_shell_path(self, command: str) -> bool:
         """Check if shell command touches paths outside approved roots."""

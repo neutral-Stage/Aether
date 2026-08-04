@@ -68,6 +68,10 @@ class WorldModel:
         self.bundle_id: str = ""
         self.elements: list[dict] = []
         self.ax_rendered: str = ""
+        # Phase 17: sticky for the RUN. Every Rule-of-Two blanket in Phases
+        # 14-16 is conditioned on this.
+        self.untrusted_seen: bool = False
+        self.untrusted_source: str = ""
         self.element_count: int = 0
         self.last_screenshot: str | None = None
         self.transcript: str = ""
@@ -100,6 +104,10 @@ class WorldModel:
         self._task_steps = []
         self._tool_trace = []
         self.ax_insufficient = False
+        # Run-scoped, not process-scoped: the sidecar builds a fresh Agent per
+        # run, but the CLI REPL reuses one across goals.
+        self.untrusted_seen = False
+        self.untrusted_source = ""
 
     def set_plan(self, steps: list[str]) -> None:
         self.plan = list(steps)
@@ -142,6 +150,10 @@ class WorldModel:
         self.bundle_id = data.get("bundle_id", "")
         self.elements = data.get("elements", [])
         self.ax_rendered = data.get("rendered", "")
+        # This method runs at the top of EVERY step, re-deriving ax_rendered from
+        # the live frontmost app — which is why the old point-in-time scan of
+        # ax_rendered cleared itself with no attacker effort. Latch instead.
+        self.note_untrusted(self.ax_rendered, "screen")
         self.element_count = int(data.get("element_count", 0))
         self.ax_insufficient = self.element_count < 3
         self.ax_text_ratio = compute_ax_text_ratio(self.elements, self.element_count)
@@ -211,7 +223,27 @@ class WorldModel:
         """Structured trace for skill memory distillation."""
         self._tool_trace.append({"tool": name, "args": dict(args)})
 
-    def record_observation(self, text: str) -> None:
+    def note_untrusted(self, text: str, source: str = "") -> None:
+        """Latch the run's untrusted-content flag.
+
+        Never clears within a run: `messages` is only ever appended to, so text
+        read at step 2 is still verbatim in the model's context at step 20. Any
+        finite decay window is a number the attacker reads off this source and
+        exceeds by one."""
+        if self.untrusted_seen or not text:
+            return
+        from .security import InjectionSeverity, scan_injection
+        if scan_injection(text).severity in (
+                InjectionSeverity.HIGH, InjectionSeverity.MEDIUM):
+            self.untrusted_seen = True
+            self.untrusted_source = source or "context"
+
+    def record_observation(self, text: str, source: str = "") -> None:
+        # THE choke point: every tool result flows through here, so one scan
+        # covers browser_get_text / get_app_context / analyze_screen / run_shell
+        # stdout / get_agent_output / MCP results — including tools registered
+        # later. Scan the FULL text, not the 500-char history slice.
+        self.note_untrusted(text, source)
         self._history.append(HistoryEntry("observation", text[:500]))
 
     def capture_screenshot(self) -> str | None:

@@ -9,6 +9,7 @@ Both loops share the WorldModel blackboard.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
@@ -145,6 +146,9 @@ class Agent:
         # Tracks where the next synthetic keystroke/click lands, so the policy
         # can tell `type_text` into a shell from `type_text` into a text field.
         self.focus = FocusTracker()
+        # Consent ledger: one Rule-of-Two confirmation per identical payload per
+        # run. Cross-call state, so it cannot live in Policy as a pure function.
+        self._ro2_grants: set[tuple[str, str]] = set()
         audit_raw = config.get("audit") or {}
         self.audit = AuditLog.configure(
             path=audit_raw.get("path"),
@@ -179,6 +183,25 @@ class Agent:
         except Exception:  # noqa: BLE001 — learning must never break a run
             pass
 
+    _NEVER_GRANT = frozenset({"remember_fact", "watch_app", "spawn_agent",
+                              "spawn_graph", "send_to_agent", "delegate_to_coder"})
+
+    def _grant_key(self, name: str, args: dict, focus) -> tuple[str, str] | None:
+        """Key on the EXACT whitespace-normalized literal payload. Keying on the
+        head binary would let an approved `git diff` grant
+        `git config --global alias.x '!sh'`; keying on host would let an
+        approved https://ok.com/page grant https://ok.com/?d=SECRET."""
+        if name in self._NEVER_GRANT:
+            return None
+        blob = "|".join(
+            f"{k}={' '.join(str(args[k]).split())}"
+            for k in ("command", "source", "text", "url", "to", "subject",
+                      "body", "key", "prompt")
+            if k in args)
+        if name == "click":
+            blob += "|label=" + (getattr(focus, "label", "") or "")
+        return (name, hashlib.sha1(blob.encode()).hexdigest()[:12])
+
     def _click_label(self, args: dict) -> str:
         """AX label of the click target. It already exists in ctx.elements —
         it was simply never shown to the policy, so `click` on an Empty Trash
@@ -196,14 +219,14 @@ class Agent:
         return ""
 
     def _context_is_untrusted(self) -> bool:
-        """True when the current on-screen text trips the injection scanner —
-        i.e. the model is looking at potentially adversarial content."""
-        try:
-            from .security import InjectionSeverity, scan_injection
-            scan = scan_injection(self.world.ax_rendered or "")
-            return scan.severity in (InjectionSeverity.HIGH, InjectionSeverity.MEDIUM)
-        except Exception:  # noqa: BLE001
-            return False
+        """True once untrusted content has entered THIS RUN's context.
+
+        Sticky. The old version scanned world.ax_rendered point-in-time, but
+        refresh() (called at the top of every step) re-derives ax_rendered from
+        the live frontmost app — so the flag cleared itself with no attacker
+        effort, and `read injected page → open Terminal → type payload` walked
+        straight through the Phase-14/15/16 blanket."""
+        return bool(getattr(self.world, "untrusted_seen", False))
 
     def _system_prompt(self, goal: str) -> str:
         parts = [BASE_SYSTEM_PROMPT]
@@ -239,6 +262,9 @@ class Agent:
             pass
         ctx = self.world.context_block()
         if ctx:
+            # Carries screen_stream_summary + background-app window titles and
+            # event detail — a third channel that never becomes an observation.
+            self.world.note_untrusted(ctx, "background")
             parts.append(self.policy.prepare_context_for_model(ctx))
         return "\n\n".join(parts)
 
@@ -313,6 +339,9 @@ class Agent:
 
         vision_ctx = await self._maybe_vision_context(decision)
         if vision_ctx:
+            # VLM/OCR text goes straight into `system` and is never dispatched,
+            # so it bypasses the record_observation choke point entirely.
+            self.world.note_untrusted(vision_ctx, "vision")
             system += f"\n\nVision/OCR context:\n{self.policy.redact_text(vision_ctx)}"
 
         client = self.router.pick_client(decision)
@@ -383,6 +412,11 @@ class Agent:
         if reset_stop:
             stop_ctl.reset()
         self.world.set_goal(goal)
+        # Per-run state. The CLI REPL reuses one Agent across goals, so without
+        # these a focus surface (and a granted confirmation) leaked into the
+        # next goal — neither reset nor seed was called anywhere before now.
+        self._ro2_grants.clear()
+        self.focus.reset()
         self._hud_update(goal=goal, status="working", step="Starting…")
 
         rid = run_id or f"run-{int(time.time() * 1000)}"
@@ -453,6 +487,10 @@ class Agent:
             # Perceive
             percept_start = time.time()
             await asyncio.to_thread(self.world.refresh)
+            # Seed focus from the real frontmost app so a first-action type_text
+            # into an already-open terminal is not blind.
+            if not self.focus.state().surface:
+                self.focus.seed(self.world.frontmost_app)
             percept_ms = (time.time() - percept_start) * 1000
             self.metrics.observe("percept_refresh_ms", percept_ms)
             self.metrics.warn_if_slow("percept_refresh_ms", percept_ms)
@@ -547,15 +585,28 @@ class Agent:
                     focus = focus.with_label(self._click_label(args))
                 ro2 = bool(spec and self.policy.is_rule_of_two_risk(
                     spec, args, untrusted, focus))
+                # Ask once per identical payload per run. Applies ONLY to
+                # rule-of-two confirmations — never to destructive or careful
+                # mode, and never to the _NEVER_GRANT tools.
+                if ro2 and spec and not self.policy.requires_confirm(spec, args, focus):
+                    key = self._grant_key(name, args, focus)
+                    if key is not None:
+                        if key in self._ro2_grants:
+                            ro2 = False
+                        else:
+                            self._ro2_grants.add(key)
                 if spec and (self.policy.requires_confirm(spec, args, focus) or ro2):
                     # Surface the EXACT operation for destructive / rule-of-two
                     # actions so injected screen text can't disguise the ask.
                     if ro2 or self.policy.impact_of(spec, args, focus) == "destructive":
                         confirm_text = self.policy.describe_operation(spec, args, focus)
                         if ro2:
+                            # Name the source: taint is sticky, so a confirm can
+                            # land several steps after the read that caused it.
+                            via = getattr(self.world, "untrusted_source", "") or "context"
                             confirm_text = (
-                                "⚠️ Untrusted on-screen content is present. Approve "
-                                "this EXACT action?\n" + confirm_text
+                                f"⚠️ This run read untrusted content (via {via}). "
+                                "Approve this EXACT action?\n" + confirm_text
                             )
                     else:
                         confirm_text = desc
@@ -621,7 +672,7 @@ class Agent:
                     summary=first_line if not tool_err else f"ERROR: {first_line}",
                 )
                 print(f"   ↳ {first_line}")
-                self.world.record_observation(observation)
+                self.world.record_observation(observation, source=name)
 
                 verified = self.world.verify(None, observation)
                 if not verified:
