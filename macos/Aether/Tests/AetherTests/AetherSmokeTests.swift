@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import Aether
 
@@ -117,5 +118,78 @@ final class SidecarEventParseTests: XCTestCase {
         XCTAssertEqual(obj["description"] as? String, "click 'Save'")
         XCTAssertTrue(SidecarEvent.parse(["type": "mystery"], fallbackGoal: "").isEmpty)
         XCTAssertTrue(SidecarEvent.parse([:], fallbackGoal: "").isEmpty)
+    }
+}
+
+final class OverlayGeometryTests: XCTestCase {
+    func testCoordinateConversionRoundTrips() {
+        let p = CGPoint(x: 100, y: 50)
+        let ak = OverlayGeometry.appKit(p, primaryHeight: 900)
+        XCTAssertEqual(ak, CGPoint(x: 100, y: 850))
+        XCTAssertEqual(OverlayGeometry.topLeft(ak, primaryHeight: 900), p)
+        let r = OverlayGeometry.appKitRect(CGRect(x: 10, y: 20, width: 30, height: 40), primaryHeight: 900)
+        XCTAssertEqual(r, CGRect(x: 10, y: 840, width: 30, height: 40))
+    }
+
+    func testFlightTimingAndShape() {
+        XCTAssertEqual(OverlayGeometry.flightDuration(distance: 100), 0.6)
+        XCTAssertEqual(OverlayGeometry.flightDuration(distance: 800), 1.0)
+        XCTAssertEqual(OverlayGeometry.flightDuration(distance: 5000), 1.4)
+        let a = CGPoint(x: 0, y: 0), b = CGPoint(x: 1000, y: 0)
+        let c = OverlayGeometry.controlPoint(from: a, to: b)
+        XCTAssertEqual(c.x, 500, accuracy: 0.001)
+        XCTAssertEqual(c.y, 80, accuracy: 0.001)             // lift capped at 80, bowing up
+        XCTAssertEqual(OverlayGeometry.smoothstep(0), 0)
+        XCTAssertEqual(OverlayGeometry.smoothstep(1), 1)
+        XCTAssertEqual(OverlayGeometry.smoothstep(0.5), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(OverlayGeometry.swell(0.5), 1.3, accuracy: 1e-9)
+        let over = OverlayGeometry.overshoot(from: a, to: b)
+        XCTAssertEqual(over, CGPoint(x: 1012, y: 0))           // min(12, 6% of 1000)
+        let path = OverlayGeometry.flightPath(from: a, to: b)
+        XCTAssertEqual(path.first, a)
+        XCTAssertEqual(path.last, b)
+        XCTAssertTrue(path.contains { $0.x > 1000 })            // overshoots, then settles
+    }
+
+    func testRingNeverTooSmall() {
+        let ring = OverlayGeometry.ringRect(around: CGRect(x: 100, y: 100, width: 4, height: 4))
+        XCTAssertGreaterThanOrEqual(ring.width, 36)
+        XCTAssertGreaterThanOrEqual(ring.height, 36)
+        XCTAssertEqual(ring.midX, 102, accuracy: 0.001)
+        XCTAssertEqual(OverlayGeometry.screenIndex(for: CGPoint(x: 1500, y: 10),
+                                                   frames: [CGRect(x: 0, y: 0, width: 1440, height: 900),
+                                                            CGRect(x: 1440, y: 0, width: 1920, height: 1080)]), 1)
+    }
+
+    func testTargetFromJSON() {
+        let t = OverlayTarget(json: ["kind": "rect", "x": 10, "y": 20, "w": 30, "h": 40,
+                                     "label": "Save", "points": [[1, 2], [3, 4]]])
+        XCTAssertEqual(t?.kind, .rect)
+        XCTAssertEqual(t?.frame, CGRect(x: -5, y: 0, width: 30, height: 40))
+        XCTAssertEqual(t?.points, [CGPoint(x: 1, y: 2), CGPoint(x: 3, y: 4)])
+        XCTAssertNil(OverlayTarget(json: ["kind": "point"]))
+        XCTAssertEqual(OverlayTarget(json: ["x": 5, "y": 5])?.frame.width, 28)
+    }
+
+    func testTalkReplyAndPointerEvents() {
+        let data = #"{"answer": "Here.", "targets": [{"kind": "point", "x": 1, "y": 2, "label": "A"}], "session_id": "s"}"#
+            .data(using: .utf8)!
+        let reply = TalkReply.parse(data)
+        XCTAssertEqual(reply?.answer, "Here.")
+        XCTAssertEqual(reply?.targets.first?.label, "A")
+        XCTAssertEqual(reply?.sessionId, "s")
+        XCTAssertNil(TalkReply.parse(Data("[]".utf8)))
+        let events = SidecarEvent.parse(["type": "pointer", "targets": [["x": 3, "y": 4]]], fallbackGoal: "")
+        guard case .pointer(let targets)? = events.first else { return XCTFail("no pointer") }
+        XCTAssertEqual(targets.first?.center, CGPoint(x: 3, y: 4))
+        XCTAssertTrue(SidecarEvent.parse(["type": "pointer", "targets": []], fallbackGoal: "").isEmpty)
+    }
+
+    func testTalkChordMustBeExact() {
+        let want: NSEvent.ModifierFlags = [.control, .option]
+        XCTAssertTrue(ModifierHoldController.isExactly([.control, .option], want))
+        XCTAssertTrue(ModifierHoldController.isExactly([.control, .option, .capsLock], want))
+        XCTAssertFalse(ModifierHoldController.isExactly([.control, .option, .command], want))
+        XCTAssertFalse(ModifierHoldController.isExactly([.control], want))
     }
 }

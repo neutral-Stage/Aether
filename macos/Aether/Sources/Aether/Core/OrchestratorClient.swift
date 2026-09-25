@@ -15,6 +15,7 @@ enum SidecarEvent {
     case question(requestId: String, question: String, options: [String])  // ask_user
     case session(String)            // conversation id for follow-ups
     case step([String: Any])        // tool_call / tool_result / screenshot / text / plan
+    case pointer([OverlayTarget])   // show the user where something is
 
     /// Events carried by one SSE `data:` object from POST /run (unknown types → none).
     static func parse(_ obj: [String: Any], fallbackGoal: String) -> [SidecarEvent] {
@@ -61,6 +62,9 @@ enum SidecarEvent {
             }
         case "tool_call", "tool_result", "screenshot", "text", "plan":
             out.append(.step(obj))
+        case "pointer":
+            let targets = (obj["targets"] as? [[String: Any]] ?? []).compactMap(OverlayTarget.init(json:))
+            if !targets.isEmpty { out.append(.pointer(targets)) }
         default:
             break
         }
@@ -92,6 +96,20 @@ struct DoctorReport: Equatable {
                                fix: raw["fix"] as? String ?? "")
         }
         return DoctorReport(verdict: verdict, checks: checks)
+    }
+}
+
+/// POST /talk's reply: what to say and where to point.
+struct TalkReply {
+    let answer: String
+    let targets: [OverlayTarget]
+    let sessionId: String?
+
+    static func parse(_ data: Data) -> TalkReply? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let answer = json["answer"] as? String else { return nil }
+        let targets = (json["targets"] as? [[String: Any]] ?? []).compactMap(OverlayTarget.init(json:))
+        return TalkReply(answer: answer, targets: targets, sessionId: json["session_id"] as? String)
     }
 }
 
@@ -224,6 +242,30 @@ final class OrchestratorClient: ObservableObject {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
         _ = try? await URLSession.shared.data(for: request)
+    }
+
+    /// Talk mode: ask about what is at `point` (global top-left points).
+    func talk(question: String, at point: CGPoint?, sessionId: String?) async throws -> TalkReply {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("talk")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["question": question]
+        if let point {
+            body["x"] = point.x
+            body["y"] = point.y
+        }
+        if let sessionId { body["session_id"] = sessionId }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        applySidecarAuth(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode),
+              let reply = TalkReply.parse(data) else {
+            let msg = String(data: data, encoding: .utf8) ?? "Talk failed"
+            throw NSError(domain: "Aether", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+        return reply
     }
 
     /// Answer an ask_user question; nil or empty skips it.

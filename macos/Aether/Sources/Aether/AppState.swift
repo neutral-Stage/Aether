@@ -41,6 +41,11 @@ final class AppState: ObservableObject {
     let commandBar = CommandBarPanel()
     let confirmation = ConfirmationPanel()
     let questionPanel = QuestionPanel()
+    let overlay = OverlayController()
+    private let talkHotkey = ModifierHoldController()
+    @Published var isTalkHeld = false
+    private var talkPointer: CGPoint?
+    private var talkSessionId: String?
     let nativeEffector = NativeEffectorServer(port: AetherConfig.nativeEffectorPort)
     lazy var stopController = StopController { [weak self] in
         self?.handleStop()
@@ -63,6 +68,15 @@ final class AppState: ObservableObject {
         }
         pttHotkey.onEnd = { [weak self] in
             Task { @MainActor in await self?.endPTT() }
+        }
+        talkHotkey.onBegin = { [weak self] point in
+            Task { @MainActor in self?.beginTalk(at: point) }
+        }
+        talkHotkey.onEnd = { [weak self] in
+            Task { @MainActor in await self?.endTalk() }
+        }
+        talkHotkey.onCancel = { [weak self] in
+            Task { @MainActor in self?.cancelTalk() }
         }
         commandBarHotkey.onToggle = { [weak self] in
             Task { @MainActor in self?.toggleCommandBar() }
@@ -91,6 +105,7 @@ final class AppState: ObservableObject {
         nativeEffector.start()  // loopback capture endpoint for the sidecar
         stopController.start()
         pttHotkey.start()
+        talkHotkey.start()
         commandBarHotkey.start()
         audio.refreshMicPermission()
         stt.refreshAuthorization()
@@ -242,6 +257,8 @@ final class AppState: ObservableObject {
                 self.showQuestion(requestId: requestId, question: question, options: options)
             case .session(let sid):
                 self.sessionId = sid
+            case .pointer(let targets):
+                self.overlay.show(targets: targets)
             case .step(let payload):
                 if (payload["type"] as? String) == "tool_call",
                    let desc = payload["description"] as? String {
@@ -352,6 +369,8 @@ final class AppState: ObservableObject {
         questionPanel.hide()
         pendingQuestionId = nil
         lastRunEnded = Date()
+        overlay.clear()
+        if isTalkHeld { cancelTalk() }
         world.status = "stopped"
         world.currentStep = "Stopped"
         refreshHUD()
@@ -380,13 +399,7 @@ final class AppState: ObservableObject {
         let sttStart = Date()
         var text = ""
         do {
-            if voiceSettings.prefersGroqSTT, client.healthOK {
-                text = try await client.transcribe(wavData: wav)
-            } else if stt.speechAuthorized {
-                text = try await stt.transcribe(wavData: wav)
-            } else if client.healthOK {
-                text = try await client.transcribe(wavData: wav)
-            }
+            text = try await transcribe(wav)
         } catch {
             lastResult = error.localizedDescription
             refreshHUD()
@@ -412,6 +425,72 @@ final class AppState: ObservableObject {
             return
         }
         submitGoal(text)
+    }
+
+    private func transcribe(_ wav: Data) async throws -> String {
+        if voiceSettings.prefersGroqSTT, client.healthOK {
+            return try await client.transcribe(wavData: wav)
+        } else if stt.speechAuthorized {
+            return try await stt.transcribe(wavData: wav)
+        } else if client.healthOK {
+            return try await client.transcribe(wavData: wav)
+        }
+        return ""
+    }
+
+    // MARK: - Talk mode (hold ⌃⌥, ask about what the mouse points at)
+
+    func beginTalk(at point: CGPoint) {
+        guard !isPTTHeld, !isTalkHeld else { return }
+        isTalkHeld = true
+        talkPointer = point
+        voice.stopAll()
+        overlay.clear()
+        try? audio.startRecording()
+        world.currentStep = "Listening… release to ask"
+        refreshHUD()
+    }
+
+    func cancelTalk() {
+        guard isTalkHeld else { return }
+        isTalkHeld = false
+        _ = audio.stopRecording()
+        world.currentStep = ""
+        refreshHUD()
+    }
+
+    func endTalk() async {
+        guard isTalkHeld else { return }
+        isTalkHeld = false
+        let wav = audio.stopRecording()
+        guard !wav.isEmpty else { refreshHUD(); return }
+        world.currentStep = "Looking…"
+        refreshHUD()
+        do {
+            let question = try await transcribe(wav).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !question.isEmpty else {
+                world.currentStep = ""
+                refreshHUD()
+                return
+            }
+            world.transcript = question
+            if question.lowercased() == "stop" {
+                handleStop()
+                return
+            }
+            let reply = try await client.talk(question: question, at: talkPointer,
+                                              sessionId: talkSessionId)
+            talkSessionId = reply.sessionId
+            lastResult = reply.answer
+            world.currentStep = reply.answer
+            overlay.show(targets: reply.targets)
+            refreshHUD()
+            await speakWithBargeIn(reply.answer)
+        } catch {
+            lastResult = error.localizedDescription
+            world.currentStep = error.localizedDescription
+            refreshHUD()
+        }
     }
 
     private func handleWakeWord() async {
