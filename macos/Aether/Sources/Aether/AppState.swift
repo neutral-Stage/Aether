@@ -99,6 +99,8 @@ final class AppState: ObservableObject {
     /// Quick skills on ⌃⌥1–9 (prompt + capture + destination).
     lazy var quickSkills = QuickSkillsController(client: client, audio: audio)
     private let transformPanel = TransformPanel()
+    private let chipsPanel = ChipsPanel()
+    private let chipsHotkey = CommandBarHotkeyController(modifiers: [.control, .option], keyCode: 8)
     let updateChecker = SparkleUpdateController()
     let sidecar = SidecarSupervisor()
     lazy var realtimeSession = RealtimeVoiceSession()
@@ -143,6 +145,9 @@ final class AppState: ObservableObject {
                 await self.dictation.toggle()
             }
         }
+        chipsHotkey.onToggle = { [weak self] in
+            Task { @MainActor in await self?.showChips() }
+        }
         transformHotkey.onToggle = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -176,6 +181,7 @@ final class AppState: ObservableObject {
         chatHotkey.start()
         dictationHotkey.start()
         transformHotkey.start()
+        chipsHotkey.start()
         dictation.onStatus = { [weak self] status in self?.showStatus(status) }
         quickSkills.onStatus = { [weak self] status in self?.showStatus(status) }
         quickSkills.speak = { [weak self] text in await self?.speakWithBargeIn(text) }
@@ -576,6 +582,7 @@ final class AppState: ObservableObject {
         realtimePlayer.stop()
         dictation.cancel()
         transformPanel.hide()
+        chipsPanel.hide()
         streamingTalkId = nil
         if isTalkHeld { cancelTalk() }
         if let guideId = activeGuideId {
@@ -769,34 +776,79 @@ final class AppState: ObservableObject {
                 handleStop()
                 return
             }
-            let talkId = String(UUID().uuidString.lowercased().prefix(12))
-            streamingTalkId = talkId
-            talkSplitter = ClauseSplitter()
-            talkPartial = ""
-            talkStreamed = false
-            talkDoneSeen = false
-            let reply = try await client.talk(question: question, at: talkPointer,
-                                              sessionId: talkSessionId, talkId: talkId)
-            talkSessionId = reply.sessionId
-            lastResult = reply.answer
-            world.currentStep = reply.answer
-            overlay.show(targets: reply.targets)
-            refreshHUD()
-            // The streamed events and the reply travel separately: give the last
-            // events a moment, then speak whatever did not arrive as a stream.
-            for _ in 0 ..< 8 where !talkDoneSeen {
-                try? await Task.sleep(nanoseconds: 50_000_000)
-            }
-            streamingTalkId = nil
-            if !talkStreamed {
-                speakInOrder(reply.answer)
-            } else if !talkDoneSeen, let rest = talkSplitter.flush() {
-                speakInOrder(rest)
-            }
+            try await askTalk(question, at: talkPointer)
         } catch {
             lastResult = error.localizedDescription
             world.currentStep = error.localizedDescription
             refreshHUD()
+        }
+    }
+
+    /// Ask about what is on screen (talk mode, or a chip): the answer streams, is
+    /// spoken clause by clause, and points at things.
+    func askTalk(_ question: String, at point: CGPoint?) async throws {
+        let talkId = String(UUID().uuidString.lowercased().prefix(12))
+        streamingTalkId = talkId
+        talkSplitter = ClauseSplitter()
+        talkPartial = ""
+        talkStreamed = false
+        talkDoneSeen = false
+        let reply = try await client.talk(question: question, at: point,
+                                          sessionId: talkSessionId, talkId: talkId)
+        talkSessionId = reply.sessionId
+        lastResult = reply.answer
+        world.currentStep = reply.answer
+        overlay.show(targets: reply.targets)
+        refreshHUD()
+        // The streamed events and the reply travel separately: give the last
+        // events a moment, then speak whatever did not arrive as a stream.
+        for _ in 0 ..< 8 where !talkDoneSeen {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        streamingTalkId = nil
+        if !talkStreamed {
+            speakInOrder(reply.answer)
+        } else if !talkDoneSeen, let rest = talkSplitter.flush() {
+            speakInOrder(rest)
+        }
+    }
+
+    // MARK: - Suggestion chips (⌃⌥C)
+
+    func showChips() async {
+        let point = NSEvent.mouseLocation                       // for placing the panel
+        let pointer = ModifierHoldController.mouseTopLeft()     // for the sidecar
+        let selection = TextInsertion.secureInputActive() ? "" : await TextInsertion.selectedText()
+        showStatus("Thinking of suggestions…")
+        do {
+            let chips = try await client.fetchChips(at: pointer, selection: selection)
+            showStatus("")
+            guard !chips.isEmpty else {
+                showStatus("No suggestions here.")
+                return
+            }
+            chipsPanel.show(chips, near: point) { [weak self] chip in
+                Task { @MainActor in await self?.runChip(chip, at: pointer) }
+            }
+        } catch {
+            showStatus(error.localizedDescription)
+        }
+    }
+
+    private func runChip(_ chip: Chip, at pointer: CGPoint) async {
+        switch chip.kind {
+        case "transform":
+            await transformPanel.begin(client: client, instruction: chip.prompt) { [weak self] in
+                self?.showStatus($0)
+            }
+        case "execute":
+            submitGoal(chip.prompt)
+        default:        // understand, ideate
+            do {
+                try await askTalk(chip.prompt, at: pointer)
+            } catch {
+                showStatus(error.localizedDescription)
+            }
         }
     }
 

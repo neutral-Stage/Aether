@@ -402,6 +402,13 @@ final class OrchestratorClient: ObservableObject {
         return obj["text"] as? String ?? ""
     }
 
+    // MARK: suggestion chips
+
+    func fetchChips(at point: CGPoint, selection: String) async throws -> [Chip] {
+        let obj = try await postJSON("chips", ["x": point.x, "y": point.y, "selection": selection])
+        return (obj["chips"] as? [[String: Any]] ?? []).compactMap(Chip.parse)
+    }
+
     // MARK: quick skills
 
     func listQuickSkills() async -> [QuickSkill] {

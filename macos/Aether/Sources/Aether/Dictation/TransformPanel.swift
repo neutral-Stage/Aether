@@ -87,8 +87,10 @@ final class TransformPanel {
     private var sourceApp: NSRunningApplication?
     private var bundleId = ""
 
-    /// Read the selection in the app in front and ask what to do with it.
-    func begin(client: OrchestratorClient, onStatus: @escaping (String) -> Void) async {
+    /// Read the selection in the app in front and ask what to do with it (or, with an
+    /// instruction from a suggestion chip, start rewriting straight away).
+    func begin(client: OrchestratorClient, instruction: String? = nil,
+               onStatus: @escaping (String) -> Void) async {
         guard panel == nil else { return }
         let front = TextInsertion.frontmostApp()
         guard !TextInsertion.secureInputActive() else {
@@ -126,6 +128,9 @@ final class TransformPanel {
         panel = p
         p.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        if let instruction, !instruction.isEmpty {
+            run(instruction, client: client)
+        }
     }
 
     private func run(_ instruction: String, client: OrchestratorClient) {

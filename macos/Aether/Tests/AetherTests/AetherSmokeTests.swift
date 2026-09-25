@@ -339,3 +339,25 @@ final class WakeCommandTests: XCTestCase {
         XCTAssertEqual(WakeCommand.command(in: "hey aether stop hey aether mute"), "mute")
     }
 }
+
+final class ChipAndSkillTests: XCTestCase {
+    func testChipParse() {
+        let chip = Chip.parse(["label": "Explain it", "kind": "understand", "prompt": "Explain X"])
+        XCTAssertEqual(chip?.symbol, "questionmark.circle")
+        XCTAssertNil(Chip.parse(["label": "", "kind": "execute", "prompt": "x"]))
+        XCTAssertEqual(Chip.parse(["label": "Do", "kind": "execute", "prompt": "Run"])?.symbol,
+                       "play.circle")
+    }
+
+    func testQuickSkillParseAndHotkeys() {
+        let skill = QuickSkill.parse(["id": "abc123", "name": "Sum", "prompt": "p",
+                                      "capture": "clipboard", "destination": "speak",
+                                      "hotkey": "3", "file_path": ""])
+        XCTAssertEqual(skill?.capture, "clipboard")
+        XCTAssertEqual(skill?.json["hotkey"] as? String, "3")
+        XCTAssertEqual(QuickSkill.keyCode(for: "1"), 18)
+        XCTAssertEqual(QuickSkill.keyCode(for: "9"), 25)
+        XCTAssertNil(QuickSkill.keyCode(for: ""))
+        XCTAssertNil(QuickSkill.parse(["name": "no id"]))
+    }
+}

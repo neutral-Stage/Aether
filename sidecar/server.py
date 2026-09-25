@@ -106,6 +106,7 @@ from .toolsmith_api import router as _toolsmith_router  # noqa: E402
 from .onboarding_api import router as _onboarding_router  # noqa: E402
 from .dictation_api import router as _dictation_router  # noqa: E402
 from .quick_skills_api import router as _quick_skills_router  # noqa: E402
+from .chips_api import router as _chips_router  # noqa: E402
 from . import questions  # noqa: E402
 from . import session_store  # noqa: E402
 
@@ -119,6 +120,7 @@ app.include_router(_toolsmith_router)
 app.include_router(_onboarding_router)
 app.include_router(_dictation_router)
 app.include_router(_quick_skills_router)
+app.include_router(_chips_router)
 
 
 @app.on_event("startup")
