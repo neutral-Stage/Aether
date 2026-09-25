@@ -309,7 +309,8 @@ def _looks_executable(path: str) -> bool:
 # focus.label, click_element/click_text via the name the model asked for (and
 # their handlers refuse when the element they resolve is more sensitive than
 # that name — see is_sensitive_label).
-CLICK_TOOLS = frozenset({"click", "click_element", "click_text", "click_mark"})
+CLICK_TOOLS = frozenset({"click", "click_element", "click_text", "click_mark",
+                         "click_described"})
 
 
 def _click_target(name: str, args: dict, focus: "FocusState") -> str:
@@ -320,6 +321,8 @@ def _click_target(name: str, args: dict, focus: "FocusState") -> str:
         return str(args.get("name") or focus.label or "")
     if name == "click_text":
         return str(args.get("text") or "")
+    if name == "click_described":
+        return str(args.get("description") or "")
     return ""
 
 

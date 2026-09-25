@@ -42,6 +42,9 @@ class AgentContext:
     # The last screenshot the model was shown; click(space="image") maps
     # coordinates read off it back to screen points.
     last_model_image: str | None = None
+    # (description) -> perception.locate.Located | None; set by the agent loop,
+    # which owns the vision clients (click_described, point_at(description=)).
+    locate: Any = None
 
 
 @dataclass

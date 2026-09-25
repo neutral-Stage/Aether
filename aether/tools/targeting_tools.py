@@ -10,7 +10,10 @@ Pixel coordinates drift; names don't. The ladder, best first (cursor-voice):
    the matched word (not the whole line).
 4. ``mark_screen`` then ``click_mark(n)``: numbered boxes drawn on a screenshot
    the model sees, for canvas/Electron apps with thin accessibility trees.
-5. ``click(x, y, space="image")``: raw coordinates read off the last attached
+5. ``click_described(description)``: a vision model (the optional local
+   grounder, else the vision role) finds the described thing on a fresh
+   screenshot, refines on a close crop and snaps to the element under it.
+6. ``click(x, y, space="image")``: raw coordinates read off the last attached
    screenshot, mapped through its display geometry and the calibrated
    coordinate convention.
 
@@ -280,6 +283,30 @@ def _h_click_mark(args: dict, ctx: "AgentContext") -> str:
     return f"Clicked mark {n} '{str(m.get('label', ''))[:60]}' at ({int(m['x'])}, {int(m['y'])})."
 
 
+def _h_click_described(args: dict, ctx: "AgentContext") -> str:
+    desc = " ".join(str(args.get("description") or "").split())[:200]
+    if not desc:
+        return "ERROR: description is required."
+    if ctx.locate is None:
+        return "ERROR: click_described is only available inside an agent run."
+    try:
+        found = ctx.locate(desc)
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR: could not look at the screen ({e}). Is Screen Recording allowed?"
+    if found is None:
+        return (f"ERROR: the vision model could not find '{desc}' on screen. Describe it "
+                "differently (position, colour, nearby text) or use mark_screen.")
+    label = found.element_label
+    if label:
+        refusal = targeting.sensitivity_guard(desc, label, "click_described", "description")
+        if refusal:
+            return refusal
+    _click_point(found.x, found.y, args)
+    by = "the local grounder" if found.source == "grounder" else "the vision model"
+    on = f" on '{label[:60]}'" if label else ""
+    return f"Clicked{on} at ({int(found.x)}, {int(found.y)}), found by {by}."
+
+
 def _h_point_at(_args: dict, _ctx: "AgentContext") -> str:
     # Pointing needs the app's overlay: the agent loop resolves the target and
     # emits a pointer event instead of calling this.
@@ -313,8 +340,11 @@ def describe(name: str, args: dict) -> str | None:
         return "number the targets on screen"
     if name == "click_mark":
         return f"click mark {args.get('mark')}"
+    if name == "click_described":
+        return f"click {str(args.get('description', ''))[:60]}"
     if name == "point_at":
-        what = args.get("label") or args.get("name") or args.get("element_index") or "a spot"
+        what = (args.get("label") or args.get("name") or args.get("description")
+                or args.get("element_index") or "a spot")
         return f"point at {str(what)[:50]}"
     return None
 
@@ -337,13 +367,23 @@ def resolve_point_target(args: dict, ctx: "AgentContext") -> tuple[float, float,
                 return (el["x"] + el["w"] / 2.0, el["y"] + el["h"] / 2.0, float(el["w"]),
                         float(el["h"]), label or str(el.get("title") or ""))
         raise ValueError(f"element {idx} not found; call get_screen_context again")
+    desc = " ".join(str(args.get("description") or "").split())[:200]
+    if desc:
+        if ctx.locate is None:
+            raise ValueError("finding things by description needs an agent run")
+        found = ctx.locate(desc)
+        if found is None:
+            raise ValueError(f"could not find '{desc}' on screen")
+        el = found.element
+        return (found.x, found.y, float(getattr(el, "w", 0) or 0),
+                float(getattr(el, "h", 0) or 0), label or found.element_label or desc)
     if args.get("x") is not None and args.get("y") is not None:
         if str(args.get("space") or "screen") == "image":
             x, y = image_point_to_screen(ctx, args["x"], args["y"])
         else:
             x, y = float(args["x"]), float(args["y"])
         return (x, y, 0.0, 0.0, label)
-    raise ValueError("point_at needs name, element_index, or x and y")
+    raise ValueError("point_at needs name, element_index, description, or x and y")
 
 
 def specs() -> list["ToolSpec"]:
@@ -384,14 +424,25 @@ def specs() -> list["ToolSpec"]:
             name="point_at",
             description=("Show the user where something is: the on-screen pointer flies to it "
                          "and circles it. Use when explaining or teaching, not to act. Pass "
-                         "name (best), element_index, or x,y (space='image' for screenshot "
-                         "pixels), plus a short label."),
+                         "name (best), element_index, a description a vision model can "
+                         "find, or x,y (space='image' for screenshot pixels), plus a short "
+                         "label."),
             json_schema={"type": "object", "properties": {
                 "name": {"type": "string"}, "role": {"type": "string"},
+                "description": {"type": "string"},
                 "element_index": {"type": "integer"}, "x": {"type": "number"},
                 "y": {"type": "number"}, "space": {"type": "string", "enum": ["screen", "image"]},
                 "label": {"type": "string"}}},
             permission="screen", impact="read", handler=_h_point_at),
+        ToolSpec(
+            name="click_described",
+            description=("Click something you can describe but not name, e.g. 'the gear icon "
+                         "right of Wi-Fi' or 'the blue Export button at the bottom'. A vision "
+                         "model finds it on a fresh screenshot. Use after click_element and "
+                         "click_text fail; include any visible text in the description."),
+            json_schema={"type": "object", "properties": {
+                "description": {"type": "string"}, **click_opts}, "required": ["description"]},
+            permission="input", impact="reversible", handler=_h_click_described),
         ToolSpec(
             name="click_mark",
             description="Click a numbered target from the last mark_screen.",

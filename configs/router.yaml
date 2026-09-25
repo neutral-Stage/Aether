@@ -163,6 +163,16 @@ roles:
 grounding:
   max_image_edge: 1600      # long edge (px) of images sent to a model
   coord_space: auto         # pixels | norm1000 | auto (auto: calibrated or pixels)
+  # Optional local grounding model for click_described / point_at(description=):
+  # a UI-TARS-style model on an OpenAI-compatible server on this Mac, e.g.
+  #   pip install mlx-vlm && python -m mlx_vlm.server --model mlx-community/UI-TARS-1.5-7B-4bit --port 8080
+  # Used only when enabled AND answering on a loopback address; otherwise the
+  # vision role above does the locating.
+  local_grounder:
+    enabled: false
+    base_url: http://127.0.0.1:8080/v1
+    model: mlx-community/UI-TARS-1.5-7B-4bit
+    coord_space: pixels     # pixels (image it was sent) | norm1000 (0-1000 grid)
 
 # Routing heuristics
 routing:

@@ -256,6 +256,7 @@ class Agent:
             browser_attach_mode=config.browser_attach_mode,
             browser_cdp_url=config.browser_cdp_url,
         )
+        self.ctx.locate = self._locate
 
     def _record_pack_learning(self, goal: str) -> None:
         """Distill a successful run into an app-specific learned recipe (Phase 10)."""
@@ -842,6 +843,9 @@ class Agent:
                     hit = None
                 if hit:
                     parts.append(knowledge.render_verified_recipe(*hit))
+        operator = self._operator_line()
+        if operator:
+            parts.append(operator)
         # Redact these two like the knowledge pack above: store_task_trace()
         # writes screen-derived step text into the same stores, so a secret
         # scraped off the screen can round-trip back into the system prompt.
@@ -869,6 +873,46 @@ class Agent:
             self.world.note_untrusted(ctx, "background")
             parts.append(self.policy.prepare_context_for_model(ctx))
         return "\n\n".join(parts)
+
+    def _operator_line(self) -> str:
+        """Which channel to drive the frontmost app through (effectors/operators.py)."""
+        app = self.world.frontmost_app
+        if not app:
+            return ""
+        from ..effectors import operators
+
+        try:
+            pack = knowledge.load_pack(app, self.world.bundle_id) if \
+                self.cfg.knowledge_enabled else None
+            choice = operators.choose(app, list(self.world.elements or []), pack,
+                                      browser_attach_mode=self.cfg.browser_attach_mode,
+                                      element_count=int(self.world.element_count or 0))
+        except Exception:  # noqa: BLE001 — guidance is a bonus
+            return ""
+        return choice.prompt(app)
+
+    def _locate(self, description: str):  # noqa: ANN202 — perception.locate.Located | None
+        """Find a described element: the local grounder if it is running, else the
+        vision model (click_described, point_at(description=))."""
+        from ..perception import grounding, screen
+        from ..perception import locate as locate_mod
+        from ..tools import targeting_tools
+
+        edge = targeting_tools.model_edge()
+        local = locate_mod.local_grounder()
+        if local is not None:
+            client, space = local
+            try:
+                found = locate_mod.locate(description, client, coord_space=space,
+                                          source="grounder", max_edge=edge)
+                if found is not None:
+                    return found
+            except Exception as e:  # noqa: BLE001 — fall back to the vision model
+                log.info("local grounder failed: %s", e)
+        client = self.router.pick_client_with_failover(RouteTier.VISION)
+        space = grounding.resolve_coord_space(screen.grounding_settings().get("coord_space"))
+        return locate_mod.locate(description, client, coord_space=space, source="vision",
+                                 max_edge=edge)
 
     def _hud_update(self, **kwargs) -> None:
         if self.hud:

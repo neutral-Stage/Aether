@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 66,
+  "tool_count": 67,
   "tools": [
     {
       "name": "get_screen_context",
@@ -217,6 +217,10 @@
     {
       "name": "point_at",
       "file": "point_at.json"
+    },
+    {
+      "name": "click_described",
+      "file": "click_described.json"
     },
     {
       "name": "click_mark",

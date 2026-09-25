@@ -42,6 +42,17 @@ def collect_api_keys() -> dict[str, str | None]:
     return keys
 
 
+def is_loopback_url(url: str) -> bool:
+    """http(s)://localhost, 127.x or [::1]: a server on this Mac."""
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host == "localhost" or host.startswith("127.") or host == "::1"
+
+
 def resolve_api_key(role_cfg: dict[str, Any], api_keys: dict[str, str | None]) -> str | None:
     env_name = str(role_cfg.get("api_key_env") or "").strip()
     if not env_name:
@@ -99,10 +110,12 @@ def create_client(
         )
 
     if backend in {"openai", "openai_compatible"}:
+        base_url = str(role_cfg.get("base_url") or "https://api.openai.com/v1")
+        if not api_key and is_loopback_url(base_url):
+            api_key = "local"          # local servers (LM Studio, mlx-vlm) need no key
         if not api_key:
             log.warning("Skipping role %s: %s not set", role_name, role_cfg.get("api_key_env"))
             return None
-        base_url = str(role_cfg.get("base_url") or "https://api.openai.com/v1")
         extra_headers = dict(role_cfg.get("extra_headers") or {})
         provider_label = str(role_cfg.get("provider_label") or role_name)
         return OpenAICompatibleClient(
