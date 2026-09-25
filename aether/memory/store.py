@@ -162,6 +162,37 @@ class MemoryStore:
             metadata={"goal": goal, "success": success, "step_count": len(steps)},
         )
 
+    def profile(self, limit: int = 8) -> list[MemoryEntry]:
+        """What the user said about themselves (onboarding), newest first."""
+        rows = self._conn.execute(
+            "SELECT id, kind, text, metadata, created_at FROM memories WHERE kind = 'profile' "
+            "ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        out = []
+        for r in rows:
+            meta = json.loads(r["metadata"] or "{}")
+            if not meta.get("suspicious"):
+                out.append(MemoryEntry(int(r["id"]), r["kind"], r["text"], meta,
+                                       created_at=float(r["created_at"] or 0)))
+        return out
+
+    def set_profile(self, key: str, text: str) -> int:
+        """Replace the profile answer stored under ``key`` (0 when refused or empty)."""
+        for e in self.profile(limit=50):
+            if e.metadata.get("question") == key:
+                self.forget(e.id)
+        text = " ".join((text or "").split())[:400]
+        if not text:
+            return 0
+        return self.remember(text, kind="profile",
+                             metadata={"source": "onboarding", "question": key})
+
+    def profile_slice(self) -> str:
+        entries = self.profile()
+        if not entries:
+            return ""
+        return "About the user, in their own words:\n" + "\n".join(
+            f"- {e.text[:300]}" for e in reversed(entries))
+
     def prompt_slice(self, query: str, limit: int = 4) -> str:
         """Retrieve relevant memories formatted for system prompt injection."""
         entries = self.retrieve(query, limit=limit + 2)
@@ -169,7 +200,7 @@ class MemoryStore:
             return ""
         lines = ["Relevant long-term memory:"]
         for e in entries:
-            if e.metadata.get("suspicious"):
+            if e.metadata.get("suspicious") or e.kind == "profile":   # profile has its own slice
                 continue
             lines.append(f"- [{e.kind}] {e.text[:300]}")
             if len(lines) > limit:

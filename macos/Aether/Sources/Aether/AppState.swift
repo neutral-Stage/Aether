@@ -53,6 +53,9 @@ final class AppState: ObservableObject {
     private var talkStreamed = false
     private var talkDoneSeen = false
     private var speechChain: Task<Void, Never>?
+    private var fillerTask: Task<Void, Never>?
+    /// Said when an answer takes a moment to start (synthesized ahead of time).
+    static let fillers = ["One moment.", "Let me look.", "Okay, checking."]
     // An agent run's streamed reply (token events), per step.
     private var streamStep = -1
     private var streamText = ""
@@ -145,6 +148,7 @@ final class AppState: ObservableObject {
                     guard let self else { return Data() }
                     return try await self.client.synthesizeStream(text: text)
                 }
+                await tts.prewarm(Self.fillers)
                 if settings.usesRealtimeMode {
                     await realtimeSession.connect()
                 }
@@ -428,8 +432,12 @@ final class AppState: ObservableObject {
     }
 
     /// Queue speech behind whatever is already being said (streamed talk clauses).
-    private func speakInOrder(_ text: String) {
-        talkStreamed = true
+    /// A filler is queued the same way but doesn't count as the answer.
+    private func speakInOrder(_ text: String, isAnswer: Bool = true) {
+        if isAnswer {
+            talkStreamed = true
+            fillerTask?.cancel()
+        }
         let previous = speechChain
         speechChain = Task { @MainActor [weak self] in
             await previous?.value
@@ -491,6 +499,7 @@ final class AppState: ObservableObject {
         overlay.clear()
         speechChain?.cancel()
         speechChain = nil
+        fillerTask?.cancel()
         streamingTalkId = nil
         if isTalkHeld { cancelTalk() }
         if let guideId = activeGuideId {
@@ -599,17 +608,34 @@ final class AppState: ObservableObject {
         isTalkHeld = false
         let wav = audio.stopRecording()
         guard !wav.isEmpty else { refreshHUD(); return }
+        // First audio: from releasing the keys to the first sound of the answer.
+        let released = Date()
+        talkStreamed = false
+        tts.onPlaybackStart = { [weak self] in
+            let ms = Date().timeIntervalSince(released) * 1000
+            Task { await self?.client.reportVoiceMetrics(firstAudioMs: ms) }
+        }
+        fillerTask?.cancel()
+        fillerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard let self, !Task.isCancelled, !self.talkStreamed, !self.tts.isSpeaking,
+                  let filler = Self.fillers.randomElement() else { return }
+            self.speakInOrder(filler, isAnswer: false)
+        }
+        defer { fillerTask?.cancel() }
         world.currentStep = "Looking…"
         refreshHUD()
         do {
             let question = try await transcribe(wav).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !question.isEmpty else {
+                fillerTask?.cancel()
                 world.currentStep = ""
                 refreshHUD()
                 return
             }
             world.transcript = question
             if question.lowercased() == "stop" {
+                fillerTask?.cancel()
                 handleStop()
                 return
             }
@@ -633,7 +659,7 @@ final class AppState: ObservableObject {
             }
             streamingTalkId = nil
             if !talkStreamed {
-                await speakWithBargeIn(reply.answer)
+                speakInOrder(reply.answer)
             } else if !talkDoneSeen, let rest = talkSplitter.flush() {
                 speakInOrder(rest)
             }
@@ -691,6 +717,15 @@ struct MainWindowView: View {
                 .onSubmit { app.submitGoal(app.goalText) }
 
             Toggle("Barge-in (interrupt speech)", isOn: $app.bargeInEnabled)
+
+            HStack {
+                Button("Open Chat (⌃⌘A)") { app.openChat() }
+                Spacer()
+            }
+            DisclosureGroup("About you & things to try") {
+                AboutYouView(client: app.client)
+            }
+            .font(.caption)
 
             if let update = app.updateChecker.updateAvailable {
                 HStack {

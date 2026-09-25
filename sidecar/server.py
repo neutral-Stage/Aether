@@ -103,6 +103,7 @@ from . import talk_api  # noqa: E402
 from .guide_api import router as _guide_router  # noqa: E402
 from . import guide_api  # noqa: E402
 from .toolsmith_api import router as _toolsmith_router  # noqa: E402
+from .onboarding_api import router as _onboarding_router  # noqa: E402
 from . import questions  # noqa: E402
 from . import session_store  # noqa: E402
 
@@ -113,6 +114,7 @@ app.include_router(_guide_router)
 app.include_router(_mcp_router)
 app.include_router(_apps_router)
 app.include_router(_toolsmith_router)
+app.include_router(_onboarding_router)
 
 
 @app.on_event("startup")

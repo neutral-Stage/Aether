@@ -42,6 +42,10 @@ final class TTSBridge: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         baseVolume = volume
         isSpeaking = true
 
+        if let cached = phraseCache[trimmed] {
+            await play(cached)
+            return
+        }
         if voiceSettings.prefersGroqTTS, let synthesize = groqSynthesize {
             if voiceSettings.prefersStreamingTTS, let stream = groqSynthesizeStream {
                 let streamed = await speakGroqStream(trimmed, stream: stream)
@@ -58,7 +62,55 @@ final class TTSBridge: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         currentUtterance = utterance
         await withCheckedContinuation { cont in
             finishContinuation = cont
+            firePlaybackStart()
             synthesizer.speak(utterance)
+        }
+    }
+
+    /// Called once when sound actually starts (first-audio latency), then cleared.
+    var onPlaybackStart: (() -> Void)?
+    /// Short phrases synthesized ahead of time (fillers), played without a round trip.
+    private var phraseCache: [String: Data] = [:]
+
+    private func firePlaybackStart() {
+        let callback = onPlaybackStart
+        onPlaybackStart = nil
+        callback?()
+    }
+
+    /// Synthesize phrases now so they play instantly later (network voices only;
+    /// the system voice is already instant).
+    func prewarm(_ phrases: [String]) async {
+        guard voiceSettings.prefersGroqTTS, let synthesize = groqSynthesize else { return }
+        for phrase in phrases where phraseCache[phrase] == nil {
+            if let data = try? await synthesize(phrase), !data.isEmpty {
+                phraseCache[phrase] = data
+            }
+        }
+    }
+
+    private func play(_ data: Data) async {
+        do {
+            let player = try AVAudioPlayer(data: data)
+            player.prepareToPlay()
+            audioPlayer = player
+            await withCheckedContinuation { cont in
+                finishContinuation = cont
+                firePlaybackStart()
+                player.play()
+                let duration = player.duration
+                DispatchQueue.main.asyncAfter(deadline: .now() + max(duration, 0.1)) {
+                    Task { @MainActor in
+                        self.isSpeaking = false
+                        self.audioPlayer = nil
+                        self.finishContinuation?.resume()
+                        self.finishContinuation = nil
+                    }
+                }
+            }
+        } catch {
+            isSpeaking = false
+            print("[TTS play error: \(error)]")
         }
     }
 
@@ -82,22 +134,8 @@ final class TTSBridge: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
                 isSpeaking = false
                 return false
             }
-            let player = try AVAudioPlayer(data: data)
-            player.prepareToPlay()
-            audioPlayer = player
-            await withCheckedContinuation { cont in
-                finishContinuation = cont
-                player.play()
-                let duration = player.duration
-                DispatchQueue.main.asyncAfter(deadline: .now() + max(duration, 0.1)) {
-                    Task { @MainActor in
-                        self.isSpeaking = false
-                        self.audioPlayer = nil
-                        self.finishContinuation?.resume()
-                        self.finishContinuation = nil
-                    }
-                }
-            }
+            _ = try AVAudioPlayer(data: data)     // not playable → fall back to /tts
+            await play(data)
             return true
         } catch {
             print("[TTS stream error: \(error)] falling back to /tts")
@@ -112,22 +150,7 @@ final class TTSBridge: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
                 isSpeaking = false
                 return
             }
-            let player = try AVAudioPlayer(data: data)
-            player.prepareToPlay()
-            audioPlayer = player
-            await withCheckedContinuation { cont in
-                finishContinuation = cont
-                player.play()
-                let duration = player.duration
-                DispatchQueue.main.asyncAfter(deadline: .now() + max(duration, 0.1)) {
-                    Task { @MainActor in
-                        self.isSpeaking = false
-                        self.audioPlayer = nil
-                        self.finishContinuation?.resume()
-                        self.finishContinuation = nil
-                    }
-                }
-            }
+            await play(data)
         } catch {
             isSpeaking = false
             print("[TTS groq error: \(error)] \(text)")

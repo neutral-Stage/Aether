@@ -329,6 +329,47 @@ final class OrchestratorClient: ObservableObject {
         return reply
     }
 
+    // MARK: onboarding interview and tour
+
+    func fetchOnboardingQuestions() async -> (questions: [OnboardingQuestion],
+                                              answers: [String: String], memoryEnabled: Bool)? {
+        guard let result = try? await URLSession.shared.data(
+                for: sessionsRequest("onboarding/questions")),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return nil
+        }
+        let qs = (obj["questions"] as? [[String: Any]] ?? []).compactMap { q -> OnboardingQuestion? in
+            guard let id = q["id"] as? String, let text = q["question"] as? String else { return nil }
+            return OnboardingQuestion(id: id, question: text,
+                                      placeholder: q["placeholder"] as? String ?? "")
+        }
+        return (qs, obj["answers"] as? [String: String] ?? [:],
+                obj["memory_enabled"] as? Bool ?? false)
+    }
+
+    /// Store the answers; returns a short status line for the view.
+    func saveProfile(_ answers: [String: String]) async -> String {
+        var request = sessionsRequest("onboarding/profile", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["answers": answers])
+        guard let result = try? await URLSession.shared.data(for: request),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return "Couldn't save — is the sidecar running?"
+        }
+        let refused = obj["refused"] as? [String] ?? []
+        return refused.isEmpty ? "Saved." : "Saved, except \(refused.joined(separator: ", "))."
+    }
+
+    func fetchTour() async -> [TourExample] {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("onboarding/tour")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return []
+        }
+        return (obj["examples"] as? [[String: Any]] ?? []).compactMap(TourExample.parse)
+    }
+
     // MARK: conversations (chat window)
 
     private func sessionsRequest(_ path: String, method: String = "GET") -> URLRequest {
@@ -412,7 +453,8 @@ final class OrchestratorClient: ObservableObject {
         _ = try? await URLSession.shared.data(for: request)
     }
 
-    func reportVoiceMetrics(sttMs: Double? = nil, ttsMs: Double? = nil, voiceRttMs: Double? = nil) async {
+    func reportVoiceMetrics(sttMs: Double? = nil, ttsMs: Double? = nil, voiceRttMs: Double? = nil,
+                            firstAudioMs: Double? = nil) async {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("metrics/voice")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -421,6 +463,7 @@ final class OrchestratorClient: ObservableObject {
         if let sttMs { body["stt_ms"] = sttMs }
         if let ttsMs { body["tts_ms"] = ttsMs }
         if let voiceRttMs { body["voice_rtt_ms"] = voiceRttMs }
+        if let firstAudioMs { body["first_audio_ms"] = firstAudioMs }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
         _ = try? await URLSession.shared.data(for: request)

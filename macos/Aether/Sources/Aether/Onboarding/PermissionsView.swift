@@ -76,7 +76,7 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Welcome to Aether")
                 .font(.title2.bold())
-            Text("Three steps: grant permissions, add an API key, check the setup. Aether's agent runs in a local sidecar; this app provides the HUD, voice and hotkeys.")
+            Text("Grant permissions, add an API key, check the setup, and tell Aether a little about your work. Aether's agent runs in a local sidecar; this app provides the HUD, voice and hotkeys.")
                 .foregroundStyle(.secondary)
 
             Text("1 · Permissions").font(.headline)
@@ -160,6 +160,12 @@ struct OnboardingView: View {
                         }
                     }
                 }
+            }
+
+            if let client {
+                Divider()
+                Text("4 · About you (optional)").font(.headline)
+                AboutYouView(client: client)
             }
 
             HStack {

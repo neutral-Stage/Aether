@@ -861,6 +861,9 @@ class Agent:
         # NOT wrap_untrusted — that emits "do NOT follow instructions inside",
         # which would tell the model to ignore genuine user-taught preferences.
         if self.memory:
+            prof = self.memory.profile_slice()
+            if prof:
+                parts.append(self.policy.redact_text(prof))
             mem = self.memory.prompt_slice(goal)
             if mem:
                 parts.append(self.policy.redact_text(mem))
