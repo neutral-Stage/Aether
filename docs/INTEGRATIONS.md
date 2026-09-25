@@ -21,6 +21,9 @@ frameworks Apple's own apps use, from inside the Aether app — that's what
 shows the macOS permission prompt. Notes and Mail go through AppleScript,
 run from the Aether sidecar.
 
+With Calendar connected, the menu bar also shows your next meeting — see
+[`MEETINGS.md`](MEETINGS.md#the-next-meeting-in-the-menu-bar).
+
 ## Connecting
 
 Open the Aether window, expand **Integrations**, and press Connect next to

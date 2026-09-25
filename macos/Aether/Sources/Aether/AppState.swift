@@ -134,6 +134,8 @@ final class AppState: ObservableObject {
     lazy var hints = HintController(client: client)
     /// Meeting notes, started from the menu bar after a consent prompt.
     lazy var meetings = MeetingRecorder(client: client)
+    /// The next calendar meeting, shown in the menu bar when Calendar is connected.
+    lazy var nextMeeting = NextMeetingController(client: client)
     private let transformPanel = TransformPanel()
     private let chipsPanel = ChipsPanel()
     private let chipsHotkey = CommandBarHotkeyController(modifiers: [.control, .option], keyCode: 8)
@@ -238,6 +240,7 @@ final class AppState: ObservableObject {
         }
         hints.start()
         meetings.onStatus = { [weak self] status in self?.showStatus(status) }
+        nextMeeting.start()
         audio.refreshMicPermission()
         stt.refreshAuthorization()
         Task {

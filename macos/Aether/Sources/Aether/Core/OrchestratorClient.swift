@@ -483,8 +483,12 @@ final class OrchestratorClient: ObservableObject {
         return MeetingTranscription.parse(obj)
     }
 
-    func startMeeting(app: String) async throws -> (id: String, title: String) {
-        let obj = try await postJSON("meetings", ["app": app])
+    func startMeeting(app: String, title: String? = nil) async throws -> (id: String, title: String) {
+        var body: [String: Any] = ["app": app]
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            body["title"] = title
+        }
+        let obj = try await postJSON("meetings", body)
         guard let id = obj["id"] as? String else {
             throw NSError(domain: "Aether", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "No meeting id in the reply"])

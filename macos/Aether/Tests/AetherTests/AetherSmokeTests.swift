@@ -835,3 +835,181 @@ final class IntegrationRowStateTests: XCTestCase {
         XCTAssertEqual(IntegrationRow.state(enabled: false, osStatus: "restricted"), .denied)
     }
 }
+
+final class NextMeetingPolicyTests: XCTestCase {
+    private static let utc = TimeZone(identifier: "UTC")!
+    private static let enGB = Locale(identifier: "en_GB")
+
+    /// 2026-01-15 at `hh:mm` UTC, exactly (so label()'s formatted time is predictable).
+    private func utcDate(_ hh: Int, _ mm: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = Self.utc
+        var comps = DateComponents()
+        comps.year = 2026; comps.month = 1; comps.day = 15
+        comps.hour = hh; comps.minute = mm
+        return calendar.date(from: comps)!
+    }
+
+    // MARK: UpcomingMeeting.from
+
+    func testFromNilJSONIsNil() {
+        XCTAssertNil(UpcomingMeeting.from(nil))
+    }
+
+    func testFromAllDayIsNil() {
+        let json = PIMService.eventJSON(title: "Offsite", start: utcDate(9, 0), end: utcDate(17, 0),
+                                        allDay: true, location: nil, calendar: nil, notes: nil, id: nil)
+        XCTAssertNil(UpcomingMeeting.from(json))
+    }
+
+    func testFromMissingOrEmptyTitleIsNil() {
+        var json = PIMService.eventJSON(title: "", start: utcDate(9, 0), end: utcDate(10, 0),
+                                        allDay: false, location: nil, calendar: nil, notes: nil, id: nil)
+        XCTAssertNil(UpcomingMeeting.from(json))
+        json.removeValue(forKey: "title")
+        XCTAssertNil(UpcomingMeeting.from(json))
+    }
+
+    func testFromEndNotAfterStartIsNil() {
+        let same = utcDate(9, 0)
+        let json = PIMService.eventJSON(title: "Standup", start: same, end: same, allDay: false,
+                                        location: nil, calendar: nil, notes: nil, id: nil)
+        XCTAssertNil(UpcomingMeeting.from(json))
+    }
+
+    func testFromValidEventProducesMeeting() {
+        let start = utcDate(14, 0)
+        let end = utcDate(14, 30)
+        let json = PIMService.eventJSON(title: "Budget sync", start: start, end: end, allDay: false,
+                                        location: "Zoom", calendar: "Work", notes: nil, id: "e1")
+        XCTAssertEqual(UpcomingMeeting.from(json), UpcomingMeeting(title: "Budget sync", start: start, end: end))
+    }
+
+    // MARK: shown
+
+    func testShownWhileRunning() {
+        let meeting = UpcomingMeeting(title: "Standup", start: utcDate(14, 0), end: utcDate(14, 30))
+        XCTAssertEqual(NextMeetingPolicy.shown(meeting, now: utcDate(14, 10)), meeting)
+    }
+
+    func testShownStartingIn30Minutes() {
+        let meeting = UpcomingMeeting(title: "Standup", start: utcDate(14, 30), end: utcDate(15, 0))
+        XCTAssertEqual(NextMeetingPolicy.shown(meeting, now: utcDate(14, 0)), meeting)
+    }
+
+    func testNotShownStartingIn90Minutes() {
+        let meeting = UpcomingMeeting(title: "Standup", start: utcDate(15, 30), end: utcDate(16, 0))
+        XCTAssertNil(NextMeetingPolicy.shown(meeting, now: utcDate(14, 0)))
+    }
+
+    func testNotShownAlreadyEnded() {
+        let meeting = UpcomingMeeting(title: "Standup", start: utcDate(13, 0), end: utcDate(13, 30))
+        XCTAssertNil(NextMeetingPolicy.shown(meeting, now: utcDate(14, 0)))
+    }
+
+    // MARK: offersNotes
+
+    func testOffersNotesFiveMinutesBefore() {
+        let meeting = UpcomingMeeting(title: "Standup", start: utcDate(14, 5), end: utcDate(14, 30))
+        XCTAssertTrue(NextMeetingPolicy.offersNotes(meeting, now: utcDate(14, 0)))
+    }
+
+    func testDoesNotOfferNotesFifteenMinutesBefore() {
+        let meeting = UpcomingMeeting(title: "Standup", start: utcDate(14, 15), end: utcDate(14, 30))
+        XCTAssertFalse(NextMeetingPolicy.offersNotes(meeting, now: utcDate(14, 0)))
+    }
+
+    func testOffersNotesWhileRunning() {
+        let meeting = UpcomingMeeting(title: "Standup", start: utcDate(14, 0), end: utcDate(14, 30))
+        XCTAssertTrue(NextMeetingPolicy.offersNotes(meeting, now: utcDate(14, 10)))
+    }
+
+    // MARK: label
+
+    func testLabelRoundsUpMinutesUntilStart() {
+        let start = utcDate(14, 0)
+        let meeting = UpcomingMeeting(title: "Budget sync", start: start, end: utcDate(14, 30))
+        let now = start.addingTimeInterval(-24.5 * 60)   // 24 min 30 s before
+        XCTAssertEqual(NextMeetingPolicy.label(meeting, now: now, locale: Self.enGB, timeZone: Self.utc),
+                       "Next: Budget sync · 14:00 (in 25 min)")
+    }
+
+    func testLabelShowsNowInTheLastMinute() {
+        let start = utcDate(14, 0)
+        let meeting = UpcomingMeeting(title: "Budget sync", start: start, end: utcDate(14, 30))
+        let now = start.addingTimeInterval(-20)   // 20 s before
+        XCTAssertEqual(NextMeetingPolicy.label(meeting, now: now, locale: Self.enGB, timeZone: Self.utc),
+                       "Next: Budget sync · 14:00 (now)")
+    }
+
+    func testLabelWhileRunning() {
+        let meeting = UpcomingMeeting(title: "Budget sync", start: utcDate(14, 0), end: utcDate(14, 30))
+        let now = utcDate(14, 10)
+        XCTAssertEqual(NextMeetingPolicy.label(meeting, now: now, locale: Self.enGB, timeZone: Self.utc),
+                       "Now: Budget sync · until 14:30")
+    }
+
+    func testLabelRoundsUpASecondPastWholeMinutes() {
+        let start = utcDate(14, 0)
+        let meeting = UpcomingMeeting(title: "Budget sync", start: start, end: utcDate(14, 30))
+        let now = start.addingTimeInterval(-(24 * 60 + 1))   // 24 min 1 s before
+        XCTAssertEqual(NextMeetingPolicy.label(meeting, now: now, locale: Self.enGB, timeZone: Self.utc),
+                       "Next: Budget sync · 14:00 (in 25 min)")
+    }
+
+    func testLabelTruncatesLongTitles() {
+        let longTitle = String(repeating: "a", count: 50)
+        let start = utcDate(14, 0)
+        let meeting = UpcomingMeeting(title: longTitle, start: start, end: utcDate(14, 30))
+        let now = start.addingTimeInterval(-5 * 60)
+        let expectedTitle = String(longTitle.prefix(40)) + "…"
+        XCTAssertEqual(NextMeetingPolicy.label(meeting, now: now, locale: Self.enGB, timeZone: Self.utc),
+                       "Next: \(expectedTitle) · 14:00 (in 5 min)")
+    }
+}
+
+final class NearestEventTests: XCTestCase {
+    private struct Event {
+        let name: String
+        let start: Date
+        let end: Date
+        let allDay: Bool
+    }
+
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func pick(_ events: [Event]) -> String? {
+        PIMService.nearestEvent(events, now: now, start: { $0.start }, end: { $0.end },
+                                allDay: { $0.allDay })?.name
+    }
+
+    func testAMeetingAboutToStartWinsOverALongRunningBlock() {
+        let events = [
+            Event(name: "focus", start: now.addingTimeInterval(-3 * 3600),
+                  end: now.addingTimeInterval(2 * 3600), allDay: false),
+            Event(name: "sync", start: now.addingTimeInterval(5 * 60),
+                  end: now.addingTimeInterval(35 * 60), allDay: false),
+        ]
+        XCTAssertEqual(pick(events), "sync")
+    }
+
+    func testAMeetingThatJustStartedWinsOverALaterOne() {
+        let events = [
+            Event(name: "later", start: now.addingTimeInterval(30 * 60),
+                  end: now.addingTimeInterval(60 * 60), allDay: false),
+            Event(name: "standup", start: now.addingTimeInterval(-2 * 60),
+                  end: now.addingTimeInterval(13 * 60), allDay: false),
+        ]
+        XCTAssertEqual(pick(events), "standup")
+    }
+
+    func testAllDayAndEndedEventsAreSkipped() {
+        let events = [
+            Event(name: "holiday", start: now.addingTimeInterval(-60),
+                  end: now.addingTimeInterval(86_000), allDay: true),
+            Event(name: "done", start: now.addingTimeInterval(-3600),
+                  end: now.addingTimeInterval(-60), allDay: false),
+        ]
+        XCTAssertNil(pick(events))
+    }
+}

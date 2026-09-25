@@ -133,7 +133,8 @@ final class PIMService {
                               notes: event.notes, id: event.eventIdentifier)
     }
 
-    /// The next non-all-day event that is running now or starts within `hours`.
+    /// The non-all-day event, running now or starting within `hours`, whose start is
+    /// nearest to now (see `nearestEvent`).
     func nextEvent(within hours: Double) -> [String: Any]? {
         guard Self.ekStatusString(EKEventStore.authorizationStatus(for: .event)) == "authorized" else {
             return nil
@@ -141,15 +142,22 @@ final class PIMService {
         let now = Date()
         let horizon = now.addingTimeInterval(max(0, hours) * 3600)
         let predicate = eventStore.predicateForEvents(withStart: now, end: horizon, calendars: nil)
-        let next = eventStore.events(matching: predicate)
-            .filter { !$0.isAllDay && $0.endDate > now }
-            .sorted { $0.startDate < $1.startDate }
-            .first
+        let next = Self.nearestEvent(eventStore.events(matching: predicate), now: now,
+                                     start: { $0.startDate }, end: { $0.endDate },
+                                     allDay: { $0.isAllDay })
         guard let next else { return nil }
         return Self.eventJSON(title: next.title ?? "", start: next.startDate, end: next.endDate,
                               allDay: next.isAllDay, location: next.location,
                               calendar: next.calendar?.title, notes: next.notes,
                               id: next.eventIdentifier)
+    }
+
+    /// Of `items`, the non-all-day one that hasn't ended and whose start is nearest
+    /// `now` — so a meeting about to begin wins over a long block that began hours ago.
+    nonisolated static func nearestEvent<T>(_ items: [T], now: Date, start: (T) -> Date,
+                                            end: (T) -> Date, allDay: (T) -> Bool) -> T? {
+        items.filter { !allDay($0) && end($0) > now }
+            .min { abs(start($0).timeIntervalSince(now)) < abs(start($1).timeIntervalSince(now)) }
     }
 
     // MARK: reminders

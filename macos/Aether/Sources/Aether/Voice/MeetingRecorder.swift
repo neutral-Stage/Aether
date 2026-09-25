@@ -272,7 +272,9 @@ final class MeetingRecorder: ObservableObject {
         self.client = client
     }
 
-    func start() async {
+    /// `title`, when given, names the meeting notes (e.g. after a calendar event);
+    /// otherwise the sidecar falls back to "<app> meeting".
+    func start(title: String? = nil) async {
         guard active == nil else { return }
         guard let status = await client.meetingTranscription() else {
             onStatus?("Meeting notes need the sidecar; it isn't reachable")
@@ -293,13 +295,13 @@ final class MeetingRecorder: ObservableObject {
             .first { $0.bundleIdentifier == bundle }?.localizedName ?? bundle
         guard consent(appName: appName, status: status) else { return }
         do {
-            let (id, title) = try await client.startMeeting(app: appName)
+            let (id, meetingTitle) = try await client.startMeeting(app: appName, title: title)
             bundleId = bundle
             sent = [:]
             uploadFailed = false
             restarts = 0
             try await beginCapture(appName: appName)
-            active = ActiveMeeting(id: id, title: title, app: appName, started: Date())
+            active = ActiveMeeting(id: id, title: meetingTitle, app: appName, started: Date())
             onStatus?("Taking notes of \(appName) · stop from the menu bar")
             loop = Task { [weak self] in
                 while !Task.isCancelled {
@@ -420,9 +422,11 @@ final class MeetingRecorder: ObservableObject {
     }
 }
 
-/// The menu bar section for meeting notes.
+/// The menu bar section for meeting notes, plus the next calendar meeting
+/// (when Calendar is connected) and a shortcut to start notes titled after it.
 struct MeetingMenu: View {
     @ObservedObject var recorder: MeetingRecorder
+    @ObservedObject var nextMeeting: NextMeetingController
 
     var body: some View {
         if let meeting = recorder.active {
@@ -434,6 +438,16 @@ struct MeetingMenu: View {
             }
             Button("Stop and write notes") { Task { await recorder.stop() } }
         } else {
+            if let upcoming = nextMeeting.meeting {
+                Text(NextMeetingPolicy.label(upcoming, now: nextMeeting.now))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if NextMeetingPolicy.offersNotes(upcoming, now: nextMeeting.now) {
+                    Button("Take notes of \(NextMeetingPolicy.shortTitle(upcoming.title))") {
+                        Task { await recorder.start(title: upcoming.title) }
+                    }
+                }
+            }
             Button("Take meeting notes…") { Task { await recorder.start() } }
         }
     }

@@ -106,6 +106,9 @@ It saves a result table under `~/Library/Application Support/Aether/validation/`
   show the matching macOS permission prompt (not just flip on silently). Ask Aether to
   add a calendar event: it should show an editable draft (title/time/location) and wait
   for you to approve before the event exists (see [`INTEGRATIONS.md`](INTEGRATIONS.md)).
+- With Calendar connected and an event in the next hour, the menu bar should show
+  "Next: …" for it; within 10 minutes of it starting, a "Take notes of …" button
+  should appear and start meeting notes titled after it (see [`MEETINGS.md`](MEETINGS.md)).
 
 ## Coding agents (optional)
 

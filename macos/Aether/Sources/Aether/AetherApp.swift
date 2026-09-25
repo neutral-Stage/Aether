@@ -17,7 +17,7 @@ struct AetherApp: App {
                 RecentChatsMenu(chat: app.chat) { app.openChat(session: $0) }
                 QuickSkillsMenu(controller: app.quickSkills)
                 ScreenMemoryMenu(controller: app.screenMemory)
-                MeetingMenu(recorder: app.meetings)
+                MeetingMenu(recorder: app.meetings, nextMeeting: app.nextMeeting)
                 Button("Open Window") { app.showMainWindow = true }
                 Button("Command Bar (⌥Space)") { app.toggleCommandBar() }
                 Button("New Conversation") { app.newConversation() }
@@ -30,6 +30,7 @@ struct AetherApp: App {
             .task {
                 await app.chat.refreshSessions()
                 await app.screenMemory.refresh()
+                await app.nextMeeting.refresh(force: true)
             }
         } label: {
             MenuBarIcon(screenMemory: app.screenMemory, meetings: app.meetings)

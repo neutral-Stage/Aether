@@ -22,6 +22,20 @@ Ask about past meetings in chat or by voice, for example "what were my action
 items from the budget call?". The agent has `search_meetings` and
 `meeting_notes`.
 
+## The next meeting in the menu bar
+
+With Calendar connected under **Integrations**, the menu bar shows the next
+meeting that is running now or starts within the hour, for example "Next:
+Budget sync · 14:00 (in 25 min)", or "Now: Budget sync · until 14:30" once it
+has started. From 10 minutes before it starts, and while it runs, a **Take
+notes of Budget sync** button starts meeting notes titled after it.
+
+- All-day events are skipped.
+- When events overlap, the one whose start is nearest wins, so a meeting
+  about to begin is shown instead of a long block that started hours ago.
+- The calendar is checked every minute and again whenever you open the menu.
+  Nothing is read unless Calendar is connected.
+
 ## Settings
 
 | Setting | Default | Meaning |
@@ -64,4 +78,4 @@ GET    /meetings  ·  GET /meetings/{id}  ·  DELETE /meetings/{id}
   microphone only and says so.
 - After the Mac sleeps, capture restarts, at most five times per meeting.
 - STOP does not end meeting notes; stop them from the menu bar.
-- The next meeting from your calendar is not shown yet.
+- Only the next upcoming meeting is shown, not a full agenda.
