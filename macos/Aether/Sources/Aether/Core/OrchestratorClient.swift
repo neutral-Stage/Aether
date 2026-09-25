@@ -454,6 +454,37 @@ final class OrchestratorClient: ObservableObject {
                 obj["file"] as? String)
     }
 
+    // MARK: activity log
+
+    func fetchAudit(query: String = "", event: String = "", limit: Int = 300) async -> [AuditEntry] {
+        var comps = URLComponents(url: AetherConfig.sidecarBaseURL.appendingPathComponent("audit"),
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "limit", value: String(limit)),
+                             URLQueryItem(name: "q", value: query),
+                             URLQueryItem(name: "event", value: event)]
+        guard let url = comps?.url else { return [] }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        applySidecarAuth(&request)
+        guard let result = try? await URLSession.shared.data(for: request),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return []
+        }
+        return (obj["entries"] as? [[String: Any]] ?? []).compactMap(AuditEntry.parse)
+    }
+
+    /// Nil when the sidecar can't be reached.
+    func verifyAudit() async -> AuditVerdict? {
+        var request = sessionsRequest("audit/verify")
+        request.timeoutInterval = 60
+        guard let result = try? await URLSession.shared.data(for: request),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any],
+              let ok = obj["ok"] as? Bool else {
+            return nil
+        }
+        return AuditVerdict(ok: ok, message: obj["message"] as? String ?? "")
+    }
+
     // MARK: screen memory
 
     /// Nil when the sidecar can't be reached.

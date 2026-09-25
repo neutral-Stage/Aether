@@ -947,6 +947,10 @@ struct MainWindowView: View {
                 QuickSkillsView(controller: app.quickSkills, client: app.client)
             }
             .font(.caption)
+            DisclosureGroup("Activity log") {
+                AuditView(client: app.client)
+            }
+            .font(.caption)
 
             if let update = app.updateChecker.updateAvailable {
                 HStack {

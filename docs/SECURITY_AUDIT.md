@@ -102,6 +102,13 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
 - [x] `GET /audit/verify` tamper check
 - [x] Secret redaction in policy and error responses
 - [x] `AETHER_AUDIT_KEY` env override (Phase 12)
+- [x] **Fixed:** `/audit/verify` reported a chain break on every log longer than 500
+  records, because it checked the last 500 as if the first had no predecessor. It now
+  checks the whole log.
+- [x] **Fixed:** two threads writing at once could both link to the same previous record
+  and fork the chain. Linking, signing and writing now happen under one lock.
+- [x] The app's main window has an activity log (`GET /audit`, signed-in only) with search,
+  a confirmations filter, and a "Verify log" button.
 
 **Finding:** Default HMAC key stored in `data/.audit_hmac_key` on disk.  
 **Mitigation (Keychain migration path):**

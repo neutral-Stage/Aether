@@ -407,3 +407,17 @@ final class ConversationGrantTests: XCTestCase {
         XCTAssertEqual(none, "")
     }
 }
+
+final class AuditEntryTests: XCTestCase {
+    func testParseAndHeadline() {
+        let e = AuditEntry.parse(["id": "abc123def456", "ts": 1_790_000_000.0,
+                                  "event": "confirmation", "tool": "run_shell",
+                                  "confirmed": false, "summary": "make"])
+        XCTAssertEqual(e?.headline, "confirmation · run_shell · declined")
+        XCTAssertEqual(e?.symbol, "hand.raised")
+        let start = AuditEntry.parse(["id": "x", "ts": 1.0, "event": "run_start"])
+        XCTAssertEqual(start?.headline, "run start")
+        XCTAssertNil(start?.confirmed)
+        XCTAssertNil(AuditEntry.parse(["event": "action"]))
+    }
+}

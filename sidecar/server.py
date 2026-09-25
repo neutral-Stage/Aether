@@ -726,16 +726,27 @@ async def health() -> dict[str, Any]:
     }
 
 
+def _audit() -> AuditLog:
+    audit_cfg = load_config().get("audit") or {}
+    return AuditLog.get(path=audit_cfg.get("path"),
+                        enabled=bool(audit_cfg.get("enabled", True)))
+
+
 @app.get("/audit/verify")
 async def audit_verify() -> dict[str, Any]:
-    cfg = load_config()
-    audit_cfg = cfg.get("audit") or {}
-    audit = AuditLog.get(
-        path=audit_cfg.get("path"),
-        enabled=bool(audit_cfg.get("enabled", True)),
-    )
-    ok, msg = audit.verify_chain()
+    """Check the whole log's signatures and hash chain (reveals no entries)."""
+    audit = _audit()
+    ok, msg = await asyncio.to_thread(audit.verify_chain)
     return {"ok": ok, "message": msg, "path": str(audit.path)}
+
+
+@app.get("/audit")
+async def audit_entries(limit: int = 200, q: str = "", event: str = "", run_id: str = "",
+                        _auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Recent audit entries, newest first (the activity log in the app)."""
+    entries = await asyncio.to_thread(_audit().recent, max(1, min(limit, 1000)),
+                                      query=q, event=event, run_id=run_id)
+    return {"entries": entries}
 
 
 @app.get("/metrics")
