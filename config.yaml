@@ -196,6 +196,7 @@ agent:
   max_steps: 40                # safety cap on model turns per task
   cost_cap_usd: 2.0            # stop a task once its estimated model cost reaches this (0 = no cap)
   context_budget_chars: 60000  # collapse the oldest tool output past this much text
+  fast_router: true            # open/quit apps, folders, volume, 'what app is this' without a model call
   careful: false               # true => confirm before EVERY action
   narrate: true                # speak a short line before each action
   local_only: false            # true => prefer local model; cloud fallback if unavailable

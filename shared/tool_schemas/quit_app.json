@@ -1,0 +1,17 @@
+{
+  "name": "quit_app",
+  "description": "Quit an app normally by name (it still asks to save unsaved work). Use instead of clicking its menu.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 58,
+  "tool_count": 60,
   "tools": [
     {
       "name": "get_screen_context",
@@ -177,6 +177,14 @@
     {
       "name": "notify",
       "file": "notify.json"
+    },
+    {
+      "name": "quit_app",
+      "file": "quit_app.json"
+    },
+    {
+      "name": "set_volume",
+      "file": "set_volume.json"
     },
     {
       "name": "click_element",

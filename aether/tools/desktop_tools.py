@@ -181,6 +181,25 @@ def _h_notify(args: dict, _ctx: "AgentContext") -> str:
     return system.notify(str(args.get("title") or "Aether"), str(args.get("message", "")))
 
 
+def _h_quit_app(args: dict, _ctx: "AgentContext") -> str:
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return "ERROR: name is required."
+    return system.quit_app(name)
+
+
+def _h_set_volume(args: dict, _ctx: "AgentContext") -> str:
+    muted = args.get("muted")
+    level = args.get("level")
+    change = args.get("change")
+    if muted is None and level is None and change is None:
+        return "ERROR: pass level (0-100), change (e.g. -10) or muted."
+    return system.set_volume(
+        level=int(level) if level is not None else None,
+        change=int(change) if change is not None else None,
+        muted=bool(muted) if muted is not None else None)
+
+
 def needs_paste(text: str) -> bool:
     """Long or non-BMP text goes in by paste: faster and exact."""
     return len(text) > 200 or any(ord(c) > 0xFFFF for c in text)
@@ -226,6 +245,14 @@ def describe(name: str, args: dict) -> str | None:
         return "read the selected text"
     if name == "notify":
         return "show a notification"
+    if name == "quit_app":
+        return f"quit {args.get('name', '')}"
+    if name == "set_volume":
+        if args.get("muted") is not None:
+            return "mute" if args.get("muted") else "unmute"
+        if args.get("change") is not None:
+            return f"volume {int(args['change']):+d}"
+        return f"volume {args.get('level')}%"
     return None
 
 
@@ -357,4 +384,18 @@ def specs() -> list["ToolSpec"]:
                 "title": {"type": "string"}, "message": {"type": "string"}},
                 "required": ["message"]},
             permission="none", impact="reversible", handler=_h_notify),
+        ToolSpec(
+            name="quit_app",
+            description=("Quit an app normally by name (it still asks to save unsaved work). "
+                         "Use instead of clicking its menu."),
+            json_schema={"type": "object", "properties": {"name": {"type": "string"}},
+                         "required": ["name"]},
+            permission="input", impact="reversible", handler=_h_quit_app),
+        ToolSpec(
+            name="set_volume",
+            description="Set the sound output volume: level 0-100, change (e.g. -10), or muted.",
+            json_schema={"type": "object", "properties": {
+                "level": {"type": "integer"}, "change": {"type": "integer"},
+                "muted": {"type": "boolean"}}},
+            permission="input", impact="reversible", handler=_h_set_volume),
     ]

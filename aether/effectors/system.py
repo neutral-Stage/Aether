@@ -50,6 +50,43 @@ def notification_script(title: str, body: str) -> str:
             f"with title {_as_quote(title or 'Aether')}")
 
 
+def quit_app_script(name: str) -> str:
+    return f"tell application {_as_quote(name)} to quit"
+
+
+def quit_app(name: str) -> str:
+    """Ask an app to quit normally (it still asks to save unsaved work)."""
+    res = subprocess.run(["osascript", "-e", quit_app_script(name)],  # noqa: S603
+                         capture_output=True, text=True, timeout=20)
+    return f"Quit {name}." if res.returncode == 0 else f"ERROR: {res.stderr.strip()}"
+
+
+def volume_script(level: int | None = None, change: int | None = None,
+                  muted: bool | None = None) -> str:
+    """AppleScript for the output volume (0–100), a relative change, or mute."""
+    if muted is not None:
+        return f"set volume output muted {'true' if muted else 'false'}"
+    if change is not None:
+        return ("set v to output volume of (get volume settings)\n"
+                f"set volume output volume (v + ({int(change)}))\n"
+                "set volume output muted false")
+    lvl = max(0, min(100, int(level if level is not None else 50)))
+    return f"set volume output volume {lvl}\nset volume output muted false"
+
+
+def set_volume(level: int | None = None, change: int | None = None,
+               muted: bool | None = None) -> str:
+    res = subprocess.run(  # noqa: S603
+        ["osascript", "-e", volume_script(level, change, muted),
+         "-e", "output volume of (get volume settings)"],
+        capture_output=True, text=True, timeout=10)
+    if res.returncode != 0:
+        return f"ERROR: {res.stderr.strip()}"
+    if muted:
+        return "Sound muted."
+    return f"Volume is {res.stdout.strip() or '?'}%."
+
+
 def notify(title: str, body: str) -> str:
     res = subprocess.run(["osascript", "-e", notification_script(title, body)],  # noqa: S603
                          capture_output=True, text=True, timeout=10)

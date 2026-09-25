@@ -215,6 +215,54 @@ class Agent:
             blob += "|label=" + (getattr(focus, "label", "") or "")
         return (name, hashlib.sha1(blob.encode()).hexdigest()[:12])
 
+    async def _try_fast_route(self, goal: str, rid: str) -> str | None:
+        """Run an unambiguous one-step request without the model (fast_router.py).
+
+        Same registry tool and policy check as the agent loop; anything that
+        would need a confirmation, or that fails, falls through to the loop.
+        """
+        if not bool(self.cfg.get("agent", "fast_router", default=True)):
+            return None
+        from . import fast_router
+
+        intent = fast_router.match(goal)
+        if intent is None:
+            return None
+        if intent.tool is None:            # "what app is this"
+            await asyncio.to_thread(self.world.refresh, True)
+            app = self.world.frontmost_app or ""
+            if not app:
+                return None
+            final = f"This is {app}."
+        else:
+            spec = self.registry.get(intent.tool)
+            focus = self.focus.state()
+            if (spec is None or not self.policy.allows_tool(spec)
+                    or self.policy.requires_confirm(spec, intent.args, focus)):
+                return None
+            desc = self.registry.describe_call(intent.tool, intent.args)
+            print(f"⚡ fast route: {desc}")
+            self._hud_update(step=desc, last_action=desc)
+            self.world.record_tool_call(intent.tool, intent.args)
+            observation = await asyncio.to_thread(
+                self.registry.dispatch, intent.tool, intent.args, self.ctx)
+            failed = observation.startswith(("ERROR", "Failed"))
+            self.metrics.record_tool(intent.tool, 0.0, error=failed)
+            self.audit.record("action", run_id=rid, tool=intent.tool, tool_args=intent.args,
+                              summary=observation.splitlines()[0][:120] if observation else "",
+                              extra={"fast_route": True})
+            if failed:
+                return None
+            final = observation.splitlines()[0] if observation else "Done."
+        self.metrics.inc("fast_routes")
+        self.world.mark_idle()
+        self._hud_update(status="idle", step=final)
+        await self.say_async(final)
+        self.metrics.end_run("idle")
+        self.audit.record("run_end", run_id=rid, summary=final[:300],
+                          extra={"success": True, "fast_route": True})
+        return final
+
     def _cost_cap(self) -> float:
         try:
             return max(0.0, float(self.cfg.get("agent", "cost_cap_usd", default=2.0) or 0.0))
@@ -520,6 +568,10 @@ class Agent:
             self._ack_task = asyncio.ensure_future(
                 self.say_async(str(self.cfg.get("voice", "ack_text", default="On it.")))
             )
+
+        fast_final = await self._try_fast_route(goal, rid)
+        if fast_final is not None:
+            return fast_final
 
         explicit_planner = bool(self.cfg.get("agent", "explicit_planner", default=False))
         planner_use_llm = bool(self.cfg.get("agent", "planner_use_llm", default=True))

@@ -1,0 +1,20 @@
+{
+  "name": "set_volume",
+  "description": "Set the sound output volume: level 0-100, change (e.g. -10), or muted.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "level": {
+        "type": "integer"
+      },
+      "change": {
+        "type": "integer"
+      },
+      "muted": {
+        "type": "boolean"
+      }
+    }
+  },
+  "permission": "input",
+  "impact": "reversible"
+}
