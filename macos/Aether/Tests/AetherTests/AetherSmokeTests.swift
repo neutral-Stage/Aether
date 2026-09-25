@@ -671,7 +671,9 @@ final class MicConverterTests: XCTestCase {
         buffer.frameLength = 48_000
         fill(buffer)
 
-        let out = MicConverter().convert(buffer)
+        let converter = MicConverter()
+        // The resampler holds back its last few milliseconds until finish().
+        let out = converter.convert(buffer) + converter.finish()
         XCTAssertTrue(abs(out.count - 16_000) <= 200, "expected ~16000 samples, got \(out.count)")
     }
 
@@ -681,7 +683,9 @@ final class MicConverterTests: XCTestCase {
         buffer.frameLength = 44_100
         fill(buffer)
 
-        let out = MicConverter().convert(buffer)
+        let converter = MicConverter()
+        // The resampler holds back its last few milliseconds until finish().
+        let out = converter.convert(buffer) + converter.finish()
         XCTAssertTrue(abs(out.count - 16_000) <= 200, "expected ~16000 samples, got \(out.count)")
     }
 }

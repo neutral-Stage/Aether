@@ -32,6 +32,7 @@ final class AudioEngine: ObservableObject {
     private let sampleRate: Double = 16_000
     private var recordingSubscription: MicSubscription?
     private var recordingBuffer: RecordingAccumulator?
+    private var recordingConverter: MicConverter?
     /// One continuous-monitoring subscription per owner (e.g. "barge-in", "ambient"),
     /// so several features can keep the mic open for VAD/wake at the same time.
     private var monitors: [String: MicSubscription] = [:]
@@ -74,6 +75,7 @@ final class AudioEngine: ObservableObject {
         let buffer = RecordingAccumulator()
         let converter = MicConverter()
         recordingBuffer = buffer
+        recordingConverter = converter
         recordingSubscription = try hub.subscribe { [weak self] pcm in
             let samples = converter.convert(pcm)
             guard !samples.isEmpty else { return }
@@ -92,6 +94,11 @@ final class AudioEngine: ObservableObject {
         recordingSubscription?.cancel()
         recordingSubscription = nil
         isRecording = false
+        // The resampler still holds the last few tens of milliseconds.
+        if let tail = recordingConverter?.finish(), !tail.isEmpty {
+            recordingBuffer?.append(tail)
+        }
+        recordingConverter = nil
         let samples = recordingBuffer?.takeAll() ?? []
         recordingBuffer = nil
         return makeWAV(from: samples, sampleRate: sampleRate)

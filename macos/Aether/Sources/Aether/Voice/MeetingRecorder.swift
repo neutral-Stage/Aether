@@ -220,6 +220,8 @@ final class MicTap {
     func stop() {
         subscription?.cancel()
         subscription = nil
+        let tail = converter.finish()
+        if !tail.isEmpty { buffer.append(tail) }
     }
 }
 

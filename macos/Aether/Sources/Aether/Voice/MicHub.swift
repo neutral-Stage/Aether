@@ -187,6 +187,11 @@ final class MicHub {
 /// Converts microphone buffers of any input format to 16 kHz mono Float32 — the
 /// rate every plain-float consumer (recording, meeting audio) wants. Keeps a
 /// converter cached and rebuilds it only when the source format changes.
+///
+/// The resampler holds back a few tens of milliseconds of audio until it is told
+/// the stream has ended: call `finish()` when capture stops, or the end of the
+/// recording is lost. Thread-safe, because a buffer already handed out by the hub
+/// can still arrive while the owner is stopping.
 final class MicConverter {
     static let targetSampleRate: Double = 16_000
 
@@ -196,9 +201,12 @@ final class MicConverter {
     private var converter: AVAudioConverter?
     private var sourceSampleRate: Double = 0
     private var sourceChannelCount: AVAudioChannelCount = 0
+    private let lock = NSLock()
 
     /// Converts one buffer to 16 kHz mono `Float32` samples; empty on failure.
     func convert(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
         let format = buffer.format
         if converter == nil || format.sampleRate != sourceSampleRate
             || format.channelCount != sourceChannelCount {
@@ -221,5 +229,31 @@ final class MicConverter {
         }
         guard error == nil, let channel = out.floatChannelData?[0] else { return [] }
         return Array(UnsafeBufferPointer(start: channel, count: Int(out.frameLength)))
+    }
+
+    /// The audio the resampler is still holding, at the end of a capture. Resets the
+    /// converter, so the next `convert` starts a fresh stream.
+    func finish() -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let converter else { return [] }
+        defer { converter.reset() }
+        var tail: [Float] = []
+        // Drain in a few passes: one output buffer may not hold everything.
+        for _ in 0 ..< 8 {
+            guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: 4096) else { break }
+            var error: NSError?
+            let status = converter.convert(to: out, error: &error) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            if error == nil, let channel = out.floatChannelData?[0], out.frameLength > 0 {
+                tail.append(contentsOf: UnsafeBufferPointer(start: channel, count: Int(out.frameLength)))
+            }
+            if error != nil || status == .endOfStream || status == .error || out.frameLength == 0 {
+                break
+            }
+        }
+        return tail
     }
 }
