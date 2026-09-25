@@ -176,6 +176,12 @@ final class AppState: ObservableObject {
             }
         }
         nativeEffector.start()  // loopback capture endpoint for the sidecar
+        stopController.isActive = { [weak self] in
+            guard let self else { return false }
+            return self.client.isRunning || self.activeGuideId != nil || self.streamingTalkId != nil
+                || self.tts.isSpeaking || self.overlay.isShowing || self.pendingConfirmId != nil
+        }
+        stopController.onTripleControl = { [weak self] in self?.toggleAlwaysListening() }
         stopController.start()
         pttHotkey.start()
         talkHotkey.start()
@@ -285,6 +291,26 @@ final class AppState: ObservableObject {
             onStop: { [weak self] in self?.handleStop() }
         )
         hud.setClickThrough(!client.isRunning && !audio.isRecording && pendingConfirmId == nil)
+    }
+
+    /// Triple-tap Control: listen for "Hey Aether …" until tapped again. The on-device
+    /// recognizer is used, so audio stays on this Mac; the HUD shows it is listening.
+    func toggleAlwaysListening() {
+        if ambientActive {
+            speechWake.stop()
+            ambient.stop()
+            ambientActive = false
+            showStatus("Stopped listening")
+            return
+        }
+        stt.refreshAuthorization()
+        guard stt.speechAuthorized else {
+            showStatus("Allow Speech Recognition in System Settings to use always-on listening")
+            return
+        }
+        ambientActive = true
+        speechWake.start()
+        showStatus("Listening for “Hey Aether …” · triple-tap Control to stop")
     }
 
     /// A short status line in the HUD (dictation, transform).

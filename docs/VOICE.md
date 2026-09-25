@@ -16,6 +16,13 @@
   - `energy`: a loudness placeholder with many false wakes; for testing only.
 - **Talk mode latency:** answers stream and are spoken clause by clause. If nothing has been said 0.9 s after you release ⌃⌥, a short filler plays. `first_audio_ms` (release to first sound) is on `/dashboard`.
 - **Ambient mode:** `AmbientListeningController` when `beta.ambient_listening: true` — HUD shows ear indicator.
+- **Always-on listening, by hand:** triple-tap Control (nothing else held) to start the
+  on-device `speech` wake word without changing the config; triple-tap again to stop. The
+  HUD shows the ear indicator while it listens. It needs the Speech Recognition permission.
+- **STOP:** ⌃⇧S, the HUD or chat Stop button, saying "stop", or pressing Escape twice
+  quickly. Double-Escape only acts while Aether is doing something (a run, a spoken
+  answer, a guide, marks on screen, a confirmation), so it doesn't get in the way of apps
+  that use Escape.
 
 ## Enabling Realtime voice (beta)
 

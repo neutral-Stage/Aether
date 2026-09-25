@@ -50,6 +50,8 @@ final class OverlayController {
         installEscape()
     }
 
+    var isShowing: Bool { !panels.isEmpty }
+
     func clear() {
         fadeTask?.cancel()
         fadeTask = nil

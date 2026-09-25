@@ -421,3 +421,23 @@ final class AuditEntryTests: XCTestCase {
         XCTAssertNil(AuditEntry.parse(["event": "action"]))
     }
 }
+
+final class TapSequenceTests: XCTestCase {
+    func testDoubleAndTripleTaps() {
+        var escape = TapSequence(count: 2, gap: 0.4)
+        XCTAssertFalse(escape.register(at: 10.0))
+        XCTAssertTrue(escape.register(at: 10.3))
+        XCTAssertFalse(escape.register(at: 10.5))       // starts over after a hit
+        XCTAssertFalse(escape.register(at: 11.2))       // too slow
+        XCTAssertTrue(escape.register(at: 11.5))
+
+        var control = TapSequence(count: 3, gap: 0.35)
+        XCTAssertFalse(control.register(at: 1.0))
+        XCTAssertFalse(control.register(at: 1.3))
+        control.reset()                                 // another key in between
+        XCTAssertFalse(control.register(at: 1.5))
+        XCTAssertFalse(control.register(at: 1.7))
+        XCTAssertTrue(control.register(at: 1.9))
+        XCTAssertFalse(control.register(at: 0.5))       // clock went backwards: start over
+    }
+}
