@@ -1,0 +1,33 @@
+{
+  "name": "batch_actions",
+  "description": "Do up to 5 simple UI actions in a row without looking in between, e.g. click a field, type, press return. Each action is {tool, args} using click, click_element, click_text, click_mark, type_text, press_key, scroll, hover, drag, wait, menu_item or focus_window. Stops at the first failure. Use only when you are sure what each step does.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "actions": {
+        "type": "array",
+        "maxItems": 5,
+        "items": {
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string"
+            },
+            "args": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "tool",
+            "args"
+          ]
+        }
+      }
+    },
+    "required": [
+      "actions"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

@@ -34,6 +34,16 @@ def _reset_mcp_active_client() -> Generator[None, None, None]:
 
 
 @pytest.fixture(autouse=True)
+def _isolated_sessions(tmp_path_factory: pytest.TempPathFactory,
+                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the conversation store out of the repo's data dir."""
+    from sidecar import session_store
+
+    monkeypatch.setattr(session_store, "_PATH",
+                        tmp_path_factory.mktemp("sessions") / "sessions.db")
+
+
+@pytest.fixture(autouse=True)
 def _reset_metrics() -> Generator[None, None, None]:
     """Reset the MetricsCollector singleton so counters don't leak across tests."""
     from aether.core.metrics import MetricsCollector

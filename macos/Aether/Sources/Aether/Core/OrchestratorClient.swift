@@ -12,6 +12,60 @@ enum SidecarEvent {
     case confirmRequest(requestId: String, description: String)
     case fleet([String: Any])
     case runRequest(goal: String)   // proactive trigger auto-run (Phase 11)
+    case question(requestId: String, question: String, options: [String])  // ask_user
+    case session(String)            // conversation id for follow-ups
+    case step([String: Any])        // tool_call / tool_result / screenshot / text / plan
+
+    /// Events carried by one SSE `data:` object from POST /run (unknown types → none).
+    static func parse(_ obj: [String: Any], fallbackGoal: String) -> [SidecarEvent] {
+        guard let type = obj["type"] as? String else { return [] }
+        var out: [SidecarEvent] = []
+        switch type {
+        case "run_start":
+            if let sid = obj["session_id"] as? String { out.append(.session(sid)) }
+            out.append(.runStart(runId: obj["run_id"] as? String ?? "",
+                                 goal: obj["goal"] as? String ?? fallbackGoal))
+        case "hud":
+            out.append(.hud(obj))
+        case "say":
+            if let text = obj["text"] as? String { out.append(.say(text)) }
+        case "fleet":
+            out.append(.fleet(obj))
+        case "run_request":
+            if let g = obj["goal"] as? String { out.append(.runRequest(goal: g)) }
+        case "done":
+            if let sid = obj["session_id"] as? String { out.append(.session(sid)) }
+            var world: WorldSnapshot?
+            if let w = obj["world"] as? [String: Any],
+               let wData = try? JSONSerialization.data(withJSONObject: w) {
+                world = try? JSONDecoder().decode(WorldSnapshot.self, from: wData)
+            }
+            out.append(.done(result: obj["result"] as? String ?? "Done.", world: world))
+        case "error":
+            out.append(.error(obj["message"] as? String ?? "Unknown error"))
+        case "stopped":
+            out.append(.stopped)
+        case "ping":
+            out.append(.ping)
+        case "confirm_request":
+            out.append(.confirmRequest(requestId: obj["request_id"] as? String ?? "",
+                                       description: obj["description"] as? String ?? "Proceed?"))
+        case "question":
+            // The agent's own copy of the event has no request id and cannot be
+            // answered; the sidecar's copy does.
+            let rid = obj["request_id"] as? String ?? ""
+            let q = obj["question"] as? String ?? ""
+            if !rid.isEmpty, !q.isEmpty {
+                out.append(.question(requestId: rid, question: q,
+                                     options: obj["options"] as? [String] ?? []))
+            }
+        case "tool_call", "tool_result", "screenshot", "text", "plan":
+            out.append(.step(obj))
+        default:
+            break
+        }
+        return out
+    }
 }
 
 struct DoctorCheck: Identifiable, Equatable {
@@ -45,6 +99,8 @@ struct RunOptions {
     var careful: Bool = false
     var localOnly: Bool = false
     var stream: Bool = true
+    /// Continue this conversation (nil starts a new one).
+    var sessionId: String? = nil
 }
 
 @MainActor
@@ -165,6 +221,19 @@ final class OrchestratorClient: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = ["request_id": requestId, "approved": approved]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        applySidecarAuth(&request)
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    /// Answer an ask_user question; nil or empty skips it.
+    func submitAnswer(requestId: String, answer: String?) async {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("answer")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["request_id": requestId]
+        if let answer, !answer.isEmpty { body["answer"] = answer }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
         _ = try? await URLSession.shared.data(for: request)
@@ -562,13 +631,14 @@ final class OrchestratorClient: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "goal": goal,
             "careful": options.careful,
             "local_only": options.localOnly,
             "stream": options.stream,
             "narrate": false,
         ]
+        if let sessionId = options.sessionId { body["session_id"] = sessionId }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
 
@@ -601,44 +671,11 @@ final class OrchestratorClient: ObservableObject {
                 let jsonStr = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                 guard let data = jsonStr.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let type = obj["type"] as? String else { continue }
+                      obj["type"] is String else { continue }
 
+                let events = SidecarEvent.parse(obj, fallbackGoal: goal)
                 await MainActor.run {
-                    switch type {
-                    case "run_start":
-                        let runId = obj["run_id"] as? String ?? ""
-                        let g = obj["goal"] as? String ?? goal
-                        onEvent(.runStart(runId: runId, goal: g))
-                    case "hud":
-                        onEvent(.hud(obj))
-                    case "say":
-                        if let text = obj["text"] as? String { onEvent(.say(text)) }
-                    case "fleet":
-                        onEvent(.fleet(obj))
-                    case "run_request":
-                        if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
-                    case "done":
-                        let result = obj["result"] as? String ?? "Done."
-                        var world: WorldSnapshot?
-                        if let w = obj["world"] as? [String: Any],
-                           let wData = try? JSONSerialization.data(withJSONObject: w) {
-                            world = try? JSONDecoder().decode(WorldSnapshot.self, from: wData)
-                        }
-                        onEvent(.done(result: result, world: world))
-                    case "error":
-                        let msg = obj["message"] as? String ?? "Unknown error"
-                        onEvent(.error(msg))
-                    case "stopped":
-                        onEvent(.stopped)
-                    case "ping":
-                        onEvent(.ping)
-                    case "confirm_request":
-                        let rid = obj["request_id"] as? String ?? ""
-                        let desc = obj["description"] as? String ?? "Proceed?"
-                        onEvent(.confirmRequest(requestId: rid, description: desc))
-                    default:
-                        break
-                    }
+                    for event in events { onEvent(event) }
                 }
             } else {
                 lineBuffer.append(ch)

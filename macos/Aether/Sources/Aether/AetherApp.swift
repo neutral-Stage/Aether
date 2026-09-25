@@ -15,6 +15,7 @@ struct AetherApp: App {
                 }
                 Button("Open Window") { app.showMainWindow = true }
                 Button("Command Bar (⌥Space)") { app.toggleCommandBar() }
+                Button("New Conversation") { app.newConversation() }
                 Button("Refresh sidecar") { Task { await app.client.checkHealth(); app.refreshHUD() } }
                 Divider()
                 Button("STOP", role: .destructive) { app.handleStop() }

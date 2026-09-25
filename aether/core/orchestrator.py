@@ -14,6 +14,7 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from .config import Config, ROOT
@@ -73,6 +74,63 @@ SAY_DO_NUDGE = ("You described an action but made no tool call, so nothing happe
                 "Make the tool call now, or call finish if the task is already done.")
 
 
+@dataclass
+class CallOutcome:
+    """What one tool call produced, for the tool_result the model sees."""
+
+    content: str
+    images: list[str] = field(default_factory=list)
+    finished: bool = False       # the finish tool
+    correction: str | None = None
+    gui_changed: bool = False
+    error: bool = False
+
+
+MAX_BATCH = 5
+# Reversible UI actions that may be chained without a model turn in between.
+BATCHABLE_TOOLS = frozenset({
+    "click", "click_element", "click_text", "click_mark", "type_text", "press_key",
+    "scroll", "hover", "drag", "wait", "menu_item", "focus_window",
+})
+_SECRET_ASK_RE = re.compile(
+    r"\b(?:password|passcode|passphrase|pin(?:\s+code)?|one[- ]time\s+code|2fa|mfa|"
+    r"verification\s+code|security\s+code|cvv|cvc|card\s+number|social\s+security|"
+    r"seed\s+phrase|recovery\s+(?:phrase|key)|private\s+key|api\s+key)\b", re.I)
+
+
+def clean_history(history: list[dict] | None, max_turns: int = 20) -> list[dict]:
+    """Earlier conversation turns as strictly alternating user/assistant text
+    ending with an assistant turn (so the new goal follows as a user turn)."""
+    out: list[dict] = []
+    for turn in (history or [])[-max_turns:]:
+        role = turn.get("role") if isinstance(turn, dict) else None
+        text = str(turn.get("content") or "").strip() if isinstance(turn, dict) else ""
+        if role not in ("user", "assistant") or not text:
+            continue
+        if out and out[-1]["role"] == role:
+            out[-1]["content"] += "\n" + text[:4000]
+        else:
+            out.append({"role": role, "content": text[:4000]})
+    while out and out[0]["role"] != "user":
+        out.pop(0)
+    if out and out[-1]["role"] != "assistant":
+        out.pop()
+    return out
+
+
+def _stdin_answer(question: str, options: list[str]) -> str | None:
+    """CLI fallback for ask_user."""
+    import sys
+
+    if not sys.stdin or not sys.stdin.isatty():
+        return None
+    hint = f" [{' / '.join(options)}]" if options else ""
+    try:
+        return input(f"\n❓ {question}{hint}\n> ")
+    except (EOFError, OSError):
+        return None
+
+
 def promises_action(text: str | None) -> bool:
     return bool(text and _PROMISE_RE.search(text))
 
@@ -99,6 +157,12 @@ class Agent:
     ):
         self.cfg = config
         self.confirm_async: Callable[[str], Awaitable[bool]] | None = None
+        # ask_user hook: (question, options) -> answer, or None on timeout/skip.
+        # The sidecar sets it (question event + POST /answer); CLI uses stdin.
+        self.ask_async: Callable[[str, list[str]], Awaitable[str | None]] | None = None
+        # Structured run events (tool_call, tool_result, screenshot, text, plan,
+        # question) for the app's step log; no-op unless the sidecar sets it.
+        self.emit: Callable[[dict], None] | None = None
         # All model clients come from the router (configs/router.yaml). The old
         # eager Anthropic client here was never used and was built with the
         # supervisor's model id (a non-Anthropic model).
@@ -214,6 +278,220 @@ class Agent:
         if name == "click":
             blob += "|label=" + (getattr(focus, "label", "") or "")
         return (name, hashlib.sha1(blob.encode()).hexdigest()[:12])
+
+    def _emit(self, event: dict) -> None:
+        if self.emit is None:
+            return
+        try:
+            self.emit(event)
+        except Exception:  # noqa: BLE001 — the step log must never break a run
+            log.debug("emit failed", exc_info=True)
+
+    async def _execute_call(self, name: str, args: dict, *, step: int, rid: str,
+                            in_batch: bool = False) -> CallOutcome:
+        """Validate, gate, dispatch and verify ONE tool call.
+
+        Every path to a tool goes through here: top-level calls, each action
+        of batch_actions, and nothing else, so the policy gate cannot be
+        skipped. Raises stop_ctl.StopRequested when STOP is pressed.
+        """
+        if stop_ctl.is_set():
+            raise stop_ctl.StopRequested()
+        args = args if isinstance(args, dict) else {}
+        self.world.record_tool_call(name, args)
+        desc = self.registry.describe_call(name, args)
+        print(f"→ step {step}: {desc}")
+        self.world.record_action(desc)
+        self._hud_update(step=desc, last_action=desc)
+
+        if self.cfg.narrate and name not in (
+            "get_screen_context", "finish", "analyze_screen", "batch_actions",
+        ):
+            await self.say_async(desc)
+
+        spec = self.registry.get(name)
+        if INVALID_ARGS_KEY in args:
+            return CallOutcome(
+                f"ERROR: the arguments for {name} were not valid JSON "
+                f"({str(args[INVALID_ARGS_KEY])[:120]!r}). Call {name} again with a "
+                "JSON object that matches its schema.", error=True)
+        missing = [k for k in ((spec.json_schema.get("required") or []) if spec else [])
+                   if k not in args]
+        if missing:
+            return CallOutcome(f"ERROR: {name} needs {', '.join(missing)}. Call it again "
+                               "with every required argument.", error=True)
+        if spec and not self.policy.allows_tool(spec):
+            return CallOutcome(f"Permission denied for {name} ({spec.permission}).", error=True)
+
+        if name == "batch_actions":
+            if in_batch:
+                return CallOutcome("ERROR: batch_actions cannot be nested.", error=True)
+            return await self._execute_batch(args, step=step, rid=rid)
+        if name == "ask_user":
+            return await self._ask_user(args, rid=rid)
+
+        shell_text = self.policy.shell_payload(name, args) if spec else None
+        if shell_text is not None and not self.policy.allows_shell_path(shell_text):
+            return CallOutcome("Shell command blocked: path outside approved roots.", error=True)
+        blocked_path = next((fp for fp in self.policy.file_paths(name, args)
+                             if not self.policy.allows_file_path(fp)), None)
+        if blocked_path is not None:
+            return CallOutcome(f"Blocked: {blocked_path} is outside the approved folders "
+                               "(policy.approved_file_roots).", error=True)
+
+        untrusted = self._context_is_untrusted()
+        focus = self.focus.state()
+        if spec and name in ("click", "click_mark"):
+            focus = focus.with_label(self._click_label(args, name))
+        ro2 = bool(spec and self.policy.is_rule_of_two_risk(spec, args, untrusted, focus))
+        # Ask once per identical payload per run. Applies ONLY to rule-of-two
+        # confirmations — never to destructive or careful mode, and never to
+        # the _NEVER_GRANT tools.
+        if ro2 and spec and not self.policy.requires_confirm(spec, args, focus):
+            key = self._grant_key(name, args, focus)
+            if key is not None:
+                if key in self._ro2_grants:
+                    ro2 = False
+                else:
+                    self._ro2_grants.add(key)
+        if spec and (self.policy.requires_confirm(spec, args, focus) or ro2):
+            # Surface the EXACT operation for destructive / rule-of-two actions
+            # so injected screen text can't disguise the ask.
+            if ro2 or self.policy.impact_of(spec, args, focus) == "destructive":
+                confirm_text = self.policy.describe_operation(spec, args, focus)
+                if ro2:
+                    # Name the source: taint is sticky, so a confirm can land
+                    # several steps after the read that caused it.
+                    via = getattr(self.world, "untrusted_source", "") or "context"
+                    confirm_text = (f"⚠️ This run read untrusted content (via {via}). "
+                                    "Approve this EXACT action?\n" + confirm_text)
+            else:
+                confirm_text = desc
+            if self.confirm_async is not None:
+                ok = await self.confirm_async(confirm_text)
+            else:
+                ok = await asyncio.to_thread(self.policy.confirm, confirm_text)
+            self.audit.record("confirmation", run_id=rid, tool=name, confirmed=ok,
+                              summary=confirm_text[:200], extra={"rule_of_two": ro2})
+            if not ok:
+                return CallOutcome("User declined this action.", error=True)
+
+        # Update focus AFTER the gate (this call was judged against the PREVIOUS
+        # state) and BEFORE dispatch, so the next call is gated against where
+        # this one leaves the input target.
+        self.focus.observe(name, args, self.world)
+
+        if name == "finish":
+            return CallOutcome(str(args.get("message", "Done.")), finished=True)
+
+        # Verify-after-act: snapshot before mutating tools
+        if spec and spec.impact != "read":
+            self.world.begin_action_verification(self._verification_for_tool(name, args))
+
+        self._emit({"type": "tool_call", "step": step, "tool": name, "description": desc})
+        tool_start = time.time()
+        self.ctx.pending_images = []
+        observation = await asyncio.to_thread(self.registry.dispatch, name, args, self.ctx)
+        tool_err = observation.startswith("ERROR")
+        self.metrics.record_tool(name, (time.time() - tool_start) * 1000, error=tool_err)
+        first_line = observation.splitlines()[0][:120] if observation else ""
+        self.audit.record("action", run_id=rid, tool=name, tool_args=args,
+                          summary=first_line if not tool_err else f"ERROR: {first_line}")
+        print(f"   ↳ {first_line}")
+        self.world.record_observation(observation, source=name)
+
+        correction = None
+        if not self.world.verify(None, observation):
+            fail_msg = (f"VERIFY FAILED after {name}: screen state did not change as "
+                        f"expected (failures={self.world.step_failure_count}). "
+                        "Try analyze_screen, browser tools, or AppleScript.")
+            print(f"   ⚠️ {fail_msg}")
+            observation = observation + "\n\n" + fail_msg
+            correction = fail_msg
+        # AX miss detection for click
+        if name == "click" and "not found" in observation.lower():
+            correction = observation
+
+        images, self.ctx.pending_images = list(self.ctx.pending_images), []
+        self._emit({"type": "tool_result", "step": step, "tool": name, "ok": not tool_err,
+                    "summary": first_line})
+        for img in images:
+            self._emit({"type": "screenshot", "step": step, "tool": name, "path": img})
+        gui = bool(spec and spec.permission == "input" and spec.impact != "read" and not tool_err)
+        return CallOutcome(observation, images=images, correction=correction,
+                           gui_changed=gui, error=tool_err)
+
+    async def _execute_batch(self, args: dict, *, step: int, rid: str) -> CallOutcome:
+        """Run up to 5 reversible UI actions in a row, each through the full gate;
+        stop at the first one that fails, is blocked or is declined."""
+        actions = args.get("actions")
+        if not isinstance(actions, list) or not actions:
+            return CallOutcome("ERROR: actions must be a non-empty list of "
+                               "{tool, args} objects.", error=True)
+        if len(actions) > MAX_BATCH:
+            return CallOutcome(f"ERROR: at most {MAX_BATCH} actions per batch.", error=True)
+        lines: list[str] = []
+        images: list[str] = []
+        gui = False
+        correction = None
+        for n, action in enumerate(actions, 1):
+            tool = str(action.get("tool") or "") if isinstance(action, dict) else ""
+            sub_args = action.get("args") if isinstance(action, dict) else None
+            sub_args = sub_args if isinstance(sub_args, dict) else {}
+            if tool not in BATCHABLE_TOOLS:
+                lines.append(f"{n}. {tool or '?'}: ERROR not allowed in a batch "
+                             f"(allowed: {', '.join(sorted(BATCHABLE_TOOLS))}). Stopped.")
+                break
+            out = await self._execute_call(tool, sub_args, step=step, rid=rid, in_batch=True)
+            first = out.content.splitlines()[0][:160] if out.content else ""
+            lines.append(f"{n}. {self.registry.describe_call(tool, sub_args)}: {first}")
+            images = out.images or images
+            gui = gui or out.gui_changed
+            correction = out.correction or correction
+            if out.error or out.content.startswith(("ERROR", "User declined", "Blocked")):
+                lines.append(f"Stopped after action {n}; the rest did not run.")
+                return CallOutcome("\n".join(lines), images=images, correction=correction,
+                                   gui_changed=gui, error=True)
+        return CallOutcome("\n".join(lines), images=images, correction=correction,
+                           gui_changed=gui)
+
+    async def _ask_user(self, args: dict, *, rid: str) -> CallOutcome:
+        """Ask the user a question and wait (STOP-aware) for the answer."""
+        question = " ".join(str(args.get("question") or "").split())[:500]
+        options = [str(o)[:80] for o in (args.get("options") or []) if str(o).strip()][:6]
+        if not question:
+            return CallOutcome("ERROR: question is required.", error=True)
+        if _SECRET_ASK_RE.search(question):
+            return CallOutcome(
+                "ERROR: Aether never asks for passwords, passcodes, verification codes or "
+                "card numbers. Tell the user to enter it themselves, then continue.",
+                error=True)
+        self.audit.record("question", run_id=rid, summary=question[:200])
+        self._emit({"type": "question", "question": question, "options": options})
+        self._hud_update(step=f"Question: {question[:80]}")
+        await self.say_async(question)
+        if self.ask_async is not None:
+            task = asyncio.ensure_future(self.ask_async(question, options))
+        else:
+            task = asyncio.ensure_future(asyncio.to_thread(_stdin_answer, question, options))
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=0.5)
+                if done:
+                    answer = task.result()
+                    break
+                if stop_ctl.is_set():
+                    task.cancel()
+                    raise stop_ctl.StopRequested()
+        except asyncio.CancelledError:
+            answer = None
+        if not answer or not str(answer).strip():
+            return CallOutcome("The user did not answer. Continue with your best judgment "
+                               "if it is safe, or finish and say what you need.")
+        answer = str(answer).strip()[:2000]
+        # The answer is the user's own words: trusted, but still redacted like
+        # everything else that reaches the model.
+        return CallOutcome(f"The user answered: {self.policy.redact_text(answer)}")
 
     async def _try_fast_route(self, goal: str, rid: str) -> str | None:
         """Run an unambiguous one-step request without the model (fast_router.py).
@@ -516,10 +794,14 @@ class Agent:
 
     async def run_async(
         self, goal: str, *, run_id: str | None = None, reset_stop: bool = True,
+        history: list[dict] | None = None,
     ) -> str:
+        """Run one goal. ``history`` holds earlier turns of the same conversation
+        (alternating user/assistant text) so follow-ups like "now do the same
+        for the other file" have context."""
         try:
             return await self._run_async_inner(
-                goal, run_id=run_id, reset_stop=reset_stop)
+                goal, run_id=run_id, reset_stop=reset_stop, history=history)
         finally:
             # Crash-safe browser cleanup (in cdp mode this only disconnects).
             from ..effectors import browser as browser_fx
@@ -527,6 +809,7 @@ class Agent:
 
     async def _run_async_inner(
         self, goal: str, *, run_id: str | None = None, reset_stop: bool = True,
+        history: list[dict] | None = None,
     ) -> str:
         # Under concurrent runs the sidecar passes reset_stop=False so a new run
         # can't clear a sibling's pending STOP (the stop signal is process-global).
@@ -594,9 +877,10 @@ class Agent:
             if plan_result.steps:
                 plan_preview = " → ".join(plan_result.steps[:4])
                 print(f"📋 plan ({plan_result.source}): {plan_preview}")
+                self._emit({"type": "plan", "steps": list(plan_result.steps)[:12]})
                 self._hud_update(step=f"Plan: {plan_preview}")
 
-        messages: list[dict] = [{"role": "user", "content": goal}]
+        messages: list[dict] = [*clean_history(history), {"role": "user", "content": goal}]
         final = ""
         task_success = False
         pending_correction: str | None = None
@@ -695,140 +979,12 @@ class Agent:
             step_images = 0
             gui_changed = False
 
+            if resp.text:
+                self._emit({"type": "text", "step": step, "text": resp.text[:2000]})
             for call in resp.tool_calls:
-                if stop_ctl.is_set():
-                    final = "Stopped by user."
-                    self.world.mark_stopped()
-                    self._hud_update(status="stopped")
-                    await self.say_async(final)
-                    self.metrics.end_run("stopped")
-                    return final
-
-                name, args = call["name"], call["input"]
-                self.world.record_tool_call(name, args)
-                desc = self.registry.describe_call(name, args)
-                print(f"→ step {step}: {desc}")
-                self.world.record_action(desc)
-                self._hud_update(step=desc, last_action=desc)
-
-                if self.cfg.narrate and name not in (
-                    "get_screen_context", "finish", "analyze_screen",
-                ):
-                    await self.say_async(desc)
-
-                spec = self.registry.get(name)
-                if INVALID_ARGS_KEY in args:
-                    results.append({"tool_use_id": call["id"], "content": (
-                        f"ERROR: the arguments for {name} were not valid JSON "
-                        f"({str(args[INVALID_ARGS_KEY])[:120]!r}). Call {name} again with a "
-                        "JSON object that matches its schema.")})
-                    continue
-                missing = [k for k in ((spec.json_schema.get("required") or []) if spec else [])
-                           if k not in args]
-                if missing:
-                    results.append({"tool_use_id": call["id"], "content": (
-                        f"ERROR: {name} needs {', '.join(missing)}. Call it again with "
-                        "every required argument.")})
-                    continue
-                if spec and not self.policy.allows_tool(spec):
-                    results.append({
-                        "tool_use_id": call["id"],
-                        "content": f"Permission denied for {name} ({spec.permission}).",
-                    })
-                    continue
-
-                shell_text = self.policy.shell_payload(name, args) if spec else None
-                if shell_text is not None:
-                    if not self.policy.allows_shell_path(shell_text):
-                        results.append({
-                            "tool_use_id": call["id"],
-                            "content": "Shell command blocked: path outside approved roots.",
-                        })
-                        continue
-                blocked_path = next((fp for fp in self.policy.file_paths(name, args)
-                                     if not self.policy.allows_file_path(fp)), None)
-                if blocked_path is not None:
-                    results.append({
-                        "tool_use_id": call["id"],
-                        "content": (f"Blocked: {blocked_path} is outside the approved "
-                                    "folders (policy.approved_file_roots)."),
-                    })
-                    continue
-
-                untrusted = self._context_is_untrusted()
-                focus = self.focus.state()
-                if spec and name in ("click", "click_mark"):
-                    focus = focus.with_label(self._click_label(args, name))
-                ro2 = bool(spec and self.policy.is_rule_of_two_risk(
-                    spec, args, untrusted, focus))
-                # Ask once per identical payload per run. Applies ONLY to
-                # rule-of-two confirmations — never to destructive or careful
-                # mode, and never to the _NEVER_GRANT tools.
-                if ro2 and spec and not self.policy.requires_confirm(spec, args, focus):
-                    key = self._grant_key(name, args, focus)
-                    if key is not None:
-                        if key in self._ro2_grants:
-                            ro2 = False
-                        else:
-                            self._ro2_grants.add(key)
-                if spec and (self.policy.requires_confirm(spec, args, focus) or ro2):
-                    # Surface the EXACT operation for destructive / rule-of-two
-                    # actions so injected screen text can't disguise the ask.
-                    if ro2 or self.policy.impact_of(spec, args, focus) == "destructive":
-                        confirm_text = self.policy.describe_operation(spec, args, focus)
-                        if ro2:
-                            # Name the source: taint is sticky, so a confirm can
-                            # land several steps after the read that caused it.
-                            via = getattr(self.world, "untrusted_source", "") or "context"
-                            confirm_text = (
-                                f"⚠️ This run read untrusted content (via {via}). "
-                                "Approve this EXACT action?\n" + confirm_text
-                            )
-                    else:
-                        confirm_text = desc
-                    if self.confirm_async is not None:
-                        ok = await self.confirm_async(confirm_text)
-                    else:
-                        ok = await asyncio.to_thread(self.policy.confirm, confirm_text)
-                    self.audit.record(
-                        "confirmation",
-                        run_id=rid,
-                        tool=name,
-                        confirmed=ok,
-                        summary=confirm_text[:200],
-                        extra={"rule_of_two": ro2},
-                    )
-                    if not ok:
-                        results.append({
-                            "tool_use_id": call["id"],
-                            "content": "User declined this action.",
-                        })
-                        continue
-
-                # Update focus AFTER the gate (this call was judged against the
-                # PREVIOUS state) and BEFORE dispatch, so the next call is gated
-                # against where this one leaves the input target.
-                self.focus.observe(name, args, self.world)
-
-                if name == "finish":
-                    final = args.get("message", "Done.")
-                    results.append({"tool_use_id": call["id"], "content": final})
-                    done = True
-                    task_success = True
-                    continue
-
-                # Verify-after-act: snapshot before mutating tools
-                if spec and spec.impact != "read":
-                    exp = self._verification_for_tool(name, args)
-                    self.world.begin_action_verification(exp)
-
-                tool_start = time.time()
-                self.ctx.pending_images = []
                 try:
-                    observation = await asyncio.to_thread(
-                        self.registry.dispatch, name, args, self.ctx
-                    )
-                    tool_err = observation.startswith("ERROR")
+                    outcome = await self._execute_call(
+                        call["name"], call["input"], step=step, rid=rid)
                 except stop_ctl.StopRequested:
                     final = "Stopped by user."
                     self.world.mark_stopped()
@@ -836,44 +992,18 @@ class Agent:
                     await self.say_async(final)
                     self.metrics.end_run("stopped")
                     return final
-
-                self.metrics.record_tool(
-                    name, (time.time() - tool_start) * 1000, error=tool_err
-                )
-                first_line = observation.splitlines()[0][:120] if observation else ""
-                self.audit.record(
-                    "action",
-                    run_id=rid,
-                    tool=name,
-                    tool_args=args,
-                    summary=first_line if not tool_err else f"ERROR: {first_line}",
-                )
-                print(f"   ↳ {first_line}")
-                self.world.record_observation(observation, source=name)
-
-                verified = self.world.verify(None, observation)
-                if not verified:
-                    fail_msg = (
-                        f"VERIFY FAILED after {name}: screen state did not change "
-                        f"as expected (failures={self.world.step_failure_count}). "
-                        "Try analyze_screen, browser tools, or AppleScript."
-                    )
-                    print(f"   ⚠️ {fail_msg}")
-                    observation = observation + "\n\n" + fail_msg
-                    correction_note = fail_msg
-
-                images, self.ctx.pending_images = list(self.ctx.pending_images), []
-                result = {"tool_use_id": call["id"], "content": observation}
-                if images:
-                    result["images"] = images
-                    step_images += len(images)
+                result = {"tool_use_id": call["id"], "content": outcome.content}
+                if outcome.images:
+                    result["images"] = outcome.images
+                    step_images += len(outcome.images)
                 results.append(result)
-                if spec and spec.permission == "input" and spec.impact != "read" and not tool_err:
-                    gui_changed = True
-
-                # AX miss detection for click
-                if name == "click" and "not found" in observation.lower():
-                    correction_note = observation
+                gui_changed = gui_changed or outcome.gui_changed
+                if outcome.correction:
+                    correction_note = outcome.correction
+                if outcome.finished:
+                    final = outcome.content
+                    done = True
+                    task_success = True
 
             if gui_changed and not step_images and results and not done:
                 shot = await asyncio.to_thread(self._verification_screenshot)

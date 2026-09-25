@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 60,
+  "tool_count": 62,
   "tools": [
     {
       "name": "get_screen_context",
@@ -185,6 +185,14 @@
     {
       "name": "set_volume",
       "file": "set_volume.json"
+    },
+    {
+      "name": "batch_actions",
+      "file": "batch_actions.json"
+    },
+    {
+      "name": "ask_user",
+      "file": "ask_user.json"
     },
     {
       "name": "click_element",

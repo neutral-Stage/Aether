@@ -96,8 +96,12 @@ from .apps_api import router as _apps_router  # noqa: E402
 from .fleet_api import register_sink as _register_fleet_sink  # noqa: E402
 from .fleet_api import router as _fleet_router  # noqa: E402
 from .mcp_server import router as _mcp_router  # noqa: E402
+from .sessions_api import router as _sessions_router  # noqa: E402
+from . import questions  # noqa: E402
+from . import session_store  # noqa: E402
 
 app.include_router(_fleet_router)
+app.include_router(_sessions_router)
 app.include_router(_mcp_router)
 app.include_router(_apps_router)
 
@@ -170,6 +174,8 @@ class RunRequest(BaseModel):
     narrate: bool = False
     stream: bool = True
     max_steps: int | None = None
+    # Continue this conversation; omitted → a new session is started.
+    session_id: str | None = None
 
 
 class STTRequest(BaseModel):
@@ -185,6 +191,11 @@ class TTSRequest(BaseModel):
 class ConfirmRequest(BaseModel):
     request_id: str
     approved: bool
+
+
+class AnswerRequest(BaseModel):
+    request_id: str
+    answer: str | None = None     # None or empty = the user skipped the question
 
 
 class VoiceMetricsRequest(BaseModel):
@@ -372,6 +383,7 @@ async def _run_agent_task(
     max_steps: int | None,
     event_queue: asyncio.Queue[dict[str, Any]],
     loop: asyncio.AbstractEventLoop,
+    session_id: str | None = None,
 ) -> None:
     state = RunState(run_id=run_id, goal=goal)
     _run_registry.register(state)
@@ -394,7 +406,13 @@ async def _run_agent_task(
     agent = Agent(cfg, hud=hud)
     if stream_summary:
         agent.world.set_screen_stream(stream_summary)
-    patch_agent_for_sidecar(agent, hud, event_queue, loop)
+    patch_agent_for_sidecar(agent, hud, event_queue, loop, run_id=run_id)
+    history: list[dict[str, str]] = []
+    if session_id:
+        try:
+            history = await asyncio.to_thread(session_store.history, session_id)
+        except Exception:  # noqa: BLE001 — a broken store must not block the run
+            log.warning("could not load session %s", session_id, exc_info=True)
     if not narrate:
         agent.cfg.raw.setdefault("agent", {})["narrate"] = False
 
@@ -402,7 +420,8 @@ async def _run_agent_task(
     # other run in flight, so a new run can't clear a sibling's pending STOP.
     # The reset itself happens inside agent.run_async (single source of truth).
     reset_stop = len(_run_registry.active()) <= 1  # this run is already registered
-    await _broadcast({"type": "run_start", "run_id": run_id, "goal": goal})
+    await _broadcast({"type": "run_start", "run_id": run_id, "goal": goal,
+                      "session_id": session_id})
 
     async def pump_events() -> None:
         while True:
@@ -425,7 +444,8 @@ async def _run_agent_task(
     pump_task = asyncio.create_task(pump_events())
 
     try:
-        result = await agent.run_async(goal, run_id=run_id, reset_stop=reset_stop)
+        result = await agent.run_async(goal, run_id=run_id, reset_stop=reset_stop,
+                                       history=history)
         state.status = "idle"
         state.result = result
         state.finished_at = time.time()
@@ -439,6 +459,7 @@ async def _run_agent_task(
             "run_id": run_id,
             "result": result,
             "world": state.world_snapshot,
+            "session_id": session_id,
         }
         event_queue.put_nowait(done_event)
         await _broadcast(done_event)
@@ -461,6 +482,13 @@ async def _run_agent_task(
             state.status = "stopped"
             state.finished_at = time.time()
             _persist_run(state)
+        if session_id:
+            try:
+                await asyncio.to_thread(
+                    session_store.add_turn, session_id, run_id, goal,
+                    state.result or state.error or "", agent.world.task_trace(), state.status)
+            except Exception:  # noqa: BLE001
+                log.warning("could not save turn to session %s", session_id, exc_info=True)
 
 
 def _skill_store():
@@ -1146,6 +1174,17 @@ async def confirm_action(
     return {"status": "ok", "approved": body.approved}
 
 
+@app.post("/answer")
+async def answer_question(
+    body: AnswerRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """The user's answer to an ask_user question (empty = skipped)."""
+    if not questions.resolve_answer(body.request_id, body.answer):
+        raise HTTPException(404, "Unknown or expired question")
+    return {"status": "ok"}
+
+
 @app.post("/metrics/voice")
 async def voice_metrics(
     body: VoiceMetricsRequest,
@@ -1330,11 +1369,18 @@ async def run_agent(
             "(see configs/router.yaml).",
         )
 
+    session_id = (body.session_id or "").strip() or None
+    if session_id and not await asyncio.to_thread(session_store.exists, session_id):
+        raise HTTPException(404, "Unknown session")
+    if session_id is None:
+        session_id = await asyncio.to_thread(session_store.create_session, goal)
+
     run_id = uuid.uuid4().hex[:12]
     loop = asyncio.get_running_loop()
 
     async def run_coro(event_queue: asyncio.Queue[dict[str, Any]]) -> None:
-        event_queue.put_nowait({"type": "run_start", "run_id": run_id, "goal": goal})
+        event_queue.put_nowait({"type": "run_start", "run_id": run_id, "goal": goal,
+                                "session_id": session_id})
         await _run_agent_task(
             run_id,
             goal,
@@ -1344,6 +1390,7 @@ async def run_agent(
             max_steps=body.max_steps,
             event_queue=event_queue,
             loop=loop,
+            session_id=session_id,
         )
 
     if body.stream or "text/event-stream" in request.headers.get("accept", ""):
@@ -1359,10 +1406,12 @@ async def run_agent(
         max_steps=body.max_steps,
         event_queue=queue,
         loop=loop,
+        session_id=session_id,
     )
     done = _run_registry.get(run_id)
     return {
         "run_id": run_id,
+        "session_id": session_id,
         "status": done.status if done else "idle",
         "result": done.result if done else None,
         "error": done.error if done else None,

@@ -200,6 +200,12 @@ def _h_set_volume(args: dict, _ctx: "AgentContext") -> str:
         muted=bool(muted) if muted is not None else None)
 
 
+def _h_agent_only(_args: dict, _ctx: "AgentContext") -> str:
+    # batch_actions and ask_user are run by the agent loop itself (each batched
+    # action goes through the policy gate; questions go to the app's panel).
+    return "ERROR: this tool is only available inside an agent run."
+
+
 def needs_paste(text: str) -> bool:
     """Long or non-BMP text goes in by paste: faster and exact."""
     return len(text) > 200 or any(ord(c) > 0xFFFF for c in text)
@@ -245,6 +251,11 @@ def describe(name: str, args: dict) -> str | None:
         return "read the selected text"
     if name == "notify":
         return "show a notification"
+    if name == "batch_actions":
+        n = len(args.get("actions") or []) if isinstance(args.get("actions"), list) else 0
+        return f"{n} actions in a row"
+    if name == "ask_user":
+        return f"ask: {str(args.get('question', ''))[:60]}"
     if name == "quit_app":
         return f"quit {args.get('name', '')}"
     if name == "set_volume":
@@ -398,4 +409,28 @@ def specs() -> list["ToolSpec"]:
                 "level": {"type": "integer"}, "change": {"type": "integer"},
                 "muted": {"type": "boolean"}}},
             permission="input", impact="reversible", handler=_h_set_volume),
+        ToolSpec(
+            name="batch_actions",
+            description=("Do up to 5 simple UI actions in a row without looking in between, "
+                         "e.g. click a field, type, press return. Each action is "
+                         "{tool, args} using click, click_element, click_text, click_mark, "
+                         "type_text, press_key, scroll, hover, drag, wait, menu_item or "
+                         "focus_window. Stops at the first failure. Use only when you are "
+                         "sure what each step does."),
+            json_schema={"type": "object", "properties": {"actions": {
+                "type": "array", "maxItems": 5, "items": {"type": "object", "properties": {
+                    "tool": {"type": "string"}, "args": {"type": "object"}},
+                    "required": ["tool", "args"]}}}, "required": ["actions"]},
+            permission="input", impact="reversible", handler=_h_agent_only),
+        ToolSpec(
+            name="ask_user",
+            description=("Ask the user a short question and wait for the answer, when the "
+                         "request is ambiguous and a wrong guess would cost them something. "
+                         "Offer options when there are a few obvious choices. Never ask for "
+                         "passwords or codes."),
+            json_schema={"type": "object", "properties": {
+                "question": {"type": "string"},
+                "options": {"type": "array", "items": {"type": "string"}, "maxItems": 6}},
+                "required": ["question"]},
+            permission="none", impact="read", handler=_h_agent_only),
     ]

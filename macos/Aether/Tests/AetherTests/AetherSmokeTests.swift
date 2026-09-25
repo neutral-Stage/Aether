@@ -80,3 +80,42 @@ final class DoctorReportTests: XCTestCase {
         XCTAssertNil(DoctorReport.parse(Data("nope".utf8)))
     }
 }
+
+final class SidecarEventParseTests: XCTestCase {
+    func testQuestionNeedsRequestId() {
+        XCTAssertTrue(SidecarEvent.parse(["type": "question", "question": "Which?"], fallbackGoal: "").isEmpty)
+        let events = SidecarEvent.parse(
+            ["type": "question", "request_id": "r1", "question": "Which?", "options": ["a", "b"]],
+            fallbackGoal: "")
+        guard case let .question(rid, question, options)? = events.first else {
+            return XCTFail("no question event")
+        }
+        XCTAssertEqual(rid, "r1")
+        XCTAssertEqual(question, "Which?")
+        XCTAssertEqual(options, ["a", "b"])
+    }
+
+    func testRunStartAndDoneCarryTheSession() {
+        let start = SidecarEvent.parse(["type": "run_start", "run_id": "x", "session_id": "s1"],
+                                       fallbackGoal: "the goal")
+        XCTAssertEqual(start.count, 2)
+        guard case .session(let sid) = start[0] else { return XCTFail("no session") }
+        XCTAssertEqual(sid, "s1")
+        guard case let .runStart(runId, goal) = start[1] else { return XCTFail("no run_start") }
+        XCTAssertEqual(runId, "x")
+        XCTAssertEqual(goal, "the goal")
+        let done = SidecarEvent.parse(["type": "done", "result": "ok", "session_id": "s1"],
+                                      fallbackGoal: "")
+        guard case .done(let result, _) = done[1] else { return XCTFail("no done") }
+        XCTAssertEqual(result, "ok")
+    }
+
+    func testStepsAndUnknownTypes() {
+        let events = SidecarEvent.parse(["type": "tool_call", "description": "click 'Save'"],
+                                        fallbackGoal: "")
+        guard case .step(let obj)? = events.first else { return XCTFail("no step") }
+        XCTAssertEqual(obj["description"] as? String, "click 'Save'")
+        XCTAssertTrue(SidecarEvent.parse(["type": "mystery"], fallbackGoal: "").isEmpty)
+        XCTAssertTrue(SidecarEvent.parse([:], fallbackGoal: "").isEmpty)
+    }
+}

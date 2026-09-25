@@ -52,9 +52,11 @@ class NullTTS:
         return
 
 
-def patch_agent_for_sidecar(agent, hud: StreamingHUD, emit_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
-    """Route spoken lines to SSE; disable Python TTS; wire async confirmations."""
-    from . import confirmation
+def patch_agent_for_sidecar(agent, hud: StreamingHUD, emit_queue: asyncio.Queue,
+                            loop: asyncio.AbstractEventLoop, *, run_id: str = ""):
+    """Route spoken lines to SSE; disable Python TTS; wire async confirmations,
+    questions (ask_user) and structured step events."""
+    from . import confirmation, questions
 
     hud.bind(emit_queue, loop)
     agent.hud = hud
@@ -70,6 +72,17 @@ def patch_agent_for_sidecar(agent, hud: StreamingHUD, emit_queue: asyncio.Queue,
         return await confirmation.request_confirmation(description)
 
     agent.confirm_async = confirm_hook
+
+    async def ask_hook(question: str, options: list[str]) -> str | None:
+        return await questions.request_answer(question, options, run_id=run_id,
+                                              broadcaster=_broadcast)
+
+    agent.ask_async = ask_hook
+
+    def emit(event: dict) -> None:
+        loop.call_soon_threadsafe(emit_queue.put_nowait, {**event, "run_id": run_id})
+
+    agent.emit = emit
 
     def say_with_event(text: str) -> None:
         loop.call_soon_threadsafe(

@@ -22,6 +22,12 @@ final class AppState: ObservableObject {
     private var voiceSettings = VoiceSettings()
     private var betaSettings = BetaSettings()
     private var pendingConfirmId: String?
+    private var pendingQuestionId: String?
+    /// Conversation of the last run; a request within `followUpWindow` of it
+    /// continues the conversation, so "now do the same for…" has context.
+    private var sessionId: String?
+    private var lastRunEnded: Date?
+    private let followUpWindow: TimeInterval = 600
 
     let world = WorldModel()
     let client = OrchestratorClient()
@@ -34,6 +40,7 @@ final class AppState: ObservableObject {
     let hud = HUDPanel()
     let commandBar = CommandBarPanel()
     let confirmation = ConfirmationPanel()
+    let questionPanel = QuestionPanel()
     let nativeEffector = NativeEffectorServer(port: AetherConfig.nativeEffectorPort)
     lazy var stopController = StopController { [weak self] in
         self?.handleStop()
@@ -185,7 +192,12 @@ final class AppState: ObservableObject {
         world.status = "working"
         refreshHUD()
 
-        client.run(goal: trimmed) { [weak self] event in
+        var options = RunOptions()
+        if let sid = sessionId, let ended = lastRunEnded,
+           Date().timeIntervalSince(ended) < followUpWindow {
+            options.sessionId = sid
+        }
+        client.run(goal: trimmed, options: options) { [weak self] event in
             guard let self else { return }
             switch event {
             case .runStart(_, let g):
@@ -197,12 +209,18 @@ final class AppState: ObservableObject {
             case .say(let text):
                 Task { await self.speakWithBargeIn(text) }
             case .done(let result, let snap):
+                self.lastRunEnded = Date()
+                self.questionPanel.hide()
+                self.pendingQuestionId = nil
                 self.lastResult = result
                 self.world.apply(world: snap)
                 self.world.status = "idle"
                 self.world.currentStep = result
                 Task { await self.speakWithBargeIn(result) }
             case .error(let msg):
+                self.lastRunEnded = Date()
+                self.questionPanel.hide()
+                self.pendingQuestionId = nil
                 self.lastResult = msg
                 self.world.status = "idle"
                 self.world.currentStep = msg
@@ -220,6 +238,15 @@ final class AppState: ObservableObject {
                 }
             case .runRequest:
                 break  // proactive auto-run is handled by the persistent /events stream
+            case .question(let requestId, let question, let options):
+                self.showQuestion(requestId: requestId, question: question, options: options)
+            case .session(let sid):
+                self.sessionId = sid
+            case .step(let payload):
+                if (payload["type"] as? String) == "tool_call",
+                   let desc = payload["description"] as? String {
+                    self.world.currentStep = desc
+                }
             }
             self.refreshHUD()
         }
@@ -245,6 +272,30 @@ final class AppState: ObservableObject {
             }
         )
         Task { await speakConfirmationPrompt(description) }
+    }
+
+    private func showQuestion(requestId: String, question: String, options: [String]) {
+        pendingQuestionId = requestId
+        world.currentStep = "Question: \(question)"
+        refreshHUD()
+        questionPanel.show(question: question, options: options) { [weak self] answer in
+            self?.answerQuestion(answer)
+        }
+    }
+
+    /// Send the answer (typed, picked, or spoken with push-to-talk); nil skips.
+    func answerQuestion(_ answer: String?) {
+        guard let requestId = pendingQuestionId else { return }
+        pendingQuestionId = nil
+        questionPanel.hide()
+        Task { await client.submitAnswer(requestId: requestId, answer: answer) }
+        refreshHUD()
+    }
+
+    /// Forget the current conversation; the next request starts a new one.
+    func newConversation() {
+        sessionId = nil
+        lastRunEnded = nil
     }
 
     private func speakConfirmationPrompt(_ description: String) async {
@@ -298,6 +349,9 @@ final class AppState: ObservableObject {
         voice.stopAll()
         confirmation.hide()
         pendingConfirmId = nil
+        questionPanel.hide()
+        pendingQuestionId = nil
+        lastRunEnded = Date()
         world.status = "stopped"
         world.currentStep = "Stopped"
         refreshHUD()
@@ -347,6 +401,10 @@ final class AppState: ObservableObject {
         wakeWord.processPartialTranscript(text)
         if pendingConfirmId != nil {
             handleVoiceConfirmation(text)
+            return
+        }
+        if pendingQuestionId != nil {
+            answerQuestion(text)
             return
         }
         if text.lowercased().contains("stop") {
