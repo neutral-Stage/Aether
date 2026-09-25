@@ -61,6 +61,20 @@ policy:
     - "~"                        # QUOTED: bare ~ is YAML null → [None] (breaks the path guard)
   network_allowlist: []          # empty = allow all; set hosts in careful mode
 
+# macOS Seatbelt confinement for commands Aether starts (aether/effectors/sandbox.py).
+# Writes stay inside policy.approved_file_roots (+ extra_write_roots, temp, caches);
+# startup files, LaunchAgents, git hooks and Aether's own config stay read-only;
+# credential files (SSH keys, cloud CLIs, keychains, browser profiles) are unreadable.
+sandbox:
+  enabled: true
+  shell: true                  # run_shell
+  coders: true                 # delegate_to_coder, fleet agents, agent terminals, graph gates
+  shell_network: true          # false => run_shell has no network (also off when capabilities.network is off)
+  coder_network: true          # coding CLIs need their provider's API
+  extra_write_roots: []        # e.g. "/opt/homebrew" to let run_shell install with brew
+  extra_deny_read: []
+  protect_self: true           # Aether's config, data dir, .env and audit key
+
 # Signed append-only audit log (§6.7 FR-29)
 audit:
   enabled: true

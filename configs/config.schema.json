@@ -34,6 +34,19 @@
         "verify_screenshots": { "type": "string", "enum": ["auto", "always", "off"] }
       }
     },
+    "sandbox": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "shell": { "type": "boolean" },
+        "coders": { "type": "boolean" },
+        "shell_network": { "type": "boolean" },
+        "coder_network": { "type": "boolean" },
+        "extra_write_roots": { "type": "array", "items": { "type": "string" } },
+        "extra_deny_read": { "type": "array", "items": { "type": "string" } },
+        "protect_self": { "type": "boolean" }
+      }
+    },
     "mcp_server": {
       "type": "object",
       "properties": {

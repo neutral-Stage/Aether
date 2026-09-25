@@ -23,6 +23,7 @@ class ShellResult:
     returncode: int
     stdout: str
     stderr: str
+    note: str = ""          # e.g. why the sandbox blocked the command
 
     def summary(self, limit: int = 1500) -> str:
         out = (self.stdout or "").strip()
@@ -30,20 +31,32 @@ class ShellResult:
         body = out if out else err
         if len(body) > limit:
             body = body[:limit] + "\n…(truncated)"
-        return f"exit={self.returncode}\n{body}" if body else f"exit={self.returncode}"
+        text = f"exit={self.returncode}\n{body}" if body else f"exit={self.returncode}"
+        return f"{text}\n[{self.note}]" if self.note else text
 
 
 def is_destructive(command: str) -> bool:
     return bool(_DESTRUCTIVE_RE.search(command or ""))
 
 
-def run(command: str, timeout: int = 60, cwd: str | None = None) -> ShellResult:
+def run(command: str, timeout: int = 60, cwd: str | None = None, *,
+        sandboxed: bool | None = None) -> ShellResult:
+    """Run ``command`` with /bin/sh. On macOS it runs under Aether's Seatbelt
+    profile (see sandbox.py) unless sandbox.shell is off or sandboxed=False."""
+    from . import sandbox
+
+    argv, profile = (["/bin/sh", "-c", command], None)
+    if sandboxed is not False:
+        argv, profile = sandbox.wrap_shell(command)
     try:
-        proc = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
-            timeout=timeout, cwd=cwd,
+        proc = subprocess.run(  # noqa: S603 — argv is /bin/sh -c, optionally under sandbox-exec
+            argv, capture_output=True, text=True, timeout=timeout, cwd=cwd,
+            env=sandbox.child_env(),
         )
-        return ShellResult(proc.returncode, proc.stdout, proc.stderr)
+        note = ""
+        if proc.returncode != 0:
+            note = sandbox.explain_denial(proc.stderr, profile) or ""
+        return ShellResult(proc.returncode, proc.stdout, proc.stderr, note)
     except subprocess.TimeoutExpired:
         return ShellResult(124, "", f"Timed out after {timeout}s")
     except Exception as e:  # noqa: BLE001

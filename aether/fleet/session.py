@@ -177,7 +177,10 @@ class SubprocessSession(AgentSession):
     """Shared pipe-based subprocess plumbing (claude / headless CLIs)."""
 
     def _spawn(self, cmd: list[str], *, stdin_pipe: bool = False) -> None:
+        from ..effectors import sandbox
+
         env = build_subprocess_env(self.env_allowlist)
+        cmd, _profile = sandbox.wrap_coder(cmd, str(self.workspace))
         self._proc = subprocess.Popen(  # noqa: S603 — commands come from a fixed table
             cmd,
             cwd=self.workspace,

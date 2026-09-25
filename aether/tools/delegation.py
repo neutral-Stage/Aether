@@ -24,9 +24,11 @@ AGENT_COMMANDS: dict[str, list[str]] = {
 # only THIS process; a spawned CLI inherits none of it. Where the child exposes
 # its own gate we set it, so an approved delegation is still bounded.
 #
-# opencode and cursor expose no equivalent flag. For those two the only
-# enforcement is process-level: validated cwd, scrubbed env, timeout, killpg.
-# That is stated rather than papered over.
+# opencode and cursor expose no equivalent flag. For those the enforcement is
+# process-level: validated cwd, scrubbed env, timeout, killpg, and on macOS
+# Aether's Seatbelt profile (effectors/sandbox.py: writes only in the
+# workspace, credentials unreadable). Codex keeps its own Seatbelt sandbox,
+# which cannot nest inside ours.
 _CONSTRAINT_FLAGS: dict[str, dict[str, list[str]]] = {
     "claude": {
         "plan": ["--permission-mode", "plan"],
@@ -187,6 +189,12 @@ def delegate_to_coder_structured(
     full_cmd = cmd + _constraint_flags(cmd[0], permission_mode) + [prompt]
     env = _build_sandbox_env(env_allowlist)
     cwd = str(cwd_path)
+    # Process-level confinement on top of the CLI's own gate: writes only in
+    # the workspace, credentials unreadable (macOS Seatbelt; see sandbox.py).
+    from ..effectors import sandbox
+
+    agent_exe = full_cmd[0]
+    full_cmd, sandbox_profile = sandbox.wrap_coder(full_cmd, cwd)
 
     # Popen (not subprocess.run) so the global STOP can kill it in-flight: we
     # register a closer that terminates the process, and also poll stop_ctl in
@@ -201,8 +209,8 @@ def delegate_to_coder_structured(
     except FileNotFoundError:
         return DelegationResult(
             stdout="", stderr="", exit_code=127,
-            summary=f"command not found: {full_cmd[0]}",
-            cwd=cwd, agent=full_cmd[0], error=f"command not found: {full_cmd[0]}",
+            summary=f"command not found: {agent_exe}",
+            cwd=cwd, agent=agent_exe, error=f"command not found: {agent_exe}",
         )
 
     def _killpg(sig: int) -> None:
@@ -240,7 +248,7 @@ def delegate_to_coder_structured(
                         _killpg(signal.SIGKILL)
                     return DelegationResult(
                         stdout="", stderr="", exit_code=130,
-                        summary="stopped by user", cwd=cwd, agent=full_cmd[0],
+                        summary="stopped by user", cwd=cwd, agent=agent_exe,
                         error="STOP — delegation cancelled",
                     )
                 if remaining <= 0:
@@ -252,24 +260,28 @@ def delegate_to_coder_structured(
                     return DelegationResult(
                         stdout="", stderr="", exit_code=124,
                         summary=f"timed out after {timeout_sec}s",
-                        cwd=cwd, agent=full_cmd[0], timed_out=True,
-                        error=f"{full_cmd[0]} timed out after {timeout_sec}s",
+                        cwd=cwd, agent=agent_exe, timed_out=True,
+                        error=f"{agent_exe} timed out after {timeout_sec}s",
                     )
         stdout = (raw_out or "")[:8000]
         stderr = (raw_err or "")[:4000]
         summary = _summarize_output(stdout, stderr, proc.returncode)
+        if proc.returncode != 0:
+            hint = sandbox.explain_denial(stderr, sandbox_profile)
+            if hint:
+                summary = f"{summary} [{hint}]"
         return DelegationResult(
             stdout=stdout,
             stderr=stderr,
             exit_code=proc.returncode,
             summary=summary,
             cwd=cwd,
-            agent=resolved_agent if agent != "auto" else full_cmd[0],
+            agent=resolved_agent if agent != "auto" else agent_exe,
         )
     except Exception as exc:  # noqa: BLE001
         return DelegationResult(
             stdout="", stderr="", exit_code=1, summary=str(exc),
-            cwd=cwd, agent=full_cmd[0], error=f"running {full_cmd[0]}: {exc}",
+            cwd=cwd, agent=agent_exe, error=f"running {agent_exe}: {exc}",
         )
     finally:
         stop_ctl.unregister_closer(_kill)

@@ -29,8 +29,10 @@ Structured checklist for the Aether codebase with findings and mitigations.
 | Durable persistence | ✅ Phase 16 | `remember_fact` / `watch_app` confirm under untrusted content |
 | Untrusted-content source | ✅ Phase 17a | Sticky run-scoped taint latched at the observation choke point (all channels) |
 | Shell-reaching tools | ✅ Phase 17b | `Policy.shell_payload` routes terminal spawns / PTY steers / `do shell script` through the path guard |
-| Sub-agent constraints | ✅ Phase 17c | `--permission-mode` / `--sandbox` passed to delegated CLIs (none exist for opencode/cursor) |
+| Sub-agent constraints | ✅ Phase 17c | `--permission-mode` / `--sandbox` passed to delegated CLIs; opencode/cursor/claude also run under Aether's Seatbelt profile (Phase B) |
 | `approved_file_roots` guard | ✅ Phase 17d | Tokenized; over-block fixed (9/21 → 0/21) and traversal/flag-value escapes closed |
+| Process sandbox | ✅ Phase B | macOS Seatbelt for `run_shell`, coding agents, agent terminals and graph gates: writes only in approved roots, credentials unreadable, startup files / git hooks / Aether's config read-only, no Apple Events, `open` or signals outside the sandbox, network per policy (`aether/effectors/sandbox.py`) |
+| Click targets | ✅ Phase B | `click_element`, `click_text`, `click_mark` judged by the label they press; fuzzy matches onto sensitive controls refuse |
 
 ---
 
@@ -62,6 +64,11 @@ Structured checklist for the Aether codebase with findings and mitigations.
 - [x] `policy.allows_shell_path()` blocks paths outside `approved_file_roots`
 - [x] Destructive shell patterns flagged
 - [x] `capabilities.shell` toggle
+- [x] `run_shell` runs under a Seatbelt profile (Phase B): writes limited to
+  `approved_file_roots`, credential stores unreadable, persistence paths and
+  Aether's own files read-only, network off when `capabilities.network` or
+  `sandbox.shell_network` is off; Aether's sidecar token and API keys are
+  removed from the command's environment
 
 **Finding:** Heuristic path detection may miss obfuscated paths.  
 **Mitigation:** Careful mode; expand tests in `tests/security/test_red_team.py`.
@@ -85,6 +92,9 @@ Structured checklist for the Aether codebase with findings and mitigations.
 
 **Finding:** Delegation still runs arbitrary CLIs with user PATH.  
 **Mitigation:** Disable `delegation.enabled` or restrict to known agents; structured output only.
+Since Phase B the CLI process runs under Aether's Seatbelt profile (writes only
+in the workspace and the CLI's own state folders), except Codex, which applies
+its own Seatbelt sandbox (Seatbelt cannot nest).
 
 ### Audit log & secrets
 
@@ -171,6 +181,13 @@ Categories: prompt injection, red-team, MCP SSRF/policy, skill replay, sidecar h
    12 authority-shaped prose items); the 12-trace table is a construction.
    Before trusting "6 confirmations", run the latch in shadow mode — counting,
    gating nothing — against a week of real `audit.jsonl`.
+10. **The Seatbelt profile is allow-by-default.** It denies writes outside
+    the roots, credential reads, Apple Events, LaunchServices opens and signals
+    to other processes, but other IPC stays open: `launchctl submit` can still
+    start a job outside the sandbox, the `security` CLI can ask for Keychain
+    items (macOS prompts for items not shared with it), and `run_applescript`
+    is not sandboxed at all (it is gated as code execution instead). The
+    profile is tested on real macOS in CI (`tests/security/test_sandbox_live.py`).
 
 ---
 

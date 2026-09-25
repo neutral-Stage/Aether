@@ -24,10 +24,13 @@ def run_gate(node: TaskNode, cwd: str) -> tuple[bool, str]:
     """Run a node's deterministic gate command in its worktree. No gate = pass."""
     if not node.gate_cmd:
         return True, ""
+    from ..effectors import sandbox
+
+    # Agent-authored command: confined to the node's worktree like the agent.
+    argv, _profile = sandbox.wrap_coder(["/bin/sh", "-c", node.gate_cmd], cwd)
     try:
-        res = subprocess.run(  # noqa: S602 — gate_cmd is agent-authored, runs in the node worktree
-            node.gate_cmd, shell=True, cwd=cwd,
-            capture_output=True, text=True, timeout=600,
+        res = subprocess.run(  # noqa: S603 — /bin/sh -c gate_cmd, sandboxed to the worktree
+            argv, cwd=cwd, capture_output=True, text=True, timeout=600,
         )
     except Exception as e:  # noqa: BLE001
         return False, f"gate error: {e}"
