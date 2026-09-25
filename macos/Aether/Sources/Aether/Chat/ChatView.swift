@@ -53,10 +53,35 @@ struct ChatView: View {
                         }
                     }
                 }
+                if !store.grants.isEmpty {
+                    GrantsBar(grants: store.grants, onRevoke: store.revokeGrants)
+                }
                 Divider()
                 ChatComposer(store: store)
             }
         }
+    }
+}
+
+/// What the user allowed for this conversation without asking again, and a way to undo it.
+struct GrantsBar: View {
+    let grants: [String]
+    var onRevoke: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.shield")
+                .foregroundStyle(.orange)
+            Text("Allowed without asking in this chat: " + grants.joined(separator: "; "))
+                .font(.caption)
+                .lineLimit(2)
+            Spacer()
+            Button("Revoke", action: onRevoke)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.08))
     }
 }
 

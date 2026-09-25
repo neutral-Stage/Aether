@@ -74,7 +74,7 @@ struct ChatTranscript: Equatable {
             messages[i].narration += text
         case .step(let payload):
             applyStep(payload, at: i)
-        case let .confirmRequest(_, description):
+        case let .confirmRequest(_, description, _):
             messages[i].waitingOn = "Waiting for your OK: \(description)"
         case .draftRequest:
             messages[i].waitingOn = "Waiting for you to check the draft before it goes out"

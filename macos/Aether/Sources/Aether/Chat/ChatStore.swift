@@ -11,6 +11,8 @@ final class ChatStore: ObservableObject {
     @Published var transcript = ChatTranscript()
     @Published var draft = ""
     @Published var loadError: String?
+    /// What the user allowed for the rest of the open conversation.
+    @Published var grants: [String] = []
 
     weak var app: AppState?
     private let client: OrchestratorClient
@@ -30,11 +32,29 @@ final class ChatStore: ObservableObject {
         selected = id
         transcript = ChatTranscript()
         loadError = nil
+        grants = []
         guard let id else { return }
         do {
             transcript.load(turns: try await client.fetchSession(id))
         } catch {
             loadError = error.localizedDescription
+        }
+        await refreshGrants()
+    }
+
+    func refreshGrants() async {
+        guard let id = selected else {
+            grants = []
+            return
+        }
+        grants = await client.listGrants(session: id)
+    }
+
+    func revokeGrants() {
+        guard let id = selected else { return }
+        Task {
+            await client.revokeGrants(session: id)
+            await refreshGrants()
         }
     }
 
@@ -82,7 +102,10 @@ final class ChatStore: ObservableObject {
             self.transcript.apply(event)
             switch event {
             case .done, .error, .stopped:
-                Task { await self.refreshSessions() }
+                Task {
+                    await self.refreshSessions()
+                    await self.refreshGrants()
+                }
             default:
                 break
             }

@@ -144,6 +144,22 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
   told what was actually sent.
 - [x] Voice "yes" approves the draft unedited; "no" declines.
 
+### Rule-of-two approvals (`aether/core/session_grants.py`)
+
+- [x] **Fixed:** a declined rule-of-two action used to be remembered as approved, so an
+  identical retry in the same run went through without asking. The approval is now
+  recorded only after a yes (`tests/unit/test_session_grants.py`).
+- [x] **Fixed:** the "same action" key used only some arguments (command, text, url…), so
+  approving one `write_file` or `open_path` approved every path in that run. The key now
+  covers every argument.
+- [x] "Yes, and don't ask again in this conversation" is offered only for rule-of-two
+  confirmations: never for destructive actions, careful mode, drafts, or the tools that
+  are never granted (agents, memory writes, app watchers). It covers one exact call, or
+  one website for tools that only open a page there; tools that send data never get a
+  site-wide grant.
+- [x] Grants live in memory only, are listed in the chat window with Revoke, end when the
+  conversation is deleted or the sidecar restarts, and every use is audited.
+
 ### Screen memory (`aether/screen_memory/`)
 
 - [x] Off by default; text only, no images kept; secrets redacted before storing.
@@ -251,6 +267,10 @@ Categories: prompt injection, red-team, MCP SSRF/policy, skill replay, sidecar h
     other window, and so is a sensitive page whose title looks ordinary. Redaction catches
     key-shaped secrets, not personal details. The owner can exclude apps and title globs,
     or pause.
+13. **A website grant allows sending data in page addresses.** "Open pages on
+    example.com" also allows `https://example.com/?q=<anything>`. The grant is the user's
+    explicit choice for that one site, but a site chosen by injected text and then
+    approved can receive data this way for the rest of the conversation.
 
 ---
 

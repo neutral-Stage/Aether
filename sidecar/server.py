@@ -110,6 +110,7 @@ from .chips_api import router as _chips_router  # noqa: E402
 from .screen_memory_api import router as _screen_memory_router  # noqa: E402
 from . import screen_memory_api  # noqa: E402
 from . import questions  # noqa: E402
+from aether.core import session_grants  # noqa: E402
 from . import session_store  # noqa: E402
 
 app.include_router(_fleet_router)
@@ -220,6 +221,9 @@ class ConfirmRequest(BaseModel):
     approved: bool
     # The user's edits to an outgoing draft (field → new value).
     edits: dict[str, str] | None = None
+    # Approve the same thing for the rest of the conversation (rule-of-two only;
+    # ignored unless the request offered it).
+    remember: bool = False
 
 
 class AnswerRequest(BaseModel):
@@ -440,6 +444,8 @@ async def _run_agent_task(
     if stream_summary:
         agent.world.set_screen_stream(stream_summary)
     patch_agent_for_sidecar(agent, hud, event_queue, loop, run_id=run_id)
+    if session_id:
+        agent.session_grants = session_grants.for_session(session_id)
     history: list[dict[str, str]] = []
     if session_id:
         try:
@@ -1278,7 +1284,8 @@ async def confirm_action(
     body: ConfirmRequest,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    ok = confirmation.resolve_confirmation(body.request_id, body.approved, body.edits)
+    ok = confirmation.resolve_confirmation(body.request_id, body.approved, body.edits,
+                                           body.remember)
     if not ok:
         raise HTTPException(404, "Unknown or expired confirmation request")
     return {"status": "ok", "approved": body.approved}

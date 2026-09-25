@@ -358,9 +358,10 @@ final class AppState: ObservableObject {
                 self.world.currentStep = "Stopped"
             case .ping:
                 break
-            case .confirmRequest(let requestId, let description):
+            case let .confirmRequest(requestId, description, grant):
                 if self.pendingConfirmId != requestId {
-                    self.showConfirmation(requestId: requestId, description: description)
+                    self.showConfirmation(requestId: requestId, description: description,
+                                          grant: grant)
                 }
             case let .draftRequest(requestId, description, fields):
                 if self.pendingConfirmId != requestId {
@@ -423,15 +424,17 @@ final class AppState: ObservableObject {
             })
     }
 
-    private func showConfirmation(requestId: String, description: String) {
+    private func showConfirmation(requestId: String, description: String, grant: String = "") {
         pendingConfirmId = requestId
         world.currentStep = "Confirm: \(description)"
         refreshHUD()
         confirmation.show(
             description: description,
-            onApprove: { [weak self] in
+            grant: grant,
+            onApprove: { [weak self] remember in
                 guard let self else { return }
-                Task { await self.client.submitConfirmation(requestId: requestId, approved: true) }
+                Task { await self.client.submitConfirmation(requestId: requestId, approved: true,
+                                                            remember: remember) }
                 self.pendingConfirmId = nil
                 self.refreshHUD()
             },
@@ -451,11 +454,11 @@ final class AppState: ObservableObject {
         case let .draftRequest(requestId, description, fields):
             guard pendingConfirmId != requestId else { return }
             showDraft(requestId: requestId, description: description, fields: fields)
-        case let .confirmRequest(requestId, description):
+        case let .confirmRequest(requestId, description, grant):
             // Runs started elsewhere (realtime voice, triggers) ask here too; a run's own
             // stream may deliver the same request, so show it once.
             guard pendingConfirmId != requestId else { return }
-            showConfirmation(requestId: requestId, description: description)
+            showConfirmation(requestId: requestId, description: description, grant: grant)
         case let .question(requestId, question, options):
             guard pendingQuestionId != requestId else { return }
             showQuestion(requestId: requestId, question: question, options: options)

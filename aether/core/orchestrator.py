@@ -27,6 +27,7 @@ from .focus import FocusTracker
 from .policy import Policy, PolicyConfig, normalize_file_roots
 from .planner import plan_goal, replan
 from . import drafts
+from . import session_grants
 from . import stop as stop_ctl
 from .audit_log import AuditLog
 from ..knowledge import loader as knowledge
@@ -165,6 +166,12 @@ class Agent:
         # Outgoing messages: (description, draft fields) -> (approved, the user's edits).
         self.confirm_draft_async: Callable[[str, list[dict]],
                                            Awaitable[tuple[bool, dict[str, str]]]] | None = None
+        # Rule-of-two confirmation that can be extended to the whole conversation:
+        # (description, what the grant would cover) -> (approved, for the conversation).
+        self.confirm_grant_async: Callable[[str, str],
+                                           Awaitable[tuple[bool, bool]]] | None = None
+        # The conversation's grants (sidecar runs with a session); None elsewhere.
+        self.session_grants: session_grants.SessionGrants | None = None
         # ask_user hook: (question, options) -> answer, or None on timeout/skip.
         # The sidecar sets it (question event + POST /answer); CLI uses stdin.
         self.ask_async: Callable[[str, list[str]], Awaitable[str | None]] | None = None
@@ -282,22 +289,17 @@ class Agent:
                               "spawn_graph", "send_to_agent", "delegate_to_coder"})
 
     def _grant_key(self, name: str, args: dict, focus) -> tuple[str, str] | None:
-        """Key on the EXACT whitespace-normalized literal payload. Keying on the
-        head binary would let an approved `git diff` grant
+        """Key on the EXACT whitespace-normalized literal payload: every argument.
+        Keying on the head binary would let an approved `git diff` grant
         `git config --global alias.x '!sh'`; keying on host would let an
-        approved https://ok.com/page grant https://ok.com/?d=SECRET."""
+        approved https://ok.com/page grant https://ok.com/?d=SECRET; leaving an
+        argument out would let one approved write_file grant every path."""
         if name in self._NEVER_GRANT:
             return None
-        if name.startswith("my_"):
-            # self-written tools take arbitrary arguments: grant only the exact call
-            blob = json.dumps(args, sort_keys=True, default=str)
-            return (name, hashlib.sha1(blob.encode()).hexdigest()[:12])
-        blob = "|".join(
-            f"{k}={' '.join(str(args[k]).split())}"
-            for k in ("command", "source", "text", "url", "to", "subject",
-                      "body", "key", "prompt")
-            if k in args)
-        if name == "click":
+        norm = {str(k): (" ".join(v.split()) if isinstance(v, str) else v)
+                for k, v in args.items()}
+        blob = json.dumps(norm, sort_keys=True, default=str)
+        if name in ("click", "click_mark"):
             blob += "|label=" + (getattr(focus, "label", "") or "")
         return (name, hashlib.sha1(blob.encode()).hexdigest()[:12])
 
@@ -390,16 +392,27 @@ class Agent:
         if spec and name in ("click", "click_mark"):
             focus = focus.with_label(self._click_label(args, name))
         ro2 = bool(spec and self.policy.is_rule_of_two_risk(spec, args, untrusted, focus))
-        # Ask once per identical payload per run. Applies ONLY to rule-of-two
+        # Ask once per identical payload per run, or not at all when the user
+        # approved it for the whole conversation. Applies ONLY to rule-of-two
         # confirmations — never to destructive or careful mode, and never to
-        # the _NEVER_GRANT tools.
+        # the _NEVER_GRANT tools. A grant is recorded only after a yes.
+        grant_key = None
+        session_scope: tuple[tuple[str, str], str] | None = None
         if ro2 and spec and not self.policy.requires_confirm(spec, args, focus):
-            key = self._grant_key(name, args, focus)
-            if key is not None:
-                if key in self._ro2_grants:
+            grant_key = self._grant_key(name, args, focus)
+            if grant_key is not None:
+                session_scope = session_grants.scope(name, args, grant_key)
+                if grant_key in self._ro2_grants:
                     ro2 = False
-                else:
-                    self._ro2_grants.add(key)
+                elif (self.session_grants is not None
+                        and session_scope[0] in self.session_grants):
+                    ro2 = False
+                    self.audit.record("confirmation", run_id=rid, tool=name, confirmed=True,
+                                      summary=self.policy.describe_operation(
+                                          spec, args, focus)[:200],
+                                      extra={"rule_of_two": True, "granted_for": "conversation",
+                                             "grant": self.session_grants.label(
+                                                 session_scope[0])})
         edited: list[str] = []          # draft fields the user changed before approving
         if spec and (self.policy.requires_confirm(spec, args, focus) or ro2):
             # Surface the EXACT operation for destructive / rule-of-two actions
@@ -415,15 +428,28 @@ class Agent:
             else:
                 confirm_text = desc
             draft = drafts.draft_fields(name, args) if self.confirm_draft_async else None
+            remember = False
+            offer = (session_scope is not None and self.session_grants is not None
+                     and self.confirm_grant_async is not None)
             if draft is not None and self.confirm_draft_async is not None:
                 ok, edits = await self.confirm_draft_async(confirm_text, draft)
                 if ok:
                     args, edited = drafts.apply_edits(args, draft, edits)
+            elif offer and session_scope is not None and self.confirm_grant_async is not None:
+                ok, remember = await self.confirm_grant_async(confirm_text, session_scope[1])
+                remember = bool(ok and remember)
             else:
                 ok = await self._confirm(confirm_text)
+            if ok and grant_key is not None and not edited:
+                self._ro2_grants.add(grant_key)
+                if remember and session_scope is not None and self.session_grants is not None:
+                    self.session_grants.add(*session_scope)
+            extra: dict = {"rule_of_two": ro2, "edited": edited}
+            if remember and session_scope is not None:
+                extra["granted_for"] = "conversation"
+                extra["grant"] = session_scope[1]
             self.audit.record("confirmation", run_id=rid, tool=name, confirmed=ok,
-                              summary=confirm_text[:200],
-                              extra={"rule_of_two": ro2, "edited": edited})
+                              summary=confirm_text[:200], extra=extra)
             if not ok:
                 return CallOutcome("User declined this action.", error=True)
             if edited:

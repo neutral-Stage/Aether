@@ -9,7 +9,8 @@ enum SidecarEvent {
     case error(String)
     case stopped
     case ping
-    case confirmRequest(requestId: String, description: String)
+    /// `grant`: what "allow for this conversation" would cover, or "" when not offered.
+    case confirmRequest(requestId: String, description: String, grant: String)
     /// An outgoing message to approve, with fields the user can edit first.
     case draftRequest(requestId: String, description: String, fields: [DraftField])
     case fleet([String: Any])
@@ -60,7 +61,8 @@ enum SidecarEvent {
             let text = obj["description"] as? String ?? "Proceed?"
             let fields = (obj["draft"] as? [[String: Any]] ?? []).compactMap(DraftField.parse)
             if fields.isEmpty {
-                out.append(.confirmRequest(requestId: rid, description: text))
+                out.append(.confirmRequest(requestId: rid, description: text,
+                                           grant: obj["grant"] as? String ?? ""))
             } else {
                 out.append(.draftRequest(requestId: rid, description: text, fields: fields))
             }
@@ -295,13 +297,14 @@ final class OrchestratorClient: ObservableObject {
     }
 
     func submitConfirmation(requestId: String, approved: Bool,
-                            edits: [String: String]? = nil) async {
+                            edits: [String: String]? = nil, remember: Bool = false) async {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("confirm")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = ["request_id": requestId, "approved": approved]
         if let edits, !edits.isEmpty { body["edits"] = edits }
+        if remember { body["remember"] = true }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
         _ = try? await URLSession.shared.data(for: request)
@@ -520,6 +523,20 @@ final class OrchestratorClient: ObservableObject {
                           userInfo: [NSLocalizedDescriptionKey: "Conversation not found"])
         }
         return obj["turns"] as? [[String: Any]] ?? []
+    }
+
+    /// What the user allowed for the rest of a conversation.
+    func listGrants(session id: String) async -> [String] {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("sessions/\(id)/grants")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return []
+        }
+        return obj["grants"] as? [String] ?? []
+    }
+
+    func revokeGrants(session id: String) async {
+        _ = try? await URLSession.shared.data(for: sessionsRequest("sessions/\(id)/grants",
+                                                                   method: "DELETE"))
     }
 
     func deleteSession(_ id: String) async {

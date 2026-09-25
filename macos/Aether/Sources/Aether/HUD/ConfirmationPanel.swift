@@ -3,7 +3,10 @@ import SwiftUI
 
 struct ConfirmationView: View {
     let description: String
-    let onApprove: () -> Void
+    /// What "allow for this conversation" covers; empty when it isn't offered.
+    var grant = ""
+    /// true: also allow `grant` for the rest of the conversation.
+    let onApprove: (Bool) -> Void
     let onDecline: () -> Void
 
     var body: some View {
@@ -21,8 +24,20 @@ struct ConfirmationView: View {
                 Button("No", role: .cancel, action: onDecline)
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Yes", role: .destructive, action: onApprove)
+                Button("Yes", role: .destructive) { onApprove(false) }
                     .keyboardShortcut(.defaultAction)
+            }
+            if !grant.isEmpty {
+                Button {
+                    onApprove(true)
+                } label: {
+                    Text("Yes, and don't ask again in this conversation to \(grant)")
+                        .font(.caption)
+                        .multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.link)
+                .help("Only for this conversation, and only for actions asked about because "
+                      + "Aether read untrusted content. Revoke from the chat window.")
             }
         }
         .padding(18)
@@ -116,14 +131,16 @@ final class ConfirmationPanel: NSObject {
 
     func show(
         description: String,
-        onApprove: @escaping () -> Void,
+        grant: String = "",
+        onApprove: @escaping (Bool) -> Void,
         onDecline: @escaping () -> Void
     ) {
         hide()
         let view = ConfirmationView(
             description: description,
-            onApprove: { [weak self] in
-                onApprove()
+            grant: grant,
+            onApprove: { [weak self] remember in
+                onApprove(remember)
                 self?.hide()
             },
             onDecline: { [weak self] in
@@ -134,7 +151,7 @@ final class ConfirmationPanel: NSObject {
         let host = NSHostingView(rootView: view)
         hosting = host
         let p = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 180),
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: grant.isEmpty ? 180 : 220),
             styleMask: [.nonactivatingPanel, .hudWindow],
             backing: .buffered,
             defer: false

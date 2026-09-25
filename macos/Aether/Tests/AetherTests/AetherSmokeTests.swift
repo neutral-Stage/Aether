@@ -290,7 +290,7 @@ final class ChatTranscriptTests: XCTestCase {
                        "summary": "ok"]))
         t.apply(.token(step: 2, text: "Done"))
         XCTAssertEqual(t.messages[1].narration, "Done")
-        t.apply(.confirmRequest(requestId: "r", description: "delete x"))
+        t.apply(.confirmRequest(requestId: "r", description: "delete x", grant: ""))
         XCTAssertEqual(t.messages[1].waitingOn, "Waiting for your OK: delete x")
         t.apply(.done(result: "Your Downloads folder is open.", world: nil))
         let reply = t.messages[1]
@@ -385,5 +385,25 @@ final class ScreenMemoryStatusTests: XCTestCase {
         status.running = false
         XCTAssertFalse(status.isRecording)
         XCTAssertTrue(status.summary.hasPrefix("Not running"))
+    }
+}
+
+final class ConversationGrantTests: XCTestCase {
+    func testConfirmRequestCarriesTheOfferedGrant() {
+        let offered = SidecarEvent.parse(["type": "confirm_request", "request_id": "r1",
+                                          "description": "open https://docs.example.com",
+                                          "grant": "open pages on docs.example.com"],
+                                         fallbackGoal: "")
+        guard case let .confirmRequest(rid, _, grant)? = offered.first else {
+            return XCTFail("expected a confirmation")
+        }
+        XCTAssertEqual(rid, "r1")
+        XCTAssertEqual(grant, "open pages on docs.example.com")
+        let plain = SidecarEvent.parse(["type": "confirm_request", "request_id": "r2",
+                                        "description": "delete x"], fallbackGoal: "")
+        guard case let .confirmRequest(_, _, none)? = plain.first else {
+            return XCTFail("expected a confirmation")
+        }
+        XCTAssertEqual(none, "")
     }
 }
