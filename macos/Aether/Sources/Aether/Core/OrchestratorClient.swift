@@ -402,6 +402,38 @@ final class OrchestratorClient: ObservableObject {
         return obj["text"] as? String ?? ""
     }
 
+    // MARK: quick skills
+
+    func listQuickSkills() async -> [QuickSkill] {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("quick-skills")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return []
+        }
+        return (obj["skills"] as? [[String: Any]] ?? []).compactMap(QuickSkill.parse)
+    }
+
+    func saveQuickSkill(_ skill: QuickSkill) async throws {
+        var body = skill.json
+        if skill.id.isEmpty { body.removeValue(forKey: "id") }
+        _ = try await postJSON("quick-skills", body)
+    }
+
+    func deleteQuickSkill(_ id: String) async {
+        _ = try? await URLSession.shared.data(for: sessionsRequest("quick-skills/\(id)",
+                                                                   method: "DELETE"))
+    }
+
+    /// Run a skill on what was captured; returns the text and where it should go.
+    func runQuickSkill(_ id: String, selection: String = "", clipboard: String = "",
+                       spoken: String = "") async throws -> (text: String, destination: String,
+                                                            file: String?) {
+        let obj = try await postJSON("quick-skills/\(id)/run",
+                                     ["selection": selection, "clipboard": clipboard,
+                                      "spoken": spoken], timeout: 90)
+        return (obj["text"] as? String ?? "", obj["destination"] as? String ?? "show",
+                obj["file"] as? String)
+    }
+
     // MARK: conversations (chat window)
 
     private func sessionsRequest(_ path: String, method: String = "GET") -> URLRequest {

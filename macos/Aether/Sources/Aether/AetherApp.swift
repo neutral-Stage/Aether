@@ -15,6 +15,7 @@ struct AetherApp: App {
                 }
                 Button("Chat (⌃⌘A)") { app.openChat() }
                 RecentChatsMenu(chat: app.chat) { app.openChat(session: $0) }
+                QuickSkillsMenu(controller: app.quickSkills)
                 Button("Open Window") { app.showMainWindow = true }
                 Button("Command Bar (⌥Space)") { app.toggleCommandBar() }
                 Button("New Conversation") { app.newConversation() }
@@ -66,6 +67,23 @@ struct RecentChatsMenu: View {
             ForEach(chat.sessions.prefix(5)) { s in
                 Button("  " + s.title) { open(s.id) }
                     .lineLimit(1)
+            }
+        }
+    }
+}
+
+/// Quick skills, one click to run (the hotkey is shown when there is one).
+struct QuickSkillsMenu: View {
+    @ObservedObject var controller: QuickSkillsController
+
+    var body: some View {
+        if !controller.skills.isEmpty {
+            Text("Quick skills").font(.caption2).foregroundStyle(.secondary)
+            ForEach(controller.skills) { skill in
+                Button("  " + skill.name + (skill.hotkey.isEmpty ? "" : "  ⌃⌥\(skill.hotkey)")) {
+                    Task { await controller.trigger(skill.id) }
+                }
+                .lineLimit(1)
             }
         }
     }

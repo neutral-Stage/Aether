@@ -96,6 +96,8 @@ final class AppState: ObservableObject {
     private let transformHotkey = CommandBarHotkeyController(modifiers: [.control, .option],
                                                              keyCode: 17)
     lazy var dictation = DictationController(audio: audio, client: client)
+    /// Quick skills on ⌃⌥1–9 (prompt + capture + destination).
+    lazy var quickSkills = QuickSkillsController(client: client, audio: audio)
     private let transformPanel = TransformPanel()
     let updateChecker = SparkleUpdateController()
     let sidecar = SidecarSupervisor()
@@ -175,6 +177,9 @@ final class AppState: ObservableObject {
         dictationHotkey.start()
         transformHotkey.start()
         dictation.onStatus = { [weak self] status in self?.showStatus(status) }
+        quickSkills.onStatus = { [weak self] status in self?.showStatus(status) }
+        quickSkills.speak = { [weak self] text in await self?.speakWithBargeIn(text) }
+        Task { await quickSkills.reload() }
         audio.refreshMicPermission()
         stt.refreshAuthorization()
         Task {
@@ -607,7 +612,8 @@ final class AppState: ObservableObject {
     }
 
     func beginPTT() {
-        guard !isPTTHeld, dictation.state == .idle else { return }
+        guard !isPTTHeld, dictation.state == .idle, quickSkills.recordingSkillId == nil
+        else { return }
         if realtimeActive {
             isPTTHeld = true
             if realtimePlayer.isPlaying {
@@ -848,6 +854,10 @@ struct MainWindowView: View {
             }
             DisclosureGroup("About you & things to try") {
                 AboutYouView(client: app.client)
+            }
+            .font(.caption)
+            DisclosureGroup("Quick skills (⌃⌥1–9)") {
+                QuickSkillsView(controller: app.quickSkills, client: app.client)
             }
             .font(.caption)
 
