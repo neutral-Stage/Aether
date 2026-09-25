@@ -31,7 +31,12 @@ voice:
 
 Set `OPENAI_API_KEY` in `.env`. Swift connects to `ws://127.0.0.1:8765/voice/realtime` when both flags are set.
 
-When `voice.mode: realtime`, the STT→LLM→TTS pipeline is bypassed in favor of the WebSocket session (product path still evolving).
+When `voice.mode: realtime`, push-to-talk (hold ⌃Space) goes to the Realtime model instead of the transcribe → run → speak pipeline:
+
+- The microphone streams only while you hold the keys; releasing ends your turn. Nothing is uploaded otherwise.
+- The reply plays as it streams (24 kHz). Pressing the keys while it speaks stops it, and the conversation is cut at what you actually heard.
+- The model has two tools: `look_at_screen`, which attaches a screenshot as an image before the tool's answer, and `do_task`, which hands a request to Aether's agent. Tasks go through the same policy gate, confirmations and audit log as any run; confirmation panels appear as usual.
+- `voice.realtime_model` (default `gpt-realtime`) and `voice.realtime_speaker` (default `marin`) choose the model and its voice.
 
 ## Enabling streaming TTS
 
@@ -50,7 +55,7 @@ Requires `GROQ_API_KEY` for Groq Orpheus synthesis.
 | No hardware AEC | Mic gate + duck only; speakers near mic may still false-trigger | 7 (mitigated) / 10 |
 | Cloud STT round-trip | Multi-second voice latency vs NFR-1 (800 ms) | 10 |
 | Streaming TTS | Chunks fetched over HTTP; playback starts after full WAV assembled (MVP) | 11 |
-| Realtime beta | Requires `beta.realtime_voice: true`; no Swift mic uplink yet | 10 spike |
+| Realtime beta | Requires `beta.realtime_voice: true` and an OpenAI key; not yet tried on a real Mac | E5 |
 | Energy wake word | High false-positive rate vs Porcupine | 7 stub → Porcupine prod |
 
 ## True AEC path (future)

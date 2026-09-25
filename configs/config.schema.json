@@ -134,6 +134,8 @@
       "properties": {
         "mode": { "enum": ["pipeline", "realtime"] },
         "realtime_provider": { "type": "string" },
+        "realtime_model": { "type": "string" },
+        "realtime_speaker": { "type": "string" },
         "tts": { "enum": ["groq", "kokoro", "macos", "none"] },
         "tts_stream": { "type": "boolean" },
         "tts_model": { "type": "string" },

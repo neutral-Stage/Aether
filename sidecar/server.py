@@ -1175,14 +1175,34 @@ async def voice_realtime_bridge(websocket: WebSocket) -> None:
     from aether.voice.realtime import RealtimeConfig, RealtimeSession
 
     rt_cfg = RealtimeConfig.from_env(
-        voice=str(cfg.get("voice", "tts_voice", default="alloy")),
+        model=str(cfg.get("voice", "realtime_model", default="") or "") or None,
+        voice=str(cfg.get("voice", "realtime_speaker", default="") or "") or None,
     )
     if rt_cfg is None:
         await websocket.close(code=4401, reason="OPENAI_API_KEY not configured")
         return
 
     await websocket.accept()
-    session = RealtimeSession(config=rt_cfg)
+    loop = asyncio.get_running_loop()
+
+    async def screen() -> str | None:
+        from aether.perception import screen as screen_mod
+
+        return await asyncio.to_thread(screen_mod.try_capture_to_file)
+
+    async def do_task(goal: str) -> str:
+        # A normal agent run: same policy gate, confirmations and audit log.
+        run_id = f"rt-{uuid.uuid4().hex[:8]}"
+        await _run_agent_task(run_id, goal, careful=False, local_only=False, narrate=False,
+                              max_steps=None, event_queue=asyncio.Queue(), loop=loop)
+        state = _run_registry.get(run_id)
+        if state is None:
+            return "The task did not start."
+        if state.status == "error":
+            return f"It failed: {state.error}"
+        return state.result or "Done."
+
+    session = RealtimeSession(config=rt_cfg, screen_fn=screen, task_fn=do_task)
     metrics = MetricsCollector.get()
     session_t0 = time.perf_counter()
     metrics.inc("voice_realtime_sessions")
@@ -1208,6 +1228,10 @@ async def voice_realtime_bridge(websocket: WebSocket) -> None:
                 await session.send_audio_chunk(raw)
             elif mtype == "input_audio.commit":
                 await session.commit_audio()
+            elif mtype == "input_audio.clear":
+                await session.clear_audio()
+            elif mtype == "interrupt":
+                await session.interrupt(msg.get("item_id"), int(msg.get("audio_end_ms") or 0))
             elif mtype == "input_text":
                 await session.send_text(str(msg.get("text", "")))
             elif mtype == "close":

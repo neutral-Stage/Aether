@@ -197,6 +197,8 @@ delegation:
 voice:
   mode: pipeline                   # pipeline | realtime (Phase 10 beta)
   realtime_provider: openai        # openai (requires OPENAI_API_KEY)
+  realtime_model: gpt-realtime     # OpenAI Realtime model
+  realtime_speaker: marin          # the voice it speaks with
   tts: groq                    # groq | kokoro (local, pip install kokoro) | macos | none
   tts_stream: true               # prefer POST /tts/stream when available
   tts_model: canopylabs/orpheus-v1-english   # Groq Orpheus TTS model ID

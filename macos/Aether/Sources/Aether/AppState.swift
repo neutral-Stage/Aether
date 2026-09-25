@@ -93,6 +93,12 @@ final class AppState: ObservableObject {
     let updateChecker = SparkleUpdateController()
     let sidecar = SidecarSupervisor()
     lazy var realtimeSession = RealtimeVoiceSession()
+    private lazy var realtimePlayer = PCMStreamPlayer()
+    private lazy var realtimeMic = RealtimeMicStreamer()
+    /// Realtime voice replaces the transcribe → run → speak pipeline for push-to-talk.
+    private var realtimeActive: Bool {
+        voiceSettings.usesRealtimeMode && realtimeSession.isConnected
+    }
     lazy var screenStream = ScreenStreamManager()
 
     init() {
@@ -166,6 +172,7 @@ final class AppState: ObservableObject {
                 }
                 await tts.prewarm(Self.fillers)
                 if settings.usesRealtimeMode {
+                    wireRealtime()
                     await realtimeSession.connect()
                 }
             }
@@ -309,7 +316,9 @@ final class AppState: ObservableObject {
             case .ping:
                 break
             case .confirmRequest(let requestId, let description):
-                self.showConfirmation(requestId: requestId, description: description)
+                if self.pendingConfirmId != requestId {
+                    self.showConfirmation(requestId: requestId, description: description)
+                }
             case .fleet(let payload):
                 if let sid = payload["session_id"] as? String,
                    let state = payload["state"] as? String {
@@ -318,7 +327,9 @@ final class AppState: ObservableObject {
             case .runRequest:
                 break  // proactive auto-run is handled by the persistent /events stream
             case .question(let requestId, let question, let options):
-                self.showQuestion(requestId: requestId, question: question, options: options)
+                if self.pendingQuestionId != requestId {
+                    self.showQuestion(requestId: requestId, question: question, options: options)
+                }
             case .session(let sid):
                 self.sessionId = sid
             case .pointer(let targets):
@@ -369,6 +380,14 @@ final class AppState: ObservableObject {
     /// Events from the persistent /events stream (proactive runs, guide mode).
     func handleBackgroundEvent(_ event: SidecarEvent) {
         switch event {
+        case let .confirmRequest(requestId, description):
+            // Runs started elsewhere (realtime voice, triggers) ask here too; a run's own
+            // stream may deliver the same request, so show it once.
+            guard pendingConfirmId != requestId else { return }
+            showConfirmation(requestId: requestId, description: description)
+        case let .question(requestId, question, options):
+            guard pendingQuestionId != requestId else { return }
+            showQuestion(requestId: requestId, question: question, options: options)
         case let .talkToken(id, text):
             guard id == streamingTalkId else { return }
             talkPartial += text
@@ -520,6 +539,8 @@ final class AppState: ObservableObject {
         speechChain?.cancel()
         speechChain = nil
         fillerTask?.cancel()
+        realtimeMic.stop()
+        realtimePlayer.stop()
         streamingTalkId = nil
         if isTalkHeld { cancelTalk() }
         if let guideId = activeGuideId {
@@ -535,8 +556,47 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func wireRealtime() {
+        realtimeSession.onAudioDelta = { [weak self] audio, itemId in
+            self?.realtimePlayer.append(pcm16: audio, itemId: itemId)
+        }
+        realtimeSession.onTextDelta = { [weak self] delta in
+            guard let self else { return }
+            self.world.currentStep = self.realtimeSession.lastTranscript.isEmpty
+                ? delta : self.realtimeSession.lastTranscript
+            self.refreshHUD()
+        }
+        realtimeSession.onReplyDone = { [weak self] text in
+            guard let self, !text.isEmpty else { return }
+            self.lastResult = text
+        }
+        realtimeMic.onChunk = { [weak self] chunk in
+            guard let self, self.isPTTHeld else { return }
+            Task { await self.realtimeSession.sendAudio(pcm16: chunk) }
+        }
+    }
+
     func beginPTT() {
         guard !isPTTHeld else { return }
+        if realtimeActive {
+            isPTTHeld = true
+            if realtimePlayer.isPlaying {
+                // Talking over the reply: stop it where the user stopped hearing it.
+                let heard = realtimePlayer.heardMs
+                let item = realtimePlayer.itemId
+                realtimePlayer.stop()
+                Task { await realtimeSession.interrupt(itemId: item, audioEndMs: heard) }
+            }
+            Task { await realtimeSession.clearInput() }
+            do {
+                try realtimeMic.start()
+                world.currentStep = "Listening…"
+            } catch {
+                world.currentStep = error.localizedDescription
+            }
+            refreshHUD()
+            return
+        }
         isPTTHeld = true
         voice.stopAll()
         try? audio.startRecording()
@@ -545,6 +605,14 @@ final class AppState: ObservableObject {
 
     func endPTT() async {
         guard isPTTHeld else { return }
+        if realtimeActive {
+            isPTTHeld = false
+            realtimeMic.stop()
+            world.currentStep = "Thinking…"
+            refreshHUD()
+            await realtimeSession.commitAudio()
+            return
+        }
         isPTTHeld = false
         let wav = audio.stopRecording()
         refreshHUD()

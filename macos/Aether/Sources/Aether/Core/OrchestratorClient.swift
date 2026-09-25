@@ -816,7 +816,8 @@ final class OrchestratorClient: ObservableObject {
                               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                               let type = obj["type"] as? String else { continue }
                         switch type {
-                        case "guide_step", "guide_done", "talk_token", "talk_done":
+                        case "guide_step", "guide_done", "talk_token", "talk_done",
+                             "confirm_request", "question":
                             for event in SidecarEvent.parse(obj, fallbackGoal: "") { onEvent(event) }
                         case "run_request":
                             if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
