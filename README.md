@@ -200,9 +200,9 @@ Edit `configs/router.yaml` to pick the active cloud backend:
 ```yaml
 roles:
   cloud_frontier:
-    provider: zai          # glm-5-turbo supervisor (default)
+    provider: zai          # glm-5.3-flash (default brain)
   vision:
-    provider: zai_vision   # glm-5v-turbo vision (GLM-5V)
+    provider: zai_vision   # glm-5.3-flash (native image input)
 ```
 
 Other providers: `anthropic`, `openrouter`, `groq`, `openai`, `kilo`, `kie_gemini`, `google`, `fireworks`.

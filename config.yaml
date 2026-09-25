@@ -4,7 +4,7 @@ version: 1.0.0-rc.1
 
 llm:
   provider: zai                # legacy hint; router roles in configs/router.yaml take precedence
-  model: glm-5-turbo           # supervisor default (cloud_frontier)
+  model: glm-5.3-flash         # default brain (cloud_frontier + vision)
   max_tokens: 1024
   temperature: 0
   # API keys via .env — see .env.example:

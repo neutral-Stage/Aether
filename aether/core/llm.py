@@ -62,6 +62,7 @@ class LLMResponse:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    model: str | None = None        # model id that produced the turn (for pricing)
 
 
 class LLMBackend(Protocol):
@@ -162,6 +163,7 @@ class LLM:
                 })
         in_tok, out_tok = _usage_from_anthropic(resp)
         return LLMResponse(
+            model=self.model,
             text="\n".join(text_parts).strip(),
             tool_calls=tool_calls,
             raw_content=resp.content,
@@ -299,6 +301,7 @@ class OpenAICompatibleClient:
             stop = "tool_use"
         in_tok, out_tok = _usage_from_openai(resp)
         return LLMResponse(
+            model=self.model,
             text=text if not tool_calls else "",
             tool_calls=tool_calls,
             raw_content=raw_blocks,
@@ -461,6 +464,7 @@ class LocalHTTPClient:
         raw = [{"type": "text", "text": text}] if text else []
         in_tok, out_tok = _usage_from_ollama(body)
         return LLMResponse(
+            model=self.model,
             text=text if not tool_calls else "",
             tool_calls=tool_calls,
             raw_content=raw,

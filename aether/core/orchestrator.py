@@ -43,7 +43,8 @@ def record_usage_for_response(metrics, resp) -> None:  # noqa: ANN001
     if in_tok is None and out_tok is None:
         return
     try:
-        metrics.record_llm_usage(getattr(resp, "backend", "unknown"), in_tok, out_tok)
+        metrics.record_llm_usage(getattr(resp, "backend", "unknown"), in_tok, out_tok,
+                                 model=getattr(resp, "model", None))
     except Exception:  # noqa: BLE001 — metrics must never break the agent loop
         pass
 

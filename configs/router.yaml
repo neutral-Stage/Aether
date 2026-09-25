@@ -13,10 +13,12 @@ default_role: cloud_frontier
 # Reusable provider templates — referenced by roles via `provider: <name>`
 providers:
   anthropic:
+    # Failover + computer-use fallback. Current Claude models reject sampling
+    # parameters; the client drops `temperature` for them automatically.
     backend: anthropic
     api_key_env: ANTHROPIC_API_KEY
-    model: claude-sonnet-4-6
-    max_tokens: 1024
+    model: claude-sonnet-5
+    max_tokens: 4096
     temperature: 0
 
   openai:
@@ -78,23 +80,26 @@ providers:
     provider_label: kie
 
   zai:
-    # GLM-5-Turbo — supervisor / planner (cloud_frontier)
-    # Z.ai model ID: glm-5-turbo (see https://docs.z.ai/guides/llm/glm-5-turbo)
+    # GLM-5.3-Flash — default brain (cloud_frontier). Natively multimodal, so the
+    # same model also serves the vision role. OpenAI-compatible tool calls, 1M
+    # context. Z.ai coding-plan endpoint; if it rejects the model, use the
+    # general endpoint https://api.z.ai/api/paas/v4.
     backend: openai_compatible
     api_key_env: ZAI_API_KEY
     base_url: https://api.z.ai/api/coding/paas/v4
-    model: glm-5-turbo
+    model: glm-5.3-flash
     max_tokens: 4096
     temperature: 0
     provider_label: zai
 
   zai_vision:
-    # GLM-5V — vision / VLM path (user alias for glm-5v-turbo)
-    # Z.ai model ID: glm-5v-turbo (see https://docs.z.ai/guides/vlm/glm-5v-turbo)
+    # Vision role: the same natively multimodal GLM-5.3-Flash (image input in
+    # the same call). Kept as its own template so vision can be pointed at a
+    # different model without touching the reasoning role.
     backend: openai_compatible
     api_key_env: ZAI_API_KEY
     base_url: https://api.z.ai/api/coding/paas/v4
-    model: glm-5v-turbo
+    model: glm-5.3-flash
     max_tokens: 4096
     temperature: 0
     provider_label: zai_vision
@@ -126,8 +131,9 @@ roles:
     native_tools: false    # true → use Ollama native /api/chat tools field (Phase 1)
 
   cloud_frontier:
-    provider: zai              # supervisor / planner — GLM-5-Turbo via Z.ai
+    provider: zai              # default brain — GLM-5.3-Flash via Z.ai
     failover_providers:
+      - anthropic
       - openrouter
       - groq
     # provider: anthropic
@@ -139,8 +145,9 @@ roles:
     # provider: google
 
   vision:
-    provider: zai_vision       # GLM-5V (glm-5v-turbo) via Z.ai
+    provider: zai_vision       # GLM-5.3-Flash (native image input) via Z.ai
     failover_providers:
+      - anthropic
       - openrouter
       - google
     ocr_only: false
@@ -156,11 +163,8 @@ routing:
   ax_empty_threshold: 3
   # Vision content-classifier tuning (Phase 1)
   ax_text_coverage_threshold: 0.15   # AX text ratio below this + text_heavy → vision
-  # NOTE (Phase 1): not yet wired — classify_screen_content currently hardcodes these; reserved for a future tuning pass.
   text_heavy_char_threshold: 200      # min OCR chars to consider a screen text-heavy
-  # NOTE (Phase 1): not yet wired — classify_screen_content currently hardcodes these; reserved for a future tuning pass.
   text_coverage_threshold: 0.05       # min OCR text-area coverage for text-heavy
-  # NOTE (Phase 1): not yet wired — classify_screen_content currently hardcodes these; reserved for a future tuning pass.
   min_region_confidence: 0.3          # discard OCR boxes below this confidence
   # Reflexive tools that may use local_fast when AX is sufficient
   reflexive_tools:
