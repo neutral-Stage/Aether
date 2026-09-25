@@ -75,6 +75,99 @@ def available() -> bool:
     return _IMPORT_OK
 
 
+def _frame_of(handle: Any) -> tuple[float, float, float, float] | None:
+    pos = _value_pair(_copy(handle, A_POSITION), "point")
+    size = _value_pair(_copy(handle, A_SIZE), "size")
+    if not pos or not size:
+        return None
+    return (pos[0], pos[1], size[0], size[1])
+
+
+def _label_of_handle(handle: Any) -> str:
+    return (_to_str(_copy(handle, A_TITLE)) or _to_str(_copy(handle, A_DESC))
+            or _to_str(_copy(handle, A_LABEL)) or "")
+
+
+def _contains(frame: tuple[float, float, float, float] | None, x: float, y: float) -> bool:
+    return bool(frame) and frame[0] <= x <= frame[0] + frame[2] and frame[1] <= y <= frame[1] + frame[3]
+
+
+def drill_to_smallest(handle: Any, x: float, y: float, *, children_of=None, frame_of=None,
+                      max_depth: int = 8) -> Any:
+    """Descend to the smallest child whose frame holds the point.
+
+    Hit-testing often returns a large container (web areas, Electron and
+    custom views); its children usually carry the real control.
+    """
+    children_of = children_of or (lambda h: list(_copy(h, A_CHILDREN) or []))
+    frame_of = frame_of or _frame_of
+    current = handle
+    for _ in range(max_depth):
+        best, best_area = None, None
+        for child in children_of(current) or []:
+            f = frame_of(child)
+            if not _contains(f, x, y) or f[2] < 2 or f[3] < 2:
+                continue
+            area = f[2] * f[3]
+            if best_area is None or area < best_area:
+                best, best_area = child, area
+        if best is None:
+            return current
+        current = best
+    return current
+
+
+def element_at(x: float, y: float) -> dict | None:
+    """What is under a screen point: the element, where it lives, and context.
+
+    Returns {element, ancestry, window, app, url} or None. ``url`` is set when
+    the element is inside a web page (AXURL of the page or document). Secure
+    text fields report no value.
+    """
+    if not _IMPORT_OK:
+        return None
+    try:
+        system = AX.AXUIElementCreateSystemWide()
+        err, hit = AX.AXUIElementCopyElementAtPosition(system, float(x), float(y), None)
+    except Exception:  # noqa: BLE001
+        return None
+    if err != 0 or hit is None:
+        return None
+    el = drill_to_smallest(hit, x, y)
+    role = _to_str(_copy(el, A_ROLE))
+    subrole = _to_str(_copy(el, A_SUBROLE))
+    frame = _frame_of(el) or (x, y, 0.0, 0.0)
+    secure = "Secure" in role or "Secure" in subrole
+    value = "" if secure else _to_str(_copy(el, A_VALUE))[:500]
+    enabled = _copy(el, A_ENABLED)
+    info = Element(0, role, _label_of_handle(el) or _to_str(_copy(el, A_ROLE_DESC)), value,
+                   bool(enabled) if enabled is not None else True, *frame,
+                   identifier=_to_str(_copy(el, "AXIdentifier")),
+                   help=_to_str(_copy(el, "AXHelp")))
+    ancestry: list[str] = []
+    window = app = url = ""
+    node = el
+    for _ in range(24):
+        if not url:
+            raw = _copy(node, "AXURL") or _copy(node, "AXDocument")
+            url = _to_str(raw) if raw is not None else ""
+        parent = _copy(node, "AXParent")
+        if parent is None:
+            break
+        prole = _to_str(_copy(parent, A_ROLE))
+        plabel = _label_of_handle(parent)
+        if prole == "AXApplication":
+            app = plabel
+            break
+        if prole == "AXWindow" and not window:
+            window = plabel
+        elif plabel and len(ancestry) < 6:
+            ancestry.append(f"{prole.removeprefix('AX')} '{plabel[:60]}'")
+        node = parent
+    return {"element": asdict(info), "ancestry": ancestry, "window": window, "app": app,
+            "url": url if url.startswith(("http://", "https://", "file://")) else ""}
+
+
 def handle_label(handle: Any) -> str | None:
     """The live label of a retained AXUIElement (None when it can't be read)."""
     if not _IMPORT_OK or handle is None:

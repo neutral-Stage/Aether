@@ -329,6 +329,8 @@ class Agent:
             return await self._execute_batch(args, step=step, rid=rid)
         if name == "ask_user":
             return await self._ask_user(args, rid=rid)
+        if name == "point_at":
+            return await self._point_at(args, step=step)
 
         shell_text = self.policy.shell_payload(name, args) if spec else None
         if shell_text is not None and not self.policy.allows_shell_path(shell_text):
@@ -454,6 +456,22 @@ class Agent:
                                    gui_changed=gui, error=True)
         return CallOutcome("\n".join(lines), images=images, correction=correction,
                            gui_changed=gui)
+
+    async def _point_at(self, args: dict, *, step: int) -> CallOutcome:
+        """Resolve a target and send it to the app's overlay (a pointer event)."""
+        from ..perception.pointing import Target
+        from ..tools import targeting_tools
+
+        try:
+            x, y, w, h, label = await asyncio.to_thread(
+                targeting_tools.resolve_point_target, args, self.ctx)
+        except (ValueError, RuntimeError) as e:
+            return CallOutcome(f"ERROR: {e}", error=True)
+        target = Target("point", x, y, label, w, h, source="ax" if w else "screen")
+        self._emit({"type": "pointer", "step": step, "source": "agent",
+                    "targets": [target.as_dict()]})
+        return CallOutcome(f"Pointing at '{label or 'that spot'}' for the user at "
+                           f"({int(x)}, {int(y)}).")
 
     async def _ask_user(self, args: dict, *, rid: str) -> CallOutcome:
         """Ask the user a question and wait (STOP-aware) for the answer."""

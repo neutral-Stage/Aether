@@ -925,6 +925,9 @@ def _anthropic_messages_to_openai(system: str, messages: list[dict], *,
                 oai.append({"role": "assistant", "content": str(content)})
             continue
         if role == "user" and isinstance(content, list):
+            # Plain user content (text and images, e.g. a talk question with a
+            # screenshot) becomes ONE multimodal message, in its original order.
+            user_parts: list[dict] = []
             for block in content:
                 if not isinstance(block, dict):
                     continue
@@ -936,7 +939,22 @@ def _anthropic_messages_to_openai(system: str, messages: list[dict], *,
                     })
                     pending_images.extend(tool_result_images(block))
                 elif block.get("type") == "text":
-                    oai.append({"role": "user", "content": str(block.get("text", ""))})
+                    user_parts.append({"type": "text", "text": str(block.get("text", ""))})
+                elif block.get("type") == "image":
+                    src = block.get("source") or {}
+                    if images:
+                        user_parts.append({"type": "image_url", "image_url": {
+                            "url": f"data:{src.get('media_type', 'image/png')};base64,"
+                                   f"{src.get('data', '')}"}})
+                    else:
+                        user_parts.append({"type": "text", "text": "[image omitted: this "
+                                                                   "model cannot see images]"})
+            if user_parts:
+                if all(p["type"] == "text" for p in user_parts):
+                    oai.append({"role": "user",
+                                "content": "\n".join(p["text"] for p in user_parts)})
+                else:
+                    oai.append({"role": "user", "content": user_parts})
             if pending_images and not images:
                 oai.append({"role": "user", "content": (
                     f"[{len(pending_images)} screenshot(s) omitted: this model cannot see "

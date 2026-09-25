@@ -280,6 +280,12 @@ def _h_click_mark(args: dict, ctx: "AgentContext") -> str:
     return f"Clicked mark {n} '{str(m.get('label', ''))[:60]}' at ({int(m['x'])}, {int(m['y'])})."
 
 
+def _h_point_at(_args: dict, _ctx: "AgentContext") -> str:
+    # Pointing needs the app's overlay: the agent loop resolves the target and
+    # emits a pointer event instead of calling this.
+    return "ERROR: point_at is only available inside an agent run."
+
+
 # ---- image coordinates ---------------------------------------------------------
 
 def image_point_to_screen(ctx: "AgentContext", x: float, y: float) -> tuple[float, float]:
@@ -307,7 +313,37 @@ def describe(name: str, args: dict) -> str | None:
         return "number the targets on screen"
     if name == "click_mark":
         return f"click mark {args.get('mark')}"
+    if name == "point_at":
+        what = args.get("label") or args.get("name") or args.get("element_index") or "a spot"
+        return f"point at {str(what)[:50]}"
     return None
+
+
+def resolve_point_target(args: dict, ctx: "AgentContext") -> tuple[float, float, float, float, str]:
+    """(x, y, w, h, label) in screen points for point_at; raises ValueError."""
+    label = str(args.get("label") or args.get("name") or "")
+    name = str(args.get("name") or "").strip()
+    if name:
+        match, _, _ = targeting.find(name, args.get("role") or None, args.get("app") or None)
+        if match is None:
+            raise ValueError(f"no element named '{name}' on screen")
+        el = match.element
+        return (el.x + el.w / 2.0, el.y + el.h / 2.0, float(el.w), float(el.h),
+                label or targeting.label_of(el))
+    idx = args.get("element_index")
+    if idx is not None:
+        for el in ctx.elements or []:
+            if el.get("idx") == int(idx):
+                return (el["x"] + el["w"] / 2.0, el["y"] + el["h"] / 2.0, float(el["w"]),
+                        float(el["h"]), label or str(el.get("title") or ""))
+        raise ValueError(f"element {idx} not found; call get_screen_context again")
+    if args.get("x") is not None and args.get("y") is not None:
+        if str(args.get("space") or "screen") == "image":
+            x, y = image_point_to_screen(ctx, args["x"], args["y"])
+        else:
+            x, y = float(args["x"]), float(args["y"])
+        return (x, y, 0.0, 0.0, label)
+    raise ValueError("point_at needs name, element_index, or x and y")
 
 
 def specs() -> list["ToolSpec"]:
@@ -344,6 +380,18 @@ def specs() -> list["ToolSpec"]:
                 "include_text": {"type": "boolean", "description": "also mark OCR text (default true)"},
                 "max_marks": {"type": "integer"}}},
             permission="screen", impact="read", handler=_h_mark_screen),
+        ToolSpec(
+            name="point_at",
+            description=("Show the user where something is: the on-screen pointer flies to it "
+                         "and circles it. Use when explaining or teaching, not to act. Pass "
+                         "name (best), element_index, or x,y (space='image' for screenshot "
+                         "pixels), plus a short label."),
+            json_schema={"type": "object", "properties": {
+                "name": {"type": "string"}, "role": {"type": "string"},
+                "element_index": {"type": "integer"}, "x": {"type": "number"},
+                "y": {"type": "number"}, "space": {"type": "string", "enum": ["screen", "image"]},
+                "label": {"type": "string"}}},
+            permission="screen", impact="read", handler=_h_point_at),
         ToolSpec(
             name="click_mark",
             description="Click a numbered target from the last mark_screen.",

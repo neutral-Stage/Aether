@@ -97,11 +97,14 @@ from .fleet_api import register_sink as _register_fleet_sink  # noqa: E402
 from .fleet_api import router as _fleet_router  # noqa: E402
 from .mcp_server import router as _mcp_router  # noqa: E402
 from .sessions_api import router as _sessions_router  # noqa: E402
+from .talk_api import router as _talk_router  # noqa: E402
+from . import talk_api  # noqa: E402
 from . import questions  # noqa: E402
 from . import session_store  # noqa: E402
 
 app.include_router(_fleet_router)
 app.include_router(_sessions_router)
+app.include_router(_talk_router)
 app.include_router(_mcp_router)
 app.include_router(_apps_router)
 
@@ -371,6 +374,9 @@ async def _broadcast(event: dict[str, Any]) -> None:
         for q in dead:
             if q in _event_subscribers:
                 _event_subscribers.remove(q)
+
+
+talk_api.set_broadcaster(_broadcast)
 
 
 async def _run_agent_task(

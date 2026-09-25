@@ -287,6 +287,48 @@ def resized_copy(path: str, max_edge: int) -> str:
     return out
 
 
+@dataclass(frozen=True)
+class Crop:
+    """A region cut from a capture: its file and how to map its pixels back."""
+
+    path: str
+    source: Capture
+    px0: float          # crop origin in the source capture's pixels
+    py0: float
+    scale: float        # crop pixels per source pixel (2.0 = enlarged 2×)
+    width: int = 0      # crop size in its own pixels
+    height: int = 0
+
+    def to_points(self, cx: float, cy: float) -> tuple[float, float]:
+        return self.source.to_points(self.px0 + cx / self.scale, self.py0 + cy / self.scale)
+
+
+def crop_around(cap: Capture, gx: float, gy: float, half_pt: float = 150.0,
+                scale: float = 1.0, path: str | None = None) -> Crop:
+    """Cut a square of ±half_pt points around a screen point from a capture.
+
+    scale=1 keeps native pixels (for locating things precisely); scale=2 makes
+    small text readable. Crops are not registered as captures: their pixels
+    are mapped back only through Crop.to_points.
+    """
+    from PIL import Image
+
+    img = Image.open(cap.path)
+    cx, cy = cap.to_pixels(gx, gy)
+    hx, hy = half_pt * cap.px_per_pt_x, half_pt * cap.px_per_pt_y
+    box = (max(0, int(cx - hx)), max(0, int(cy - hy)),
+           min(img.width, int(cx + hx)), min(img.height, int(cy + hy)))
+    region = img.crop(box)
+    if scale != 1.0:
+        region = region.resize((max(1, int(region.width * scale)),
+                                max(1, int(region.height * scale))),
+                               Image.Resampling.LANCZOS)
+    out = path or _temp_png("aether-crop-")
+    region.save(out, format="PNG")
+    return Crop(out, cap, float(box[0]), float(box[1]), float(scale), region.width,
+                region.height)
+
+
 # ---------------------------------------------------------------- capture
 
 _native_ok_until = 0.0
