@@ -172,6 +172,12 @@ Categories: prompt injection, red-team, MCP SSRF/policy, skill replay, sidecar h
    system prompt — redacted, but never scanned — and the taint flag resets per
    goal. Content laundered into a learned recipe in run N taints nothing in run
    N+1. Fix is to scan on write-back.
+   *Update (Phase D):* runs that read untrusted content now write nothing
+   back (no memory trace, skill or learned recipe). Every memory is scanned
+   on write: text that plainly instructs an AI is refused, and borderline
+   text is stored but never put into a prompt. Learned recipe steps get the
+   same scan. What remains: the scan is pattern matching (residual 5), and a
+   clean-looking run can still record a misleading but harmless recipe.
 8. **Taint does not cross the sub-agent boundary.** `get_agent_output` /
    `get_graph` latch in the parent, but a poisoned page read *inside* a spawned
    agent never reaches the parent's flag, and the parent's flag does not

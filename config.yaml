@@ -20,7 +20,7 @@ router:
 memory:
   enabled: true
   db_path: data/memory.db
-  embedding_provider: hash       # hash | openai | local
+  embedding_provider: auto       # auto (multilingual-e5 if requirements-memory.txt is installed, else hash) | e5 | hash | openai | local
   openai_model: text-embedding-3-small
   local_model: all-MiniLM-L6-v2
 

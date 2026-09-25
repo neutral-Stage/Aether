@@ -1077,9 +1077,12 @@ class Agent:
             await self.say_async(final)
 
         # Long-term memory: store successful traces
-        if self.memory and task_success and self.world.task_trace():
+        # Runs that read untrusted content write nothing back into memory,
+        # skills or recipes: those texts reach future prompts (audit residual 7).
+        learn_ok = not bool(getattr(self.world, "untrusted_seen", False))
+        if self.memory and task_success and learn_ok and self.world.task_trace():
             self.memory.store_task_trace(goal, self.world.task_trace(), success=True)
-        if self.skills and task_success:
+        if self.skills and task_success and learn_ok:
             trace = self.world.tool_trace()
             if trace:
                 skill_id = self.skills.distill_from_trace(goal, trace)

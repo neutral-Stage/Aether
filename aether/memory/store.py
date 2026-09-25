@@ -1,7 +1,12 @@
-"""Long-term memory — local vector store (§6.6).
+"""Long-term memory — local, searchable by words and meaning (§6.6, Phase D2).
 
-SQLite-backed store with configurable embeddings (hash / OpenAI / local)
-and cosine similarity retrieval.
+SQLite store searched with HybridIndex: full-text (FTS5) and embeddings
+fused by rank, with a recency nudge. Each vector records the model that
+made it, so switching embedders re-embeds old rows instead of mixing them.
+
+Writes are scanned: text that tries to instruct an AI is refused or kept
+out of prompts, because memories are re-injected into future runs (audit
+residual 7).
 """
 from __future__ import annotations
 
@@ -15,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from .embeddings import HashEmbedder, cosine_similarity, create_embedder
+from .hybrid import HybridIndex
 
 from ..core.paths import ROOT, data_dir, resolve_data_path  # noqa: F401
 
@@ -56,9 +62,11 @@ class MemoryStore:
             openai_model=openai_model,
             local_model=local_model,
         )
-        self._conn = sqlite3.connect(str(self.db_path))
+        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
+        self.index = HybridIndex(self._conn, "memories", ["text"], self._embedder)
+        self.index.ensure_schema()
 
     def _init_schema(self) -> None:
         self._conn.execute("""
@@ -77,7 +85,14 @@ class MemoryStore:
         self._conn.commit()
 
     def _embed_text(self, text: str) -> np.ndarray:
-        return self._embedder.embed(text)
+        return self.index.embed_passage(text)
+
+    @property
+    def min_similarity(self) -> float:
+        """Cosine a row needs to count as related without shared words.
+        e5 vectors sit close together, so its bar is much higher."""
+        provider = getattr(self._embedder, "provider", "hash")
+        return {"e5": 0.82}.get(provider, 0.35)
 
     def _score_embedding(self, query: str, query_emb: np.ndarray, stored: bytes) -> float:
         emb = np.frombuffer(stored, dtype=np.float32)
@@ -95,40 +110,49 @@ class MemoryStore:
         kind: str = "fact",
         metadata: dict[str, Any] | None = None,
     ) -> int:
-        emb = self._embed_text(text)
+        """Store a memory. Returns its id, or 0 when the text was refused
+        (it tries to instruct an AI outright)."""
+        from ..core.security import InjectionSeverity, scan_injection
+
         meta = dict(metadata or {})
+        scan = scan_injection(text)
+        if scan.severity == InjectionSeverity.HIGH:
+            return 0
+        if scan.severity == InjectionSeverity.MEDIUM:
+            meta["suspicious"] = True       # kept, but never put into a prompt
+        emb = self._embed_text(text)
         meta.setdefault("embedding_provider", self._embedder.provider)
-        meta_json = json.dumps(meta)
         cur = self._conn.execute(
-            "INSERT INTO memories (kind, text, embedding, metadata, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (kind, text, emb.tobytes(), meta_json, time.time()),
+            "INSERT INTO memories (kind, text, embedding, metadata, created_at, embed_model) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (kind, text, emb.tobytes(), json.dumps(meta), time.time(), self.index.model_id),
         )
         self._conn.commit()
         return int(cur.lastrowid)
 
     def retrieve(self, query: str, limit: int = 5, kind: str | None = None) -> list[MemoryEntry]:
-        q_emb = self._embed_text(query)
-        sql = "SELECT id, kind, text, embedding, metadata, created_at FROM memories"
-        params: list[Any] = []
-        if kind:
-            sql += " WHERE kind = ?"
-            params.append(kind)
-        rows = self._conn.execute(sql, params).fetchall()
-        scored: list[MemoryEntry] = []
-        for row in rows:
-            score = self._score_embedding(query, q_emb, row["embedding"])
-            meta = json.loads(row["metadata"] or "{}")
-            scored.append(MemoryEntry(
-                id=row["id"],
-                kind=row["kind"],
-                text=row["text"],
-                metadata=meta,
-                score=score,
-                created_at=row["created_at"],
-            ))
-        scored.sort(key=lambda e: e.score, reverse=True)
-        return scored[:limit]
+        """Best matches by words and meaning (see HybridIndex), newest nudged up."""
+        hits = self.index.search(query, limit=limit, where="kind = ?" if kind else "",
+                                 params=(kind,) if kind else (), min_sim=self.min_similarity)
+        if not hits:
+            return []
+        by_id = {int(r["id"]): r for r in self._conn.execute(
+            "SELECT id, kind, text, metadata, created_at FROM memories WHERE id IN ("
+            + ",".join("?" * len(hits)) + ")", [h[0] for h in hits])}
+        out: list[MemoryEntry] = []
+        for row_id, score, _cos in hits:
+            row = by_id.get(row_id)
+            if row is None:
+                continue
+            out.append(MemoryEntry(id=row_id, kind=row["kind"], text=row["text"],
+                                   metadata=json.loads(row["metadata"] or "{}"), score=score,
+                                   created_at=row["created_at"]))
+        return out
+
+    def forget(self, memory_id: int) -> bool:
+        cur = self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        self._conn.commit()
+        return cur.rowcount > 0
 
     def store_task_trace(self, goal: str, steps: list[str], success: bool) -> int:
         text = f"Task: {goal}\nSteps:\n" + "\n".join(f"- {s}" for s in steps)
@@ -140,14 +164,16 @@ class MemoryStore:
 
     def prompt_slice(self, query: str, limit: int = 4) -> str:
         """Retrieve relevant memories formatted for system prompt injection."""
-        entries = self.retrieve(query, limit=limit)
+        entries = self.retrieve(query, limit=limit + 2)
         if not entries:
             return ""
         lines = ["Relevant long-term memory:"]
         for e in entries:
-            if e.score < 0.05:
+            if e.metadata.get("suspicious"):
                 continue
             lines.append(f"- [{e.kind}] {e.text[:300]}")
+            if len(lines) > limit:
+                break
         return "\n".join(lines) if len(lines) > 1 else ""
 
     def close(self) -> None:

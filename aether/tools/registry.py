@@ -423,6 +423,9 @@ def _h_remember_fact(args: dict, ctx: AgentContext) -> str:
         return "Long-term memory is disabled in config."
     kind = args.get("kind", "fact")
     row_id = ctx.memory.remember(text, kind=kind)
+    if not row_id:
+        return ("Not stored: that text reads like instructions to an AI, and memories are "
+                "shown to future runs.")
     return f"Remembered ({kind}) id={row_id}: {text[:80]}"
 
 

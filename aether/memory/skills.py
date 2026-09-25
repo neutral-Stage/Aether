@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-import numpy as np
-
 from .embeddings import HashEmbedder, cosine_similarity, create_embedder
 
 from ..core.paths import ROOT, data_dir, resolve_data_path  # noqa: F401
@@ -61,9 +59,14 @@ class SkillStore:
             embedding_provider,
             openai_api_key=openai_api_key,
         )
-        self._conn = sqlite3.connect(str(self.db_path))
+        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
+        from .hybrid import HybridIndex
+
+        self.index = HybridIndex(self._conn, "skills", ["goal_pattern", "description"],
+                                 self._embedder)
+        self.index.ensure_schema()
 
     def _init_schema(self) -> None:
         self._conn.execute("""
@@ -114,7 +117,7 @@ class SkillStore:
         steps = _parameterize_steps(tool_trace, params)
         name = _skill_name_from_goal(goal)
         description = f"Learned skill for: {goal[:120]}"
-        emb = self._embedder.embed(f"{goal} {name} {description}")
+        emb = self.index.embed_passage(f"{goal}\n{description}")
 
         existing = self._conn.execute(
             "SELECT id, success_count FROM skills WHERE name = ?", (name,)
@@ -123,7 +126,7 @@ class SkillStore:
         if existing:
             self._conn.execute(
                 "UPDATE skills SET description=?, goal_pattern=?, parameters=?, "
-                "steps=?, embedding=?, success_count=?, updated_at=? WHERE id=?",
+                "steps=?, embedding=?, success_count=?, updated_at=?, embed_model=? WHERE id=?",
                 (
                     description,
                     goal,
@@ -132,6 +135,7 @@ class SkillStore:
                     emb.tobytes(),
                     int(existing["success_count"]) + 1,
                     now,
+                    self.index.model_id,
                     existing["id"],
                 ),
             )
@@ -140,8 +144,8 @@ class SkillStore:
 
         cur = self._conn.execute(
             "INSERT INTO skills (name, description, goal_pattern, parameters, steps, "
-            "embedding, success_count, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            "embedding, success_count, created_at, updated_at, embed_model) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
             (
                 name,
                 description,
@@ -151,30 +155,24 @@ class SkillStore:
                 emb.tobytes(),
                 now,
                 now,
+                self.index.model_id,
             ),
         )
         self._conn.commit()
         return int(cur.lastrowid)
 
     def retrieve(self, goal: str, limit: int = 3) -> list[Skill]:
-        q_emb = self._embedder.embed(goal)
-        rows = self._conn.execute(
+        """Skills whose goal matches by words or meaning (HybridIndex), most
+        relevant first."""
+        min_sim = 0.82 if getattr(self._embedder, "provider", "") == "e5" else 0.35
+        hits = self.index.search(goal, limit=limit, min_sim=min_sim)
+        if not hits:
+            return []
+        rows = {int(r["id"]): r for r in self._conn.execute(
             "SELECT id, name, description, goal_pattern, parameters, steps, "
-            "embedding, success_count, created_at, updated_at FROM skills"
-        ).fetchall()
-        scored: list[Skill] = []
-        for row in rows:
-            emb = np.frombuffer(row["embedding"], dtype=np.float32)
-            if emb.shape[0] != q_emb.shape[0]:
-                if emb.shape[0] == _embed("").shape[0]:
-                    score = cosine_similarity(_embed(goal), emb)
-                else:
-                    score = 0.0
-            else:
-                score = cosine_similarity(q_emb, emb)
-            scored.append(self._row_to_skill(row, score=score))
-        scored.sort(key=lambda s: (s.score, s.success_count), reverse=True)
-        return [s for s in scored[:limit] if s.score >= 0.08]
+            "embedding, success_count, created_at, updated_at FROM skills WHERE id IN ("
+            + ",".join("?" * len(hits)) + ")", [h[0] for h in hits])}
+        return [self._row_to_skill(rows[i], score=score) for i, score, _ in hits if i in rows]
 
     def substitute_parameters(
         self,

@@ -1,0 +1,4 @@
+# Optional: better long-term memory search (multilingual-e5-small, ~120 MB model,
+# downloaded on first use). Without it Aether uses full-text search plus a
+# hash embedding. Install with: pip install -r requirements-memory.txt
+sentence-transformers>=3.0,<6
