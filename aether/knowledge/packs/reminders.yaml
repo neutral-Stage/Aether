@@ -20,3 +20,12 @@ gotchas:
   - "Natural-language dates ('tomorrow 9am') are parsed only in the typed UI, not AppleScript"
 scripting:
   run_applescript: "Create/complete reminders deterministically via AppleScript"
+verified_recipes:
+  add_reminder:
+    match: ["remind me", "add a reminder", "new reminder", "create a reminder"]
+    steps:
+      - {tool: run_applescript, args: {source: "tell application \"Reminders\" to make new reminder with properties {name:\"<what to remember>\"}"}}
+    guide:
+      - {say: "Open Reminders.", done_when: app, expect: Reminders}
+      - {say: "Press Command N for a new reminder.", done_when: any}
+      - {say: "Type what you want to be reminded of and press Return.", done_when: any}

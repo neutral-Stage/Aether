@@ -263,8 +263,9 @@ def test_guide_endpoints(sidecar_client, monkeypatch) -> None:  # noqa: ANN001
         return "done"
 
     monkeypatch.setattr(GuideSession, "run", never_done)
-    data = sidecar_client.post("/guide", json={"goal": "show me how to add a printer"}).json()
-    assert data["goal"] == "add a printer" and data["total"] == 1
+    data = sidecar_client.post("/guide", json={"goal": "show me how to rename a playlist"}).json()
+    assert data["goal"] == "rename a playlist" and data["total"] == 1
+    assert data["source"] == "model"
     gid = data["guide_id"]
     assert sidecar_client.get(f"/guide/{gid}").json()["status"] == "running"
     assert sidecar_client.post(f"/guide/{gid}", json={"action": "fly"}).status_code == 400
@@ -272,3 +273,10 @@ def test_guide_endpoints(sidecar_client, monkeypatch) -> None:  # noqa: ANN001
     assert sidecar_client.get("/guide/nope").status_code == 404
     monkeypatch.setattr(guide_api.plan, "plan_steps", lambda goal, client, **k: [])
     assert sidecar_client.post("/guide", json={"goal": "do a backflip"}).status_code == 422
+
+    # A pack's written guide needs no model (and no cloud key).
+    monkeypatch.setattr(Config, "has_cloud_llm", lambda self: False)
+    recipe = sidecar_client.post("/guide", json={"goal": "show me how to add a printer"}).json()
+    assert recipe["source"] == "recipe" and recipe["total"] == 4
+    assert recipe["steps"][2]["target"] == "Printers & Scanners"
+    assert sidecar_client.post("/guide", json={"goal": "how do I fold a crane"}).status_code == 400

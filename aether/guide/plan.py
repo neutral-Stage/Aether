@@ -65,8 +65,24 @@ def guide_goal(text: str) -> str:
     return goal.strip().rstrip("?.!").strip()
 
 
-def parse_steps(text: str) -> list[GuideStep]:
-    data = repair_json_args(text)
+def recipe_steps(goal: str) -> list[GuideStep]:
+    """A knowledge pack's written guide for this goal, if one matches."""
+    from ..knowledge import loader
+
+    try:
+        hit = loader.verified_recipe_for(goal)
+    except Exception:  # noqa: BLE001
+        return []
+    if not hit or not hit[2].get("guide"):
+        return []
+    return parse_steps_data(hit[2]["guide"])
+
+
+def parse_steps_data(raw: list) -> list[GuideStep]:
+    return parse_steps_obj({"steps": raw})
+
+
+def parse_steps_obj(data: Any) -> list[GuideStep]:
     raw = (data or {}).get("steps") if isinstance(data, dict) else None
     steps: list[GuideStep] = []
     for item in raw or []:
@@ -86,6 +102,10 @@ def parse_steps(text: str) -> list[GuideStep]:
         if len(steps) >= MAX_STEPS:
             break
     return steps
+
+
+def parse_steps(text: str) -> list[GuideStep]:
+    return parse_steps_obj(repair_json_args(text))
 
 
 def plan_steps(goal: str, client: Any, *, screen_summary: str = "", pack_hint: str = "") -> list[GuideStep]:

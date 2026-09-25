@@ -215,6 +215,7 @@ class Agent:
             capabilities=caps,
             approved_file_roots=normalize_file_roots(policy_raw.get("approved_file_roots")),
             network_allowlist=policy_raw.get("network_allowlist") or [],
+            trusted_shortcuts=[str(n) for n in policy_raw.get("trusted_shortcuts") or []],
             redact_secrets=bool(policy_raw.get("redact_secrets", True)),
             block_injection_goals=bool(policy_raw.get("block_injection_goals", True)),
             flag_injection_in_context=bool(policy_raw.get("flag_injection_in_context", True)),
@@ -254,7 +255,8 @@ class Agent:
             key = kloader.resolve_pack_key(self.world.frontmost_app, self.world.bundle_id)
             if not key:
                 return
-            name = learned.record_success(key, goal, self.world.task_trace())
+            name = learned.record_success(key, goal, self.world.task_trace(),
+                                          tainted=bool(self.world.untrusted_seen))
             if name:
                 print(f"📖 Learned recipe '{name}' for {self.world.frontmost_app}")
         except Exception:  # noqa: BLE001 — learning must never break a run
@@ -654,6 +656,15 @@ class Agent:
                 # Redact: learned recipes (Phase 10) may carry text from prior
                 # runs; run it through the same secret filter as the AX context.
                 parts.append(self.policy.redact_text(pack))
+            if "Recipe for this task" not in (pack or ""):
+                # The task may belong to an app that isn't in front yet
+                # ("make a note" while Finder is frontmost).
+                try:
+                    hit = knowledge.verified_recipe_for(goal)
+                except Exception:  # noqa: BLE001 — recipes are a bonus
+                    hit = None
+                if hit:
+                    parts.append(knowledge.render_verified_recipe(*hit))
         # Redact these two like the knowledge pack above: store_task_trace()
         # writes screen-derived step text into the same stores, so a secret
         # scraped off the screen can round-trip back into the system prompt.

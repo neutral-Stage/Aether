@@ -289,6 +289,12 @@ def run_suite(tasks: list[dict[str, Any]], config: dict[str, Any], *, reuse_vm: 
     return results
 
 
+def passed_recipes(tasks: list[dict[str, Any]], results: list[LiveResult]) -> list[str]:
+    """Pack recipes ("pack.recipe") whose linked task passed."""
+    ok = {r.id for r in results if r.passed}
+    return sorted({str(t["recipe"]) for t in tasks if t.get("recipe") and t["id"] in ok})
+
+
 def summarize_live(results: list[LiveResult], skipped: list[dict] | None = None) -> dict[str, Any]:
     total = len(results)
     passed = sum(1 for r in results if r.passed)

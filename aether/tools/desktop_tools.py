@@ -9,6 +9,7 @@ gate refines impact per call (e.g. overwriting a file is destructive).
 """
 from __future__ import annotations
 
+import subprocess
 import time
 from typing import TYPE_CHECKING
 
@@ -200,6 +201,26 @@ def _h_set_volume(args: dict, _ctx: "AgentContext") -> str:
         muted=bool(muted) if muted is not None else None)
 
 
+def _h_shortcuts_list(_args: dict, _ctx: "AgentContext") -> str:
+    try:
+        names = system.list_shortcuts()
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        return f"ERROR: {e}"
+    if not names:
+        return "No Shortcuts found."
+    return f"{len(names)} Shortcuts:\n" + "\n".join(names[:200])
+
+
+def _h_shortcuts_run(args: dict, _ctx: "AgentContext") -> str:
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return "ERROR: name is required."
+    try:
+        return system.run_shortcut(name, args.get("input"))
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"ERROR: {e}"
+
+
 def _h_agent_only(_args: dict, _ctx: "AgentContext") -> str:
     # batch_actions and ask_user are run by the agent loop itself (each batched
     # action goes through the policy gate; questions go to the app's panel).
@@ -251,6 +272,10 @@ def describe(name: str, args: dict) -> str | None:
         return "read the selected text"
     if name == "notify":
         return "show a notification"
+    if name == "shortcuts_list":
+        return "list Shortcuts"
+    if name == "shortcuts_run":
+        return f"run the shortcut '{str(args.get('name', ''))[:50]}'"
     if name == "batch_actions":
         n = len(args.get("actions") or []) if isinstance(args.get("actions"), list) else 0
         return f"{n} actions in a row"
@@ -409,6 +434,20 @@ def specs() -> list["ToolSpec"]:
                 "level": {"type": "integer"}, "change": {"type": "integer"},
                 "muted": {"type": "boolean"}}},
             permission="input", impact="reversible", handler=_h_set_volume),
+        ToolSpec(
+            name="shortcuts_list",
+            description="List the user's Shortcuts (Shortcuts app) by name.",
+            json_schema={"type": "object", "properties": {}},
+            permission="shell", impact="read", handler=_h_shortcuts_list),
+        ToolSpec(
+            name="shortcuts_run",
+            description=("Run one of the user's Shortcuts by exact name, optionally with text "
+                         "input; returns its output. A shortcut can do anything, so the user "
+                         "confirms unless they listed it in policy.trusted_shortcuts."),
+            json_schema={"type": "object", "properties": {
+                "name": {"type": "string"}, "input": {"type": "string"}},
+                "required": ["name"]},
+            permission="shell", impact="destructive", handler=_h_shortcuts_run),
         ToolSpec(
             name="batch_actions",
             description=("Do up to 5 simple UI actions in a row without looking in between, "

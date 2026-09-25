@@ -21,6 +21,7 @@ version: 1
 tasks:
   # ---- Finder and files ----------------------------------------------------------------
   - id: finder_downloads
+    recipe: finder.open_folder
     category: finder
     goal: "Open a Finder window showing my Downloads folder"
     check:
@@ -33,6 +34,7 @@ tasks:
     success: {required_tools: [finder_go_to, finish]}
 
   - id: new_folder_desktop
+    recipe: finder.new_folder
     category: files
     goal: "Create a folder called Reports 2026 on my Desktop"
     check: {shell: "test -d \"$HOME/Desktop/Reports 2026\" && echo ok", expect: "ok"}
@@ -176,6 +178,7 @@ tasks:
 
   # ---- Notes ------------------------------------------------------------------------------
   - id: notes_create
+    recipe: notes.create_note
     category: notes
     goal: "Create a note called Grocery list with milk, eggs and bread"
     check:
@@ -214,6 +217,7 @@ tasks:
 
   # ---- Safari ------------------------------------------------------------------------------
   - id: safari_open
+    recipe: safari.open_website
     category: safari
     goal: "Open example.com in Safari"
     check:
@@ -225,6 +229,7 @@ tasks:
     success: {required_tools: [safari_open_url, finish]}
 
   - id: safari_search
+    recipe: safari.web_search
     category: safari
     goal: "Search the web in Safari for macOS accessibility API"
     check:
@@ -264,6 +269,7 @@ tasks:
 
   # ---- Reminders and Calendar ---------------------------------------------------------------
   - id: reminder_add
+    recipe: reminders.add_reminder
     category: reminders
     goal: "Remind me to call the dentist"
     check:
@@ -298,6 +304,7 @@ tasks:
 
   # ---- Terminal and shell -------------------------------------------------------------------
   - id: terminal_echo
+    recipe: terminal.run_command
     category: terminal
     goal: "Open Terminal and run: echo aether-ok > /tmp/aether_bench.txt"
     check: {file_contains: {path: "/tmp/aether_bench.txt", text: "aether-ok"}}
@@ -341,6 +348,7 @@ tasks:
     success: {required_tools: [finish]}
 
   - id: settings_bluetooth
+    recipe: system_settings.bluetooth
     category: system_settings
     goal: "Open the Bluetooth settings"
     check:

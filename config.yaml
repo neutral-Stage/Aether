@@ -60,6 +60,7 @@ policy:
   approved_file_roots:
     - "~"                        # QUOTED: bare ~ is YAML null → [None] (breaks the path guard)
   network_allowlist: []          # empty = allow all; set hosts in careful mode
+  trusted_shortcuts: []          # Shortcuts that run without asking (exact names)
 
 # macOS Seatbelt confinement for commands Aether starts (aether/effectors/sandbox.py).
 # Writes stay inside policy.approved_file_roots (+ extra_write_roots, temp, caches);

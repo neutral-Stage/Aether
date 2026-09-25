@@ -25,3 +25,12 @@ gotchas:
   - "Shell access is high impact — careful mode confirms every command"
   - "Long-running processes block; use timeout in run_shell"
   - "iTerm and Terminal have different bundle IDs"
+verified_recipes:
+  run_command:
+    match: ["run in terminal", "terminal and run", "in terminal run", "terminal run"]
+    steps:
+      - {tool: open_app, args: {name: Terminal}}
+      - {tool: wait, args: {for_app: Terminal, timeout: 10}}
+      - {tool: type_text, args: {text: "<the command>"}}
+      - {tool: press_key, args: {key: return}}
+      - {tool: get_screen_context, args: {}}

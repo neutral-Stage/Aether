@@ -133,6 +133,9 @@ def main() -> int:
                         help="Run all tasks in one clone (faster, less isolated)")
     parser.add_argument("--keep", action="store_true", help="Keep clones for debugging")
     parser.add_argument("--out", type=Path, default=None, help="Write the VM summary JSON here")
+    parser.add_argument("--stamp-recipes", action="store_true",
+                        help="Mark pack recipes whose linked task passed as tested today "
+                             "(aether/knowledge/verified.json)")
     args = parser.parse_args()
 
     if args.vm:
@@ -144,6 +147,15 @@ def main() -> int:
         config = vm_runner.load_vm_config(args.vm_config)
         results = vm_runner.run_suite(tasks, config, reuse_vm=args.reuse_vm, keep=args.keep)
         summary = vm_runner.summarize_live(results, skipped)
+        summary["recipes_passed"] = vm_runner.passed_recipes(tasks, results)
+        if args.stamp_recipes and summary["recipes_passed"]:
+            import datetime
+
+            from aether.knowledge import loader
+
+            loader.stamp_verified(summary["recipes_passed"], datetime.date.today().isoformat())
+            print(f"Stamped {len(summary['recipes_passed'])} recipe(s) as tested: "
+                  + ", ".join(summary["recipes_passed"]))
         if args.out:
             args.out.write_text(json.dumps(summary, indent=2))
         print(f"Benchmark (vm): {summary['passed']}/{summary['total']} passed "

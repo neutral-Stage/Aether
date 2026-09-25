@@ -77,19 +77,25 @@ async def start_guide(body: GuideRequest, _auth: None = Depends(require_auth)) -
     if not goal:
         raise HTTPException(400, "goal is required")
     cfg = load_config()
-    if not cfg.has_cloud_llm():
-        raise HTTPException(400, "Guide mode needs a cloud model key (see configs/router.yaml).")
     for other in list(_GUIDES.values()):          # one guide at a time
         other.control("stop")
-    policy = Policy(PolicyConfig(redact_secrets=True))
-    try:
-        summary, hint = await asyncio.to_thread(_screen_summary, policy.redact_text)
-        client = talk_api._client(cfg)  # noqa: SLF001
-        steps = await asyncio.to_thread(plan.plan_steps, goal, client,
-                                        screen_summary=summary, pack_hint=hint)
-    except Exception as e:  # noqa: BLE001
-        log.warning("guide planning failed", exc_info=True)
-        raise HTTPException(502, f"Could not plan the guide: {redact_error_message(str(e))}") from e
+    source = "recipe"
+    steps = plan.recipe_steps(goal)               # a pack's written guide, when one fits
+    if not steps:
+        source = "model"
+        if not cfg.has_cloud_llm():
+            raise HTTPException(400, "Guide mode needs a cloud model key "
+                                     "(see configs/router.yaml).")
+        policy = Policy(PolicyConfig(redact_secrets=True))
+        try:
+            summary, hint = await asyncio.to_thread(_screen_summary, policy.redact_text)
+            client = talk_api._client(cfg)  # noqa: SLF001
+            steps = await asyncio.to_thread(plan.plan_steps, goal, client,
+                                            screen_summary=summary, pack_hint=hint)
+        except Exception as e:  # noqa: BLE001
+            log.warning("guide planning failed", exc_info=True)
+            raise HTTPException(502, "Could not plan the guide: "
+                                     f"{redact_error_message(str(e))}") from e
     if not steps:
         raise HTTPException(422, "Couldn't work out the steps for that. Try asking Aether to do it.")
     clicks = ClickWatcher()
@@ -103,7 +109,7 @@ async def start_guide(body: GuideRequest, _auth: None = Depends(require_auth)) -
             .record("guide_start", summary=goal[:200], extra={"steps": len(steps)})
     except Exception:  # noqa: BLE001
         pass
-    return {**session.state(), "click_detection": clicks.running}
+    return {**session.state(), "click_detection": clicks.running, "source": source}
 
 
 @router.post("/guide/{guide_id}")

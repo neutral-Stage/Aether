@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 import time
 
 from ..perception import accessibility as ax
@@ -85,6 +86,47 @@ def set_volume(level: int | None = None, change: int | None = None,
     if muted:
         return "Sound muted."
     return f"Volume is {res.stdout.strip() or '?'}%."
+
+
+def list_shortcuts() -> list[str]:
+    """Names of the user's Shortcuts (the `shortcuts` CLI, macOS 12+)."""
+    res = subprocess.run(["shortcuts", "list"], capture_output=True, text=True,  # noqa: S603, S607
+                         timeout=20)
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr.strip() or "shortcuts list failed")
+    return [line.strip() for line in res.stdout.splitlines() if line.strip()]
+
+
+def run_shortcut(name: str, input_text: str | None = None, timeout: int = 120) -> str:
+    """Run a Shortcut by exact name; text input goes through a temp file."""
+    import tempfile
+
+    argv = ["shortcuts", "run", name]
+    tmp = None
+    if input_text:
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
+        tmp.write(input_text)
+        tmp.close()
+        argv += ["--input-path", tmp.name]
+    out = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+    out.close()
+    argv += ["--output-path", out.name]
+    try:
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)  # noqa: S603
+        if res.returncode != 0:
+            return f"ERROR: {res.stderr.strip() or 'the shortcut failed'}"
+        try:
+            result = Path(out.name).read_text(errors="replace").strip()
+        except OSError:
+            result = ""
+        return f"Ran the shortcut '{name}'." + (f" Output:\n{result[:4000]}" if result else "")
+    finally:
+        for f in (tmp.name if tmp else None, out.name):
+            if f:
+                try:
+                    Path(f).unlink()
+                except OSError:
+                    pass
 
 
 def notify(title: str, body: str) -> str:

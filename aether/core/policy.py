@@ -363,6 +363,8 @@ class PolicyConfig:
         str(Path.home()),
     ])
     network_allowlist: list[str] = field(default_factory=list)
+    # Shortcuts the user trusts to run without a confirmation (exact names).
+    trusted_shortcuts: list[str] = field(default_factory=list)
     redact_secrets: bool = True
     block_injection_goals: bool = True
     flag_injection_in_context: bool = True
@@ -484,6 +486,12 @@ class Policy:
         if name == "send_to_agent" and _session_is_terminal(args.get("session_id")):
             if _shell_impact_destructive(str(args.get("text", "") or "")):
                 return "destructive"
+
+        # A Shortcut can do anything; only the ones the user named are trusted.
+        if name == "shortcuts_run":
+            wanted = str(args.get("name") or "").strip().casefold()
+            trusted = {str(n).strip().casefold() for n in self.config.trusted_shortcuts or []}
+            return "reversible" if wanted and wanted in trusted else "destructive"
 
         # A trigger that fires a model-chosen goal with nobody present.
         if name == "watch_app" and args.get("then_goal") and args.get("auto"):
@@ -690,7 +698,7 @@ class Policy:
     # so both are shell execution wearing a different name. delegate_to_coder
     # Popens a third-party coding CLI (it is declared permission="shell").
     _CODE_EXEC_TOOLS = frozenset({
-        "run_shell", "run_applescript",
+        "run_shell", "run_applescript", "shortcuts_run",
         "spawn_agent", "spawn_graph", "send_to_agent", "delegate_to_coder",
     })
     # Durable writes into FUTURE system prompts, or deferred unattended

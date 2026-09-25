@@ -1,0 +1,20 @@
+{
+  "name": "shortcuts_run",
+  "description": "Run one of the user's Shortcuts by exact name, optionally with text input; returns its output. A shortcut can do anything, so the user confirms unless they listed it in policy.trusted_shortcuts.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string"
+      },
+      "input": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ]
+  },
+  "permission": "shell",
+  "impact": "destructive"
+}
