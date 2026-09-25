@@ -16,7 +16,8 @@ from . import worktree as wt
 from .claude_session import ClaudeCodeSession
 from .headless_session import HeadlessSession
 from .pty_session import PTYSession
-from .session import AgentSession, OutputEvent
+from .session import AgentSession, OutputEvent, start_process
+from .warm_pool import Warm, WarmPool
 
 AGENT_TYPES = ("claude", "codex", "opencode", "cursor", "kilo", "terminal")
 
@@ -59,6 +60,9 @@ _DEFAULTS: dict[str, Any] = {
     "worktrees": {"enabled": True, "keep": True},
     "require_isolation": False,
     "max_spawn_depth": 2,
+    # A spare Claude Code process per recently used folder, so the next session
+    # there starts instantly (aether/fleet/warm_pool.py).
+    "warm_pool": {"enabled": True, "max_total": 2, "max_age_sec": 900},
 }
 
 
@@ -77,6 +81,7 @@ class SessionManager:
         self._event_sink: Callable[[dict[str, Any]], None] | None = None
         self._watchdog_started = False
         self.spawned_total = 0
+        self._pool = WarmPool()
 
     @classmethod
     def get(cls) -> SessionManager:
@@ -100,11 +105,14 @@ class SessionManager:
         with self._lock:
             merged = dict(_DEFAULTS)
             for k, v in (fleet_cfg or {}).items():
-                if k == "worktrees" and isinstance(v, dict):
-                    merged["worktrees"] = {**_DEFAULTS["worktrees"], **v}
+                if k in ("worktrees", "warm_pool") and isinstance(v, dict):
+                    merged[k] = {**_DEFAULTS[k], **v}
                 else:
                     merged[k] = v
             self._cfg = merged
+            wp = merged["warm_pool"]
+            self._pool.max_total = int(wp.get("max_total", 2)) if wp.get("enabled", True) else 0
+            self._pool.max_age_sec = float(wp.get("max_age_sec", 900))
             if approved_roots is not None:
                 self._approved_roots = approved_roots
             if mcp_cfg is not None:
@@ -171,12 +179,22 @@ class SessionManager:
         session_id = uuid.uuid4().hex[:8]
         wt_cfg = cfg.get("worktrees") or {}
         want_isolation = bool(wt_cfg.get("enabled", True)) if isolate is None else bool(isolate)
+        want_isolation = want_isolation and agent_type != "terminal"
         branch = warning = None
         run_dir = cwd
-        if want_isolation and agent_type != "terminal":
+        warm_key = self._warm_key(str(cwd), want_isolation) if agent_type == "claude" else None
+        warm = None
+        if warm_key is not None and self._pool.max_total > 0:
+            warm = self._pool.take(warm_key, wt.head_commit(cwd) if want_isolation else "")
+        if warm is not None:
+            session_id, run_dir, branch, warning = (warm.session_id, Path(warm.run_dir),
+                                                    warm.branch, warm.warning)
+        elif want_isolation:
             run_dir, branch, warning = wt.provision(cwd, session_id)
-            if warning and bool(cfg.get("require_isolation")):
-                raise ValueError(f"isolation required but unavailable: {warning}")
+        if warning and want_isolation and bool(cfg.get("require_isolation")):
+            if warm is not None:
+                self._pool.put(warm)      # not usable here; let it expire normally
+            raise ValueError(f"isolation required but unavailable: {warning}")
 
         session = self._build_session(
             agent_type=agent_type,
@@ -185,6 +203,7 @@ class SessionManager:
             prompt=prompt,
             workspace=str(run_dir),
             timeout_sec=float(timeout_sec or cfg["session_timeout_sec"]),
+            **({"mcp_config": warm.mcp_config} if warm is not None else {}),
         )
         session.worktree_branch = branch
         session.worktree_dir = str(run_dir) if branch else None
@@ -198,21 +217,73 @@ class SessionManager:
         AuditLog.get().record(
             "agent_spawn",
             summary=f"{agent_type} [{session.label}]: {prompt[:200]}",
-            extra={"session_id": session_id, "workspace": str(run_dir), "branch": branch},
+            extra={"session_id": session_id, "workspace": str(run_dir), "branch": branch,
+                   "warm": warm is not None},
         )
         if warning:
             session._emit("stderr", warning)
         try:
-            session.start()
+            if warm is not None and isinstance(session, ClaudeCodeSession):
+                session.adopt(warm.proc)
+            else:
+                if warm is not None:
+                    self._pool.put(warm)
+                session.start()
         except Exception as e:  # noqa: BLE001 — missing binary etc: don't leak a zombie
             session._emit("stderr", f"failed to start: {e}")
             session._set_state("error")
             self._cleanup_worktree(session)
+        else:
+            # A Claude session started here: keep a spare ready for the next one.
+            if warm_key is not None and isinstance(session, ClaudeCodeSession) \
+                    and self._pool.max_total > 0:
+                self._pool.fill_async(warm_key, lambda: self._start_warm(
+                    warm_key, str(cwd), want_isolation, session.binary))
         return session
+
+    # ---- warm pool ----
+
+    def _claude_options(self) -> tuple[str, list[str]]:
+        cfg = self._cfg
+        mode = str(cfg["claude_permission_mode"])
+        if mode == "bypassPermissions" and not bool(cfg.get("allow_bypass_permissions")):
+            mode = "acceptEdits"
+        return mode, list(cfg.get("claude_allowed_tools") or [])
+
+    def _warm_key(self, cwd: str, isolated: bool) -> tuple:
+        mode, tools = self._claude_options()
+        mcp = bool(self._mcp_cfg.get("enabled") and self._mcp_cfg.get("expose_to_fleet"))
+        return ("claude", cwd, isolated, mode, tuple(tools), mcp,
+                tuple(self._cfg.get("env_allowlist") or []))
+
+    def _start_warm(self, key: tuple, cwd: str, isolated: bool, binary: str) -> Warm | None:
+        """Provision the worktree and start the CLI, waiting for its task on stdin."""
+        session_id = uuid.uuid4().hex[:8]
+        run_dir, branch, warning = (wt.provision(Path(cwd), session_id) if isolated
+                                    else (Path(cwd), None, None))
+        head = wt.head_commit(cwd) if branch else ""
+        mode, tools = self._claude_options()
+        mcp = self._mcp_config_path()
+        try:
+            proc = start_process(ClaudeCodeSession.command(binary, mode, tools, mcp),
+                                 str(run_dir), list(self._cfg.get("env_allowlist") or []),
+                                 stdin_pipe=True)
+        except Exception:
+            if branch:
+                wt.discard(Path(cwd), str(run_dir), branch)
+            if mcp:
+                Path(mcp).unlink(missing_ok=True)
+            raise
+        return Warm(key=key, session_id=session_id, run_dir=str(run_dir), branch=branch,
+                    head=head, proc=proc, workspace=cwd, mcp_config=mcp, warning=warning,
+                    created_at=time.time())
+
+    def warm_status(self) -> list[dict[str, Any]]:
+        return self._pool.status()
 
     def _build_session(self, *, agent_type: str, **kw) -> AgentSession:
         cfg = self._cfg
-        common = dict(
+        common: dict[str, Any] = dict(
             agent_type=agent_type,
             env_allowlist=list(cfg.get("env_allowlist") or []),
             buffer_lines=int(cfg["output_buffer_lines"]),
@@ -220,13 +291,13 @@ class SessionManager:
             **kw,
         )
         if agent_type == "claude":
-            mode = str(cfg["claude_permission_mode"])
-            if mode == "bypassPermissions" and not bool(cfg.get("allow_bypass_permissions")):
-                mode = "acceptEdits"
+            mode, tools = self._claude_options()
+            mcp = common.pop("mcp_config", None) if "mcp_config" in common \
+                else self._mcp_config_path()
             return ClaudeCodeSession(
                 permission_mode=mode,
-                allowed_tools=list(cfg.get("claude_allowed_tools") or []),
-                mcp_config=self._mcp_config_path(),
+                allowed_tools=tools,
+                mcp_config=mcp,
                 **common,
             )
         if agent_type in ("codex", "opencode", "cursor"):
@@ -256,6 +327,7 @@ class SessionManager:
         return session
 
     def stop_all(self, grace_sec: float = 5.0) -> int:
+        self._pool.drain()
         with self._lock:
             active = [s for s in self._sessions.values() if s.is_active()]
         for s in active:
@@ -338,6 +410,7 @@ class SessionManager:
         with self._lock:
             sessions = list(self._sessions.values())
         now = now or time.time()
+        self._pool.expire(now)
         for s in sessions:
                 if not s.is_active():
                     continue

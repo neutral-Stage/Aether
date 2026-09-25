@@ -1,0 +1,17 @@
+{
+  "name": "meeting_notes",
+  "description": "The notes (summary, decisions, action items) and transcript of one meeting, by the id from search_meetings.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id"
+    ]
+  },
+  "permission": "none",
+  "impact": "read"
+}

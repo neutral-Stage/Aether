@@ -1,0 +1,17 @@
+{
+  "name": "unwatch_app",
+  "description": "Stop watching a background app.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "app": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "app"
+    ]
+  },
+  "permission": "screen",
+  "impact": "read"
+}

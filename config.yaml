@@ -4,7 +4,7 @@ version: 1.0.0-rc.1
 
 llm:
   provider: zai                # legacy hint; router roles in configs/router.yaml take precedence
-  model: glm-5-turbo           # supervisor default (cloud_frontier)
+  model: glm-5.3-flash         # default brain (cloud_frontier + vision)
   max_tokens: 1024
   temperature: 0
   # API keys via .env — see .env.example:
@@ -20,7 +20,7 @@ router:
 memory:
   enabled: true
   db_path: data/memory.db
-  embedding_provider: hash       # hash | openai | local
+  embedding_provider: auto       # auto (multilingual-e5 if requirements-memory.txt is installed, else hash) | e5 | hash | openai | local
   openai_model: text-embedding-3-small
   local_model: all-MiniLM-L6-v2
 
@@ -60,6 +60,70 @@ policy:
   approved_file_roots:
     - "~"                        # QUOTED: bare ~ is YAML null → [None] (breaks the path guard)
   network_allowlist: []          # empty = allow all; set hosts in careful mode
+  trusted_shortcuts: []          # Shortcuts that run without asking (exact names)
+
+# macOS Seatbelt confinement for commands Aether starts (aether/effectors/sandbox.py).
+# Writes stay inside policy.approved_file_roots (+ extra_write_roots, temp, caches);
+# startup files, LaunchAgents, git hooks and Aether's own config stay read-only;
+# credential files (SSH keys, cloud CLIs, keychains, browser profiles) are unreadable.
+sandbox:
+  enabled: true
+  shell: true                  # run_shell
+  coders: true                 # delegate_to_coder, fleet agents, agent terminals, graph gates
+  shell_network: true          # false => run_shell has no network (also off when capabilities.network is off)
+  coder_network: true          # coding CLIs need their provider's API
+  extra_write_roots: []        # e.g. "/opt/homebrew" to let run_shell install with brew
+  extra_deny_read: []
+  protect_self: true           # Aether's config, data dir, .env and audit key
+
+# Self-written tools: when no tool fits, Aether proposes one (make_tool), you
+# approve exactly what it may access, a separate review checks the code, and
+# every run is a separate Python process in the macOS sandbox. Installed tools
+# live in <data dir>/tools/ as my_<name>.
+toolsmith:
+  enabled: true
+  timeout_s: 60                    # per run (max 300)
+  max_repairs: 2                   # automatic fixes per tool per run (0-2); never widen access
+  restrict_reads_with_network: true   # a tool with internet access reads only its declared folders
+  extra_read_roots: []             # more folders such tools may read (e.g. a custom Python install)
+  allow_unsandboxed: false         # tests only: run tools without the macOS sandbox
+
+# Screen memory: remembers the TEXT of what you look at, on this Mac only, so you
+# can ask "what was that article about X this morning?". Off by default. No
+# images are kept; secrets are redacted; password managers, private browser
+# windows, sign-in and banking pages, password fields, and anything it can't
+# identify are skipped. Pause or delete from the menu bar.
+screen_memory:
+  enabled: false
+  retention_days: 14
+  interval_s: 30                # re-read a window you stay in, keep it only if it changed
+  ocr_fallback: true            # on-device OCR of the front window when it exposes little text
+  exclude_bundle_ids: []        # e.g. com.apple.MobileSMS
+  exclude_window_globs: []      # e.g. "*medical*"
+  only_bundle_ids: []           # when set, record only these apps
+  allow_browsers: []            # Safari and other browsers whose private windows can't be
+                                 # confirmed are skipped unless their bundle ID is listed here
+                                 # (or allowed from the menu bar); e.g. com.apple.Safari
+
+# Meeting notes: started from the menu bar after a consent prompt. The meeting
+# app's audio and your microphone are transcribed in ~30 s pieces and the audio
+# is discarded; the transcript, summary and action items are kept on this Mac.
+meetings:
+  transcription: local          # local (mlx-whisper, audio stays here) | cloud (voice.stt provider)
+  summarize: true               # write notes with the model when the meeting ends
+
+# Polite proactive hints: now and then, one short tip about what is on screen,
+# always with its reason. Off by default. Asked only when you are idle, not
+# typing, and the screen changed; uses screen memory's privacy rules (password
+# managers, private windows, sign-in pages and excluded apps are never read).
+hints:
+  enabled: false
+  min_confidence: 0.75          # hints the model is less sure about are dropped
+  idle_s: 6                     # seconds without input before asking
+  gap_s: 20                     # at least this long between questions to the model
+  category_cooldown_min: 15     # after a hint, its kind stays quiet this long
+  daily_cap: 12                 # most hints shown per day
+  max_queries_per_hour: 30      # most questions to the model per hour
 
 # Signed append-only audit log (§6.7 FR-29)
 audit:
@@ -71,7 +135,7 @@ beta:
   continuous_screen_stream: false   # ScreenCaptureKit continuous stream (Swift)
   ambient_listening: false          # always-on mic + wake word
   wake_word: false                   # energy placeholder or Porcupine (see wake_word_engine)
-  wake_word_engine: energy           # energy | porcupine
+  wake_word_engine: energy           # energy | porcupine | speech (on-device "Hey Aether …", audio stays on the Mac)
   screen_stream_fps: 0.5            # max frames/sec when continuous stream enabled
   native_effectors: false            # route click/type to Swift HTTP bridge
   realtime_voice: false              # OpenAI Realtime API path (Phase 10)
@@ -154,6 +218,10 @@ fleet:
     enabled: true              # isolate code agents in git worktrees
     keep: true                 # keep worktree dir after stop (branch always kept)
   require_isolation: false     # refuse spawn if worktree unavailable
+  warm_pool:                   # keep a spare Claude Code process for the last-used folders
+    enabled: true              # the next session there starts without CLI startup time
+    max_total: 2
+    max_age_sec: 900           # spares older than this are stopped (and their worktree removed)
 
 # Tier-0 coding agent delegation (§6.10)
 delegation:
@@ -166,6 +234,8 @@ delegation:
 voice:
   mode: pipeline                   # pipeline | realtime (Phase 10 beta)
   realtime_provider: openai        # openai (requires OPENAI_API_KEY)
+  realtime_model: gpt-realtime     # OpenAI Realtime model
+  realtime_speaker: marin          # the voice it speaks with
   tts: groq                    # groq | kokoro (local, pip install kokoro) | macos | none
   tts_stream: true               # prefer POST /tts/stream when available
   tts_model: canopylabs/orpheus-v1-english   # Groq Orpheus TTS model ID
@@ -177,14 +247,19 @@ voice:
   record_seconds: 8            # max push-to-talk capture length
   barge_in: true               # Phase 4: interrupt TTS when user speaks
   vad_energy_threshold: 0.02   # mic RMS threshold for barge-in detection
+  speculative_talk: true       # talk mode: start the model on a settled partial, before you let go
 
 agent:
-  max_steps: 12                # safety cap on tool calls per task
+  max_steps: 40                # safety cap on model turns per task
+  cost_cap_usd: 2.0            # stop a task once its estimated model cost reaches this (0 = no cap)
+  context_budget_chars: 60000  # collapse the oldest tool output past this much text
+  fast_router: true            # open/quit apps, folders, volume, 'what app is this' without a model call
   careful: false               # true => confirm before EVERY action
   narrate: true                # speak a short line before each action
   local_only: false            # true => prefer local model; cloud fallback if unavailable
   explicit_planner: false      # Phase 11: decompose novel goals into plan steps (FR-9)
   planner_use_llm: true        # use cloud LLM for planning when explicit_planner is true
+  verify_screenshots: auto     # screenshot after GUI actions: auto (thin AX only) | always | off
 
 hud:
   enabled: true                # menu-bar + overlay window
@@ -213,3 +288,9 @@ capabilities:
   files: true
   network: true
   agents: true                 # fleet tools (spawn_agent, …)
+  calendar: true                # calendar_events/calendar_create_event, reminders_list/reminders_add
+  contacts: true                # contacts_search
+  notes: true                   # notes_search/notes_create
+  mail: true                    # mail_search
+  # Each integration also needs to be turned on per app in the Aether window's
+  # Integrations panel (off by default there, unlike these capability gates).

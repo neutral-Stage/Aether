@@ -2,6 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleExecutable</key>
+	<string>Aether</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleDisplayName</key>
+	<string>Aether</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
 	<key>CFBundleIdentifier</key>
 	<string>dev.aether.macos</string>
 	<key>CFBundleName</key>
@@ -18,5 +30,15 @@
 	<string>Aether uses the microphone for push-to-talk voice commands.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Aether transcribes your voice on device for low-latency control.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Aether reads and, when you approve, adds events so it can answer questions about your schedule.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Aether reads and, when you approve, adds events so it can answer questions about your schedule.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Aether reads and, when you approve, adds reminders so it can help track your to-dos.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Aether reads and, when you approve, adds reminders so it can help track your to-dos.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Aether looks up a contact's phone number, email or organization when you ask about someone.</string>
 </dict>
 </plist>

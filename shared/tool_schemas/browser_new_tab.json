@@ -1,0 +1,14 @@
+{
+  "name": "browser_new_tab",
+  "description": "Open a new browser tab, optionally at a URL.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string"
+      }
+    }
+  },
+  "permission": "network",
+  "impact": "reversible"
+}

@@ -1,0 +1,20 @@
+{
+  "name": "notes_search",
+  "description": "Search the user's Notes by title or body.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  },
+  "permission": "notes",
+  "impact": "read"
+}

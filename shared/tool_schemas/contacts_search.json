@@ -1,0 +1,20 @@
+{
+  "name": "contacts_search",
+  "description": "Look up a contact by name: organization, emails, phone numbers.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  },
+  "permission": "contacts",
+  "impact": "read"
+}

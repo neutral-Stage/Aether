@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Benchmark VMs only: starts Aether's sidecar in the logged-in (GUI) session so
+     its accessibility, input and capture calls work. Installed by prime_golden.sh,
+     which replaces __AETHER__ with the checkout path. Never install this on your own Mac. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.aether.bench.sidecar</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__AETHER__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>sidecar.server</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__AETHER__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AETHER_SIDECAR_TOKEN</key>
+        <string>aether-bench</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+    <key>StandardOutPath</key>
+    <string>/tmp/aether-bench-sidecar.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/aether-bench-sidecar.log</string>
+</dict>
+</plist>

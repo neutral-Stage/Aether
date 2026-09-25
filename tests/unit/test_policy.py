@@ -49,3 +49,17 @@ class TestPolicy:
         )
         assert policy.allows_shell_path("ls /Users/test/docs")
         assert not policy.allows_shell_path("cat /etc/passwd")
+
+    def test_integration_writes_always_confirm(self) -> None:
+        """calendar_create_event/reminders_add/notes_create confirm even though
+        their impact is 'reversible' and careful mode is off."""
+        policy = Policy()
+        for name in ("calendar_create_event", "reminders_add", "notes_create"):
+            spec = DEFAULT_REGISTRY.get(name)
+            assert spec is not None, name
+            assert policy.impact_of(spec, {}) != "destructive"
+            assert policy.requires_confirm(spec, {})
+        # A read from the same tool family never confirms on its own.
+        read_spec = DEFAULT_REGISTRY.get("calendar_events")
+        assert read_spec is not None
+        assert not policy.requires_confirm(read_spec, {})

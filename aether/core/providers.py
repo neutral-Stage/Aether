@@ -5,7 +5,14 @@ import logging
 import os
 from typing import Any
 
-from .llm import GoogleGeminiClient, LLM, LLMBackend, LocalHTTPClient, OpenAICompatibleClient
+from .llm import (
+    DEFAULT_ANTHROPIC_MODEL,
+    GoogleGeminiClient,
+    LLM,
+    LLMBackend,
+    LocalHTTPClient,
+    OpenAICompatibleClient,
+)
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +40,27 @@ def collect_api_keys() -> dict[str, str | None]:
     if not keys.get("GOOGLE_API_KEY") and keys.get("GEMINI_API_KEY"):
         keys["GOOGLE_API_KEY"] = keys["GEMINI_API_KEY"]
     return keys
+
+
+def is_loopback_url(url: str) -> bool:
+    """http(s)://localhost, 127.x or [::1]: a server on this Mac.
+
+    The host must be ``localhost`` or parse as a loopback IP address, so a
+    name like ``127.0.0.1.example.com`` (which resolves anywhere) doesn't count.
+    """
+    import ipaddress
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def resolve_api_key(role_cfg: dict[str, Any], api_keys: dict[str, str | None]) -> str | None:
@@ -86,16 +114,18 @@ def create_client(
             return None
         return LLM(
             api_key=api_key,
-            model=model or "claude-sonnet-4-6",
+            model=model or DEFAULT_ANTHROPIC_MODEL,
             max_tokens=max_tokens,
             temperature=temperature,
         )
 
     if backend in {"openai", "openai_compatible"}:
+        base_url = str(role_cfg.get("base_url") or "https://api.openai.com/v1")
+        if not api_key and is_loopback_url(base_url):
+            api_key = "local"          # local servers (LM Studio, mlx-vlm) need no key
         if not api_key:
             log.warning("Skipping role %s: %s not set", role_name, role_cfg.get("api_key_env"))
             return None
-        base_url = str(role_cfg.get("base_url") or "https://api.openai.com/v1")
         extra_headers = dict(role_cfg.get("extra_headers") or {})
         provider_label = str(role_cfg.get("provider_label") or role_name)
         return OpenAICompatibleClient(
@@ -106,6 +136,7 @@ def create_client(
             temperature=temperature,
             backend_name=provider_label,
             extra_headers=extra_headers or None,
+            images=bool(role_cfg.get("images", True)),
         )
 
     if backend == "google":

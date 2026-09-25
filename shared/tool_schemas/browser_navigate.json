@@ -1,11 +1,14 @@
 {
   "name": "browser_navigate",
-  "description": "Open a URL in headless Chromium (Playwright).",
+  "description": "Open a URL in the browser (headless Chromium, or the user's real Chrome when attached). Optional tab_id targets a tab from browser_tabs.",
   "input_schema": {
     "type": "object",
     "properties": {
       "url": {
         "type": "string"
+      },
+      "tab_id": {
+        "type": "integer"
       }
     },
     "required": [

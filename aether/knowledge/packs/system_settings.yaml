@@ -19,3 +19,55 @@ recipes:
 gotchas:
   - "Pane identifiers (x-apple.systempreferences:...) changed in macOS Ventura+"
   - "The settings list is a scrolling sidebar; use search rather than scrolling"
+verified_recipes:
+  bluetooth:
+    match: ["bluetooth settings", "turn on bluetooth", "turn off bluetooth", "bluetooth on",
+            "bluetooth off", "open bluetooth"]
+    steps:
+      - {tool: open_url, args: {url: "x-apple.systempreferences:com.apple.BluetoothSettings"}}
+      - {tool: wait, args: {for_app: System Settings, timeout: 10}}
+      - {tool: get_screen_context, args: {}}
+    guide:
+      - {say: "Click the Apple menu in the top-left corner.", target: Apple, role: "menu bar item", done_when: menu}
+      - {say: "Choose System Settings.", target: "System Settings…", role: "menu item", done_when: app, expect: System Settings}
+      - {say: "Click Bluetooth in the sidebar.", target: Bluetooth, app: System Settings, done_when: click}
+      - {say: "Use the Bluetooth switch at the top.", target: Bluetooth, role: checkbox, app: System Settings, done_when: click}
+  wifi:
+    match: ["wi fi settings", "wifi settings", "turn on wi fi", "turn off wi fi", "turn on wifi",
+            "turn off wifi", "join a network", "join wifi"]
+    steps:
+      - {tool: open_url, args: {url: "x-apple.systempreferences:com.apple.wifi-settings-extension"}}
+      - {tool: wait, args: {for_app: System Settings, timeout: 10}}
+      - {tool: get_screen_context, args: {}}
+    guide:
+      - {say: "Click the Apple menu in the top-left corner.", target: Apple, role: "menu bar item", done_when: menu}
+      - {say: "Choose System Settings.", target: "System Settings…", role: "menu item", done_when: app, expect: System Settings}
+      - {say: "Click Wi-Fi in the sidebar.", target: Wi-Fi, app: System Settings, done_when: click}
+  printers:
+    match: ["add a printer", "add printer", "printer settings", "printers and scanners"]
+    steps:
+      - {tool: open_url, args: {url: "x-apple.systempreferences:com.apple.Print-Scanner-Settings.extension"}}
+      - {tool: wait, args: {for_app: System Settings, timeout: 10}}
+      - {tool: get_screen_context, args: {}}
+    guide:
+      - {say: "Click the Apple menu in the top-left corner.", target: Apple, role: "menu bar item", done_when: menu}
+      - {say: "Choose System Settings.", target: "System Settings…", role: "menu item", done_when: app, expect: System Settings}
+      - {say: "Click Printers & Scanners in the sidebar. You may need to scroll down.", target: "Printers & Scanners", app: System Settings, done_when: click}
+      - {say: "Click Add Printer, Scanner or Fax.", target: "Add Printer, Scanner, or Fax…", app: System Settings, done_when: window, expect: Add}
+  display:
+    match: ["display settings", "screen resolution", "change resolution", "night shift"]
+    steps:
+      - {tool: open_url, args: {url: "x-apple.systempreferences:com.apple.Displays-Settings.extension"}}
+      - {tool: wait, args: {for_app: System Settings, timeout: 10}}
+      - {tool: get_screen_context, args: {}}
+  appearance:
+    match: ["dark mode", "light mode", "appearance settings"]
+    steps:
+      - {tool: open_url, args: {url: "x-apple.systempreferences:com.apple.Appearance-Settings.extension"}}
+      - {tool: wait, args: {for_app: System Settings, timeout: 10}}
+      - {tool: get_screen_context, args: {}}
+    guide:
+      - {say: "Click the Apple menu in the top-left corner.", target: Apple, role: "menu bar item", done_when: menu}
+      - {say: "Choose System Settings.", target: "System Settings…", role: "menu item", done_when: app, expect: System Settings}
+      - {say: "Click Appearance in the sidebar.", target: Appearance, app: System Settings, done_when: click}
+      - {say: "Pick Light, Dark or Auto at the top.", target: Dark, app: System Settings, done_when: click}

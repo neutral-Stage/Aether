@@ -1,0 +1,17 @@
+{
+  "name": "get_app_context",
+  "description": "Read the UI elements of ANY running app by name \u2014 foreground or background \u2014 without changing focus. Use before background click/type_text with app=.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "app": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "app"
+    ]
+  },
+  "permission": "screen",
+  "impact": "read"
+}

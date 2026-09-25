@@ -1,0 +1,435 @@
+# Live benchmark: real tasks in a throwaway macOS VM, scored by end state.
+# Run:  python scripts/benchmark_tasks.py --vm        (docs/BENCHMARK_VM.md)
+# CI:   the mock_trace of every task is scored against `success`, and the file
+#       is schema-checked (tests/unit/test_vm_benchmark.py).
+#
+# Fields
+#   goal       what the user says
+#   setup      shell commands run in the VM first (as the VM user, over SSH)
+#   check      how success is judged from the machine's real state:
+#                applescript / shell (+ expect), frontmost, file_exists,
+#                file_missing, file_contains {path, text}, answer_contains,
+#                answer_regex, or all: [checks]
+#   cleanup    shell commands run afterwards (the clone is deleted anyway)
+#   requires   capabilities the golden image must have (e.g. mail_account);
+#              tasks are skipped unless passed with --have
+#   mock_trace / success   the CI-side trace scoring
+# No task asks Aether to delete, send or buy: an unattended run cannot
+# answer a confirmation.
+
+version: 1
+tasks:
+  # ---- Finder and files ----------------------------------------------------------------
+  - id: finder_downloads
+    recipe: finder.open_folder
+    category: finder
+    goal: "Open a Finder window showing my Downloads folder"
+    check:
+      applescript: |
+        tell application "Finder" to get POSIX path of (target of front Finder window as alias)
+      expect: "/Downloads"
+    mock_trace:
+      - {tool: finder_go_to, args: {path: "~/Downloads"}}
+      - {tool: finish, args: {message: "Downloads is open."}}
+    success: {required_tools: [finder_go_to, finish]}
+
+  - id: new_folder_desktop
+    recipe: finder.new_folder
+    category: files
+    goal: "Create a folder called Reports 2026 on my Desktop"
+    check: {shell: "test -d \"$HOME/Desktop/Reports 2026\" && echo ok", expect: "ok"}
+    cleanup: ["rm -rf \"$HOME/Desktop/Reports 2026\""]
+    mock_trace:
+      - {tool: run_shell, args: {command: "mkdir -p ~/Desktop/'Reports 2026'"}}
+      - {tool: finish, args: {message: "Created the folder."}}
+    success: {required_tools: [finish], min_steps: 2}
+
+  - id: rename_file
+    category: files
+    goal: "Rename draft.txt on my Desktop to final.txt"
+    setup: ["echo hello > \"$HOME/Desktop/draft.txt\""]
+    check:
+      all:
+        - {file_exists: "~/Desktop/final.txt"}
+        - {file_missing: "~/Desktop/draft.txt"}
+    cleanup: ["rm -f \"$HOME/Desktop/final.txt\" \"$HOME/Desktop/draft.txt\""]
+    mock_trace:
+      - {tool: run_shell, args: {command: "mv ~/Desktop/draft.txt ~/Desktop/final.txt"}}
+      - {tool: finish, args: {message: "Renamed."}}
+    success: {required_tools: [finish], min_steps: 2}
+
+  - id: move_file
+    category: files
+    goal: "Move invoice.pdf from my Downloads folder into Documents/Invoices"
+    setup:
+      - "touch \"$HOME/Downloads/invoice.pdf\""
+      - "mkdir -p \"$HOME/Documents/Invoices\""
+    check:
+      all:
+        - {file_exists: "~/Documents/Invoices/invoice.pdf"}
+        - {file_missing: "~/Downloads/invoice.pdf"}
+    cleanup: ["rm -rf \"$HOME/Documents/Invoices\" \"$HOME/Downloads/invoice.pdf\""]
+    mock_trace:
+      - {tool: run_shell, args: {command: "mv ~/Downloads/invoice.pdf ~/Documents/Invoices/"}}
+      - {tool: finish, args: {message: "Moved."}}
+    success: {required_tools: [finish], min_steps: 2}
+
+  - id: write_text_file
+    category: files
+    goal: "Create a text file notes.txt on my Desktop that says buy milk"
+    check: {file_contains: {path: "~/Desktop/notes.txt", text: "buy milk"}}
+    cleanup: ["rm -f \"$HOME/Desktop/notes.txt\""]
+    mock_trace:
+      - {tool: write_file, args: {path: "~/Desktop/notes.txt", content: "buy milk", mode: create}}
+      - {tool: finish, args: {message: "Saved notes.txt."}}
+    success: {required_tools: [write_file, finish]}
+
+  - id: count_files
+    category: files
+    goal: "How many files are in the folder called count on my Desktop?"
+    setup: ["mkdir -p \"$HOME/Desktop/count\" && touch \"$HOME/Desktop/count/\"{a,b,c}.txt"]
+    check: {answer_regex: "\\b(3|three)\\b"}
+    cleanup: ["rm -rf \"$HOME/Desktop/count\""]
+    mock_trace:
+      - {tool: list_dir, args: {path: "~/Desktop/count"}}
+      - {tool: finish, args: {message: "There are 3 files."}}
+    success: {required_tools: [list_dir, finish]}
+
+  - id: zip_folder
+    category: files
+    goal: "Compress the folder pack on my Desktop into a zip file"
+    setup: ["mkdir -p \"$HOME/Desktop/pack\" && echo x > \"$HOME/Desktop/pack/a.txt\""]
+    check: {file_exists: "~/Desktop/pack.zip"}
+    cleanup: ["rm -rf \"$HOME/Desktop/pack\" \"$HOME/Desktop/pack.zip\""]
+    mock_trace:
+      - {tool: finder_go_to, args: {path: "~/Desktop"}}
+      - {tool: click_element, args: {name: "pack"}}
+      - {tool: menu_item, args: {path: "File > Compress “pack”"}}
+      - {tool: finish, args: {message: "Created pack.zip."}}
+    success: {required_tools: [menu_item, finish]}
+
+  - id: nested_file
+    category: files
+    goal: "Make a folder Trip on my Desktop with a file packing.txt in it that says passport"
+    check: {file_contains: {path: "~/Desktop/Trip/packing.txt", text: "passport"}}
+    cleanup: ["rm -rf \"$HOME/Desktop/Trip\""]
+    mock_trace:
+      - {tool: write_file, args: {path: "~/Desktop/Trip/packing.txt", content: "passport", mode: create}}
+      - {tool: finish, args: {message: "Done."}}
+    success: {required_tools: [write_file, finish]}
+
+  - id: new_finder_window
+    category: finder
+    goal: "Open a new Finder window"
+    setup: ["osascript -e 'tell application \"Finder\" to close every window'"]
+    check:
+      applescript: 'tell application "Finder" to get (count of Finder windows) > 0'
+      expect: "true"
+    mock_trace:
+      - {tool: open_app, args: {name: Finder}}
+      - {tool: menu_item, args: {path: "File > New Finder Window"}}
+      - {tool: finish, args: {message: "Opened a Finder window."}}
+    success: {required_tools: [menu_item, finish]}
+
+  # ---- TextEdit ----------------------------------------------------------------------------
+  - id: textedit_type
+    category: textedit
+    goal: "Open TextEdit, make a new document and type Hello from Aether"
+    check:
+      applescript: 'tell application "TextEdit" to get text of front document'
+      expect: "Hello from Aether"
+    cleanup: ["osascript -e 'tell application \"TextEdit\" to close every document saving no' -e 'tell application \"TextEdit\" to quit'"]
+    mock_trace:
+      - {tool: open_app, args: {name: TextEdit}}
+      - {tool: press_key, args: {key: n, modifiers: [cmd]}}
+      - {tool: type_text, args: {text: "Hello from Aether"}}
+      - {tool: finish, args: {message: "Typed it."}}
+    success: {required_tools: [open_app, type_text, finish]}
+
+  - id: textedit_save
+    category: textedit
+    goal: "In TextEdit, write quarterly plan in a new document and save it to the Desktop as plan"
+    check: {shell: "ls \"$HOME/Desktop\" | grep -i '^plan\\.' && echo found", expect: "found"}
+    cleanup:
+      - "rm -f \"$HOME\"/Desktop/plan.*"
+      - "osascript -e 'tell application \"TextEdit\" to quit saving no'"
+    mock_trace:
+      - {tool: open_app, args: {name: TextEdit}}
+      - {tool: press_key, args: {key: n, modifiers: [cmd]}}
+      - {tool: type_text, args: {text: "quarterly plan"}}
+      - {tool: press_key, args: {key: s, modifiers: [cmd]}}
+      - {tool: type_text, args: {text: "plan"}}
+      - {tool: press_key, args: {key: d, modifiers: [cmd]}}
+      - {tool: press_key, args: {key: return}}
+      - {tool: finish, args: {message: "Saved plan to the Desktop."}}
+    success: {required_tools: [type_text, press_key, finish], min_steps: 5}
+
+  - id: quit_textedit
+    category: apps
+    goal: "Quit TextEdit"
+    setup: ["open -a TextEdit && sleep 2"]
+    check:
+      applescript: 'application "TextEdit" is running'
+      expect: "false"
+    mock_trace:
+      - {tool: quit_app, args: {name: TextEdit}}
+      - {tool: finish, args: {message: "Quit TextEdit."}}
+    success: {required_tools: [quit_app, finish]}
+
+  # ---- Notes ------------------------------------------------------------------------------
+  - id: notes_create
+    recipe: notes.create_note
+    category: notes
+    goal: "Create a note called Grocery list with milk, eggs and bread"
+    check:
+      applescript: 'tell application "Notes" to get name of every note'
+      expect: "Grocery list"
+    cleanup: ["osascript -e 'tell application \"Notes\" to delete (every note whose name is \"Grocery list\")'"]
+    mock_trace:
+      - {tool: run_applescript, args: {source: "tell application \"Notes\" to make new note with properties {name:\"Grocery list\", body:\"milk, eggs, bread\"}"}}
+      - {tool: finish, args: {message: "Created the note."}}
+    success: {required_tools: [finish], min_steps: 2}
+
+  - id: notes_lookup
+    category: notes
+    goal: "What's my parking spot according to my notes?"
+    setup: ["osascript -e 'tell application \"Notes\" to make new note with properties {name:\"Parking\", body:\"Parking spot: level 3, B12\"}'"]
+    check: {answer_contains: "B12"}
+    cleanup: ["osascript -e 'tell application \"Notes\" to delete (every note whose name is \"Parking\")'"]
+    mock_trace:
+      - {tool: run_applescript, args: {source: "tell application \"Notes\" to get body of every note whose name contains \"Parking\""}}
+      - {tool: finish, args: {message: "Level 3, spot B12."}}
+    success: {required_tools: [finish], min_steps: 2}
+
+  - id: notes_to_file
+    category: cross_app
+    goal: "Copy the contents of my Recipe note into a text file recipe.txt on the Desktop"
+    setup: ["osascript -e 'tell application \"Notes\" to make new note with properties {name:\"Recipe\", body:\"flour 200g, sugar 50g\"}'"]
+    check: {file_contains: {path: "~/Desktop/recipe.txt", text: "flour"}}
+    cleanup:
+      - "rm -f \"$HOME/Desktop/recipe.txt\""
+      - "osascript -e 'tell application \"Notes\" to delete (every note whose name is \"Recipe\")'"
+    mock_trace:
+      - {tool: run_applescript, args: {source: "tell application \"Notes\" to get plaintext of note \"Recipe\""}}
+      - {tool: write_file, args: {path: "~/Desktop/recipe.txt", content: "flour 200g, sugar 50g", mode: create}}
+      - {tool: finish, args: {message: "Saved recipe.txt."}}
+    success: {required_tools: [write_file, finish]}
+
+  # ---- Safari ------------------------------------------------------------------------------
+  - id: safari_open
+    recipe: safari.open_website
+    category: safari
+    goal: "Open example.com in Safari"
+    check:
+      applescript: 'tell application "Safari" to get URL of current tab of front window'
+      expect: "example.com"
+    mock_trace:
+      - {tool: safari_open_url, args: {url: "https://example.com"}}
+      - {tool: finish, args: {message: "Opened example.com."}}
+    success: {required_tools: [safari_open_url, finish]}
+
+  - id: safari_search
+    recipe: safari.web_search
+    category: safari
+    goal: "Search the web in Safari for macOS accessibility API"
+    check:
+      applescript: 'tell application "Safari" to get URL of current tab of front window'
+      expect: "accessibility"
+    mock_trace:
+      - {tool: open_app, args: {name: Safari}}
+      - {tool: press_key, args: {key: l, modifiers: [cmd]}}
+      - {tool: type_text, args: {text: "macOS accessibility API"}}
+      - {tool: press_key, args: {key: return}}
+      - {tool: finish, args: {message: "Searched."}}
+    success: {required_tools: [type_text, finish]}
+
+  - id: safari_title
+    category: safari
+    goal: "What's the title of the page open in Safari?"
+    setup: ["open -a Safari https://example.com && sleep 5"]
+    check: {answer_contains: "Example Domain"}
+    mock_trace:
+      - {tool: get_screen_context, args: {}}
+      - {tool: finish, args: {message: "It's Example Domain."}}
+    success: {required_tools: [get_screen_context, finish]}
+
+  - id: safari_to_note
+    category: cross_app
+    goal: "Make a note whose title is the title of the page open in Safari"
+    setup: ["open -a Safari https://example.com && sleep 5"]
+    check:
+      applescript: 'tell application "Notes" to get name of every note'
+      expect: "Example Domain"
+    cleanup: ["osascript -e 'tell application \"Notes\" to delete (every note whose name contains \"Example Domain\")'"]
+    mock_trace:
+      - {tool: get_screen_context, args: {}}
+      - {tool: run_applescript, args: {source: "tell application \"Notes\" to make new note with properties {name:\"Example Domain\"}"}}
+      - {tool: finish, args: {message: "Created the note."}}
+    success: {required_tools: [finish], min_steps: 3}
+
+  # ---- Reminders and Calendar ---------------------------------------------------------------
+  - id: reminder_add
+    recipe: reminders.add_reminder
+    category: reminders
+    goal: "Remind me to call the dentist"
+    check:
+      applescript: 'tell application "Reminders" to get name of every reminder'
+      expect: "dentist"
+    cleanup: ["osascript -e 'tell application \"Reminders\" to delete (every reminder whose name contains \"dentist\")'"]
+    mock_trace:
+      - {tool: run_applescript, args: {source: "tell application \"Reminders\" to make new reminder with properties {name:\"Call the dentist\"}"}}
+      - {tool: finish, args: {message: "Added the reminder."}}
+    success: {required_tools: [finish], min_steps: 2}
+
+  - id: calendar_event
+    category: calendar
+    goal: "Add a calendar event tomorrow at 3pm called Design review"
+    check:
+      applescript: |
+        tell application "Calendar"
+          set n to 0
+          repeat with c in calendars
+            set n to n + (count of (every event of c whose summary is "Design review"))
+          end repeat
+          return n > 0
+        end tell
+      expect: "true"
+    cleanup: ["osascript -e 'tell application \"Calendar\" to repeat with c in calendars' -e 'delete (every event of c whose summary is \"Design review\")' -e 'end repeat'"]
+    timeout: 900
+    mock_trace:
+      - {tool: open_app, args: {name: Calendar}}
+      - {tool: run_applescript, args: {source: "tell application \"Calendar\" to tell calendar 1 to make new event"}}
+      - {tool: finish, args: {message: "Added Design review tomorrow at 3pm."}}
+    success: {required_tools: [finish], min_steps: 2}
+
+  # ---- Terminal and shell -------------------------------------------------------------------
+  - id: terminal_echo
+    recipe: terminal.run_command
+    category: terminal
+    goal: "Open Terminal and run: echo aether-ok > /tmp/aether_bench.txt"
+    check: {file_contains: {path: "/tmp/aether_bench.txt", text: "aether-ok"}}
+    cleanup: ["rm -f /tmp/aether_bench.txt"]
+    mock_trace:
+      - {tool: open_app, args: {name: Terminal}}
+      - {tool: type_text, args: {text: "echo aether-ok > /tmp/aether_bench.txt"}}
+      - {tool: press_key, args: {key: return}}
+      - {tool: finish, args: {message: "Ran it."}}
+    success: {required_tools: [open_app, type_text, finish]}
+
+  - id: disk_space
+    category: system
+    goal: "How much free disk space do I have?"
+    check: {answer_regex: "\\d+(\\.\\d+)?\\s*(GB|TB|GiB|TiB)"}
+    mock_trace:
+      - {tool: run_shell, args: {command: "df -h /"}}
+      - {tool: finish, args: {message: "About 20 GB free."}}
+    success: {required_tools: [run_shell, finish]}
+
+  # ---- System -------------------------------------------------------------------------------
+  - id: volume_set
+    category: system
+    goal: "Set the volume to 25 percent"
+    check:
+      applescript: 'output volume of (get volume settings)'
+      expect: "25"
+    mock_trace:
+      - {tool: set_volume, args: {level: 25}}
+      - {tool: finish, args: {message: "Volume is 25%."}}
+    success: {required_tools: [set_volume, finish]}
+
+  - id: frontmost_question
+    category: system
+    goal: "Which app is in front right now?"
+    setup: ["open -a Calculator && sleep 2"]
+    check: {answer_contains: "Calculator"}
+    mock_trace:
+      - {tool: get_screen_context, args: {}}
+      - {tool: finish, args: {message: "Calculator."}}
+    success: {required_tools: [finish]}
+
+  - id: settings_bluetooth
+    recipe: system_settings.bluetooth
+    category: system_settings
+    goal: "Open the Bluetooth settings"
+    check:
+      applescript: 'tell application "System Events" to tell process "System Settings" to get name of front window'
+      expect: "Bluetooth"
+    cleanup: ["osascript -e 'tell application \"System Settings\" to quit'"]
+    mock_trace:
+      - {tool: open_url, args: {url: "x-apple.systempreferences:com.apple.BluetoothSettings"}}
+      - {tool: finish, args: {message: "Bluetooth settings are open."}}
+    success: {required_tools: [finish], min_steps: 2}
+
+  - id: settings_appearance_question
+    category: system_settings
+    goal: "Is dark mode on?"
+    setup: ["osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to true'"]
+    check: {answer_regex: "\\b(yes|on|enabled|is dark)\\b"}
+    cleanup: ["osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to false'"]
+    mock_trace:
+      - {tool: run_applescript, args: {source: "tell application \"System Events\" to tell appearance preferences to get dark mode"}}
+      - {tool: finish, args: {message: "Yes, dark mode is on."}}
+    success: {required_tools: [finish], min_steps: 2}
+
+  - id: clipboard_copy
+    category: system
+    goal: "Copy the text benchmark-clip to the clipboard"
+    check: {applescript: "the clipboard", expect: "benchmark-clip"}
+    mock_trace:
+      - {tool: clipboard_set, args: {text: "benchmark-clip"}}
+      - {tool: finish, args: {message: "Copied."}}
+    success: {required_tools: [clipboard_set, finish]}
+
+  # ---- Calculator and multi-step UI ------------------------------------------------------------
+  - id: calculator_compute
+    category: calculator
+    goal: "Use Calculator to work out 1234 times 56 and tell me the result"
+    check: {answer_regex: "69,?104"}
+    cleanup: ["osascript -e 'tell application \"Calculator\" to quit'"]
+    mock_trace:
+      - {tool: open_app, args: {name: Calculator}}
+      - {tool: type_text, args: {text: "1234*56="}}
+      - {tool: get_screen_context, args: {}}
+      - {tool: finish, args: {message: "It's 69,104."}}
+    success: {required_tools: [open_app, finish]}
+
+  - id: finder_sort_by_name
+    category: finder
+    goal: "In the Finder window for Documents, sort the files by name"
+    setup: ["open \"$HOME/Documents\" && sleep 2"]
+    check:
+      applescript: 'tell application "Finder" to get sort column of list view options of front Finder window'
+      expect: "name"
+    mock_trace:
+      - {tool: menu_item, args: {path: "View > Sort By > Name"}}
+      - {tool: finish, args: {message: "Sorted by name."}}
+    success: {required_tools: [menu_item, finish]}
+
+  - id: two_step_folder_and_open
+    category: finder
+    goal: "Create a folder Projects in Documents and open it in Finder"
+    check:
+      all:
+        - {shell: "test -d \"$HOME/Documents/Projects\" && echo ok", expect: "ok"}
+        - applescript: 'tell application "Finder" to get POSIX path of (target of front Finder window as alias)'
+          expect: "/Documents/Projects"
+    cleanup: ["rm -rf \"$HOME/Documents/Projects\""]
+    mock_trace:
+      - {tool: run_shell, args: {command: "mkdir -p ~/Documents/Projects"}}
+      - {tool: finder_go_to, args: {path: "~/Documents/Projects"}}
+      - {tool: finish, args: {message: "Created and opened Projects."}}
+    success: {required_tools: [finder_go_to, finish]}
+
+  # ---- Mail (needs an account in the golden image) -------------------------------------------
+  - id: mail_draft
+    category: mail
+    requires: [mail_account]
+    goal: "Draft an email to test@example.com with the subject Hello and the body Just checking in. Don't send it."
+    check:
+      applescript: 'tell application "Mail" to get (count of (every outgoing message whose subject is "Hello")) > 0'
+      expect: "true"
+    cleanup: ["osascript -e 'tell application \"Mail\" to close every outgoing message saving no'"]
+    mock_trace:
+      - {tool: mail_compose, args: {to: "test@example.com", subject: "Hello", body: "Just checking in"}}
+      - {tool: finish, args: {message: "The draft is ready and not sent."}}
+    success: {required_tools: [mail_compose, finish]}

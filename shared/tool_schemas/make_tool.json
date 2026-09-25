@@ -1,0 +1,59 @@
+{
+  "name": "make_tool",
+  "description": "Write yourself a new tool when a task needs a repeatable computation or file transformation that no existing tool does well, e.g. batch-rename files by a pattern, merge CSV files, extract links from saved HTML, or compute totals from an export. The user approves what it may access; it then runs in a sandbox and appears as my_<name>. Prefer existing tools, and do not use this for a one-off shell command.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "short name, e.g. 'merge csv files' (becomes my_merge_csv_files)"
+      },
+      "description": {
+        "type": "string",
+        "description": "one sentence the user reads: what the tool does"
+      },
+      "params": {
+        "type": "object",
+        "description": "parameter name \u2192 {\"type\": string|number|integer|boolean, \"description\": \u2026}"
+      },
+      "required": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "how": {
+        "type": "string",
+        "description": "how it should work: inputs, steps and what it returns"
+      },
+      "network": {
+        "type": "boolean",
+        "description": "true only if it must reach the internet"
+      },
+      "write_dirs": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 5,
+        "description": "folders it writes into (absolute or ~/\u2026); leave empty if it only returns text"
+      },
+      "read_dirs": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 5,
+        "description": "with network only: the folders it needs to read"
+      }
+    },
+    "required": [
+      "name",
+      "description",
+      "params",
+      "how"
+    ]
+  },
+  "permission": "shell",
+  "impact": "reversible"
+}

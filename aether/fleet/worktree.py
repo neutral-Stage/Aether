@@ -83,3 +83,19 @@ def merge_tree_conflicts(root: Path | str, base_ref: str, branch: str) -> tuple[
     # stdout: <tree-oid>\n<conflicted path>\n...  (best-effort parse)
     lines = [ln for ln in res.stdout.splitlines() if ln.strip()]
     return True, lines[1:] if len(lines) > 1 else []
+
+
+def head_commit(workspace: Path | str) -> str:
+    """The commit HEAD points at ('' outside a repo)."""
+    res = _git(["rev-parse", "HEAD"], Path(workspace))
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def discard(workspace: Path | str, worktree_dir: str, branch: str) -> None:
+    """Remove a worktree that was never used, and its branch if it has no new commits."""
+    root = repo_root(workspace)
+    if root is None:
+        return
+    _git(["worktree", "remove", "--force", worktree_dir], root)
+    # -d (not -D): refuses to delete a branch whose commits are not merged anywhere
+    _git(["branch", "-d", branch], root)

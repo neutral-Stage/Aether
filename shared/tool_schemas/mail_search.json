@@ -1,0 +1,23 @@
+{
+  "name": "mail_search",
+  "description": "Search Mail (inbox, or a named mailbox) by subject or sender.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      },
+      "mailbox": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  },
+  "permission": "mail",
+  "impact": "read"
+}

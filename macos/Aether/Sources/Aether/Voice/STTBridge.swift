@@ -2,16 +2,94 @@ import AVFoundation
 import Foundation
 import Speech
 
+/// One on-device speech-recognition session fed from the shared microphone hub.
+/// Independent of any other session — barge-in and the wake listener each run
+/// their own `PartialRecognizer` and no longer cancel one another.
+@MainActor
+final class PartialRecognizer {
+    private(set) var isRunning = false
+
+    private let recognizer: SFSpeechRecognizer?
+    private let hub: MicHub
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var task: SFSpeechRecognitionTask?
+    private var subscription: MicSubscription?
+
+    init(recognizer: SFSpeechRecognizer?, hub: MicHub = .shared) {
+        self.recognizer = recognizer
+        self.hub = hub
+    }
+
+    /// Streaming partials for barge-in / HUD transcript / wake word (§6.1).
+    /// `contextualStrings` bias recognition toward phrases (the wake word); `onEnd`
+    /// runs when the recognizer stops by itself (error, final result, time limit).
+    /// Returns whether a session actually started.
+    @discardableResult
+    func start(contextualStrings: [String] = [],
+              onPartial: @escaping (String) -> Void,
+              onEnd: (() -> Void)? = nil) async -> Bool {
+        stop()
+        guard SFSpeechRecognizer.authorizationStatus() == .authorized,
+              let recognizer, recognizer.isAvailable, recognizer.supportsOnDeviceRecognition
+        else {
+            onEnd?()
+            return false
+        }
+
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        req.requiresOnDeviceRecognition = true
+        req.contextualStrings = contextualStrings
+
+        do {
+            subscription = try hub.subscribe { buffer in
+                req.append(buffer)
+            }
+        } catch {
+            onEnd?()
+            return false
+        }
+        request = req
+        isRunning = true
+
+        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
+            guard let self else { return }
+            if let result {
+                let text = result.bestTranscription.formattedString
+                Task { @MainActor in
+                    onPartial(text)
+                }
+            }
+            if error != nil || result?.isFinal == true {
+                Task { @MainActor in
+                    // Only if this is still the current session (not a newer one).
+                    guard self.request === req else { return }
+                    self.stop()
+                    onEnd?()
+                }
+            }
+        }
+        return true
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+        request?.endAudio()
+        request = nil
+        subscription?.cancel()
+        subscription = nil
+        isRunning = false
+    }
+}
+
 @MainActor
 final class STTBridge: ObservableObject {
     @Published var speechAuthorized = false
     @Published var partialText = ""
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-    private var partialRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var partialTask: SFSpeechRecognitionTask?
-    private var tapInstalled = false
-    private let audioEngine = AVAudioEngine()
+    private lazy var defaultRecognizer = PartialRecognizer(recognizer: recognizer)
 
     func refreshAuthorization() {
         speechAuthorized = SFSpeechRecognizer.authorizationStatus() == .authorized
@@ -28,55 +106,33 @@ final class STTBridge: ObservableObject {
         }
     }
 
-    /// Streaming partials for barge-in / HUD transcript (§6.1).
-    func startPartialRecognition(onPartial: @escaping (String) -> Void) async {
-        stopPartialRecognition()
-        guard speechAuthorized, let recognizer, recognizer.isAvailable else { return }
+    /// An independent partial-recognition session, fed from the shared mic hub —
+    /// for a feature (like barge-in) that must not cancel `startPartialRecognition`'s
+    /// default session, or be cancelled by it.
+    func makePartialRecognizer() -> PartialRecognizer {
+        PartialRecognizer(recognizer: recognizer)
+    }
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
-        partialRequest = request
-
-        let input = audioEngine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        if !tapInstalled {
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-                request.append(buffer)
+    /// Streaming partials on the default session (see `PartialRecognizer.start`).
+    func startPartialRecognition(contextualStrings: [String] = [],
+                                 onPartial: @escaping (String) -> Void,
+                                 onEnd: (() -> Void)? = nil) async {
+        partialText = ""
+        await defaultRecognizer.start(
+            contextualStrings: contextualStrings,
+            onPartial: { [weak self] text in
+                self?.partialText = text
+                onPartial(text)
+            },
+            onEnd: { [weak self] in
+                self?.partialText = ""
+                onEnd?()
             }
-            tapInstalled = true
-        }
-        if !audioEngine.isRunning {
-            try? audioEngine.start()
-        }
-
-        partialTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            if let result {
-                let text = result.bestTranscription.formattedString
-                Task { @MainActor in
-                    self.partialText = text
-                    onPartial(text)
-                }
-            }
-            if error != nil || result?.isFinal == true {
-                Task { @MainActor in self.stopPartialRecognition() }
-            }
-        }
+        )
     }
 
     func stopPartialRecognition() {
-        partialTask?.cancel()
-        partialTask = nil
-        partialRequest?.endAudio()
-        partialRequest = nil
-        if tapInstalled {
-            audioEngine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
+        defaultRecognizer.stop()
         partialText = ""
     }
 

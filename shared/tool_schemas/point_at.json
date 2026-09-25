@@ -1,0 +1,39 @@
+{
+  "name": "point_at",
+  "description": "Show the user where something is: the on-screen pointer flies to it and circles it. Use when explaining or teaching, not to act. Pass name (best), element_index, a description a vision model can find, or x,y (space='image' for screenshot pixels), plus a short label.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string"
+      },
+      "role": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "element_index": {
+        "type": "integer"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      },
+      "space": {
+        "type": "string",
+        "enum": [
+          "screen",
+          "image"
+        ]
+      },
+      "label": {
+        "type": "string"
+      }
+    }
+  },
+  "permission": "screen",
+  "impact": "read"
+}

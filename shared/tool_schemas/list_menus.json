@@ -1,0 +1,17 @@
+{
+  "name": "list_menus",
+  "description": "List an app's menus, or one menu's items with their keyboard shortcuts \u2014 the fastest way to learn what an app can do.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "app": {
+        "type": "string"
+      },
+      "menu": {
+        "type": "string"
+      }
+    }
+  },
+  "permission": "screen",
+  "impact": "read"
+}

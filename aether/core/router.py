@@ -18,7 +18,7 @@ from typing import Any, TYPE_CHECKING
 
 import yaml
 
-from .llm import LLM, LLMBackend, LocalHTTPClient, VisionLLM
+from .llm import DEFAULT_ANTHROPIC_MODEL, LLM, LLMBackend, LocalHTTPClient, VisionLLM
 from .llm_errors import FailoverLLMClient
 from .providers import collect_api_keys, create_client, merge_role_config
 
@@ -259,14 +259,17 @@ class Router:
             if client is not None:
                 clients.append((provider, client))
         if not clients and self._anthropic_key:
-            role = self.cfg.role_config("cloud_frontier")
+            # Last resort when no configured provider has a key: the role's own
+            # model belongs to another provider (e.g. a GLM model id), so use the
+            # `anthropic` provider template instead.
+            template = dict((self.cfg.raw.get("providers") or {}).get("anthropic") or {})
             clients.append((
                 "anthropic_legacy",
                 LLM(
                     api_key=self._anthropic_key,
-                    model=role.get("model", "claude-sonnet-4-6"),
-                    max_tokens=int(role.get("max_tokens", 1024)),
-                    temperature=float(role.get("temperature", 0)),
+                    model=str(template.get("model") or DEFAULT_ANTHROPIC_MODEL),
+                    max_tokens=int(template.get("max_tokens", 4096)),
+                    temperature=float(template.get("temperature", 0)),
                 ),
             ))
         if not clients:

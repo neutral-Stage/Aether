@@ -1,0 +1,20 @@
+{
+  "name": "notify",
+  "description": "Show a macOS notification (e.g. when a long task finishes).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      },
+      "message": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "message"
+    ]
+  },
+  "permission": "none",
+  "impact": "reversible"
+}

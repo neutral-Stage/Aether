@@ -1,0 +1,17 @@
+{
+  "name": "browser_activate_tab",
+  "description": "Switch the active browser tab by tab_id (from browser_tabs).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "tab_id": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "tab_id"
+    ]
+  },
+  "permission": "network",
+  "impact": "reversible"
+}

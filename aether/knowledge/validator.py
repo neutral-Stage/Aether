@@ -14,7 +14,9 @@ OPTIONAL_TOP_LEVEL = frozenset({
     "scripting",
     "bundle_ids",
     "aliases",
+    "verified_recipes",
 })
+GUIDE_DONE_WHEN = frozenset({"click", "focus", "type", "app", "window", "menu", "any"})
 VALID_TIERS = frozenset({0, 1, 2, 3})
 
 
@@ -57,10 +59,49 @@ def validate_pack_data(data: dict[str, Any], *, path: str = "") -> list[str]:
                 elif not all(isinstance(s, str) for s in steps):
                     errors.append(f"{prefix}recipe '{name}' steps must be strings")
 
+    verified = data.get("verified_recipes")
+    if verified is not None:
+        if not isinstance(verified, dict):
+            errors.append(f"{prefix}'verified_recipes' must be a mapping")
+        else:
+            for name, recipe in verified.items():
+                errors += [f"{prefix}verified recipe '{name}': {e}"
+                           for e in _validate_verified(recipe)]
+
     scripting = data.get("scripting")
     if scripting is not None and not isinstance(scripting, dict):
         errors.append(f"{prefix}'scripting' must be a mapping")
 
+    return errors
+
+
+def _validate_verified(recipe: Any) -> list[str]:
+    if not isinstance(recipe, dict):
+        return ["must be a mapping with match and steps"]
+    errors: list[str] = []
+    match = recipe.get("match")
+    if not isinstance(match, list) or not match or not all(
+            isinstance(m, str) and m.strip() for m in match):
+        errors.append("'match' must be a non-empty list of phrases")
+    steps = recipe.get("steps")
+    if not isinstance(steps, list) or not steps:
+        errors.append("'steps' must be a non-empty list")
+    else:
+        for i, step in enumerate(steps, 1):
+            if not isinstance(step, dict) or not isinstance(step.get("tool"), str):
+                errors.append(f"step {i} needs a tool name")
+            elif not isinstance(step.get("args", {}), dict):
+                errors.append(f"step {i} args must be a mapping")
+    guide = recipe.get("guide")
+    if guide is not None:
+        if not isinstance(guide, list) or not guide:
+            errors.append("'guide' must be a non-empty list")
+        else:
+            for i, g in enumerate(guide, 1):
+                if not isinstance(g, dict) or not str(g.get("say") or "").strip():
+                    errors.append(f"guide step {i} needs 'say'")
+                elif g.get("done_when", "any") not in GUIDE_DONE_WHEN:
+                    errors.append(f"guide step {i} has an unknown done_when")
     return errors
 
 

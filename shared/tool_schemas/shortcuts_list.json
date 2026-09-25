@@ -1,0 +1,10 @@
+{
+  "name": "shortcuts_list",
+  "description": "List the user's Shortcuts (Shortcuts app) by name.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "permission": "shell",
+  "impact": "read"
+}

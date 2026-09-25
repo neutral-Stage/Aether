@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 26,
+  "tool_count": 80,
   "tools": [
     {
       "name": "get_screen_context",
@@ -17,6 +17,22 @@
     {
       "name": "type_text",
       "file": "type_text.json"
+    },
+    {
+      "name": "get_app_context",
+      "file": "get_app_context.json"
+    },
+    {
+      "name": "watch_app",
+      "file": "watch_app.json"
+    },
+    {
+      "name": "unwatch_app",
+      "file": "unwatch_app.json"
+    },
+    {
+      "name": "list_windows",
+      "file": "list_windows.json"
     },
     {
       "name": "press_key",
@@ -59,6 +75,22 @@
       "file": "browser_screenshot.json"
     },
     {
+      "name": "browser_tabs",
+      "file": "browser_tabs.json"
+    },
+    {
+      "name": "browser_activate_tab",
+      "file": "browser_activate_tab.json"
+    },
+    {
+      "name": "browser_new_tab",
+      "file": "browser_new_tab.json"
+    },
+    {
+      "name": "browser_attach",
+      "file": "browser_attach.json"
+    },
+    {
       "name": "run_applescript",
       "file": "run_applescript.json"
     },
@@ -79,8 +111,188 @@
       "file": "finish.json"
     },
     {
+      "name": "scroll",
+      "file": "scroll.json"
+    },
+    {
+      "name": "drag",
+      "file": "drag.json"
+    },
+    {
+      "name": "hover",
+      "file": "hover.json"
+    },
+    {
+      "name": "wait",
+      "file": "wait.json"
+    },
+    {
+      "name": "read_file",
+      "file": "read_file.json"
+    },
+    {
+      "name": "write_file",
+      "file": "write_file.json"
+    },
+    {
+      "name": "list_dir",
+      "file": "list_dir.json"
+    },
+    {
+      "name": "open_path",
+      "file": "open_path.json"
+    },
+    {
+      "name": "open_url",
+      "file": "open_url.json"
+    },
+    {
+      "name": "clipboard_get",
+      "file": "clipboard_get.json"
+    },
+    {
+      "name": "clipboard_set",
+      "file": "clipboard_set.json"
+    },
+    {
+      "name": "menu_item",
+      "file": "menu_item.json"
+    },
+    {
+      "name": "list_menus",
+      "file": "list_menus.json"
+    },
+    {
+      "name": "focus_window",
+      "file": "focus_window.json"
+    },
+    {
+      "name": "set_window_frame",
+      "file": "set_window_frame.json"
+    },
+    {
+      "name": "get_selected_text",
+      "file": "get_selected_text.json"
+    },
+    {
+      "name": "notify",
+      "file": "notify.json"
+    },
+    {
+      "name": "quit_app",
+      "file": "quit_app.json"
+    },
+    {
+      "name": "set_volume",
+      "file": "set_volume.json"
+    },
+    {
+      "name": "shortcuts_list",
+      "file": "shortcuts_list.json"
+    },
+    {
+      "name": "shortcuts_run",
+      "file": "shortcuts_run.json"
+    },
+    {
+      "name": "batch_actions",
+      "file": "batch_actions.json"
+    },
+    {
+      "name": "ask_user",
+      "file": "ask_user.json"
+    },
+    {
+      "name": "click_element",
+      "file": "click_element.json"
+    },
+    {
+      "name": "click_text",
+      "file": "click_text.json"
+    },
+    {
+      "name": "mark_screen",
+      "file": "mark_screen.json"
+    },
+    {
+      "name": "point_at",
+      "file": "point_at.json"
+    },
+    {
+      "name": "click_described",
+      "file": "click_described.json"
+    },
+    {
+      "name": "click_mark",
+      "file": "click_mark.json"
+    },
+    {
+      "name": "make_tool",
+      "file": "make_tool.json"
+    },
+    {
+      "name": "search_screen",
+      "file": "search_screen.json"
+    },
+    {
+      "name": "screen_memory_detail",
+      "file": "screen_memory_detail.json"
+    },
+    {
+      "name": "activity_summary",
+      "file": "activity_summary.json"
+    },
+    {
+      "name": "search_meetings",
+      "file": "search_meetings.json"
+    },
+    {
+      "name": "meeting_notes",
+      "file": "meeting_notes.json"
+    },
+    {
+      "name": "calendar_events",
+      "file": "calendar_events.json"
+    },
+    {
+      "name": "reminders_list",
+      "file": "reminders_list.json"
+    },
+    {
+      "name": "contacts_search",
+      "file": "contacts_search.json"
+    },
+    {
+      "name": "notes_search",
+      "file": "notes_search.json"
+    },
+    {
+      "name": "mail_search",
+      "file": "mail_search.json"
+    },
+    {
+      "name": "calendar_create_event",
+      "file": "calendar_create_event.json"
+    },
+    {
+      "name": "reminders_add",
+      "file": "reminders_add.json"
+    },
+    {
+      "name": "notes_create",
+      "file": "notes_create.json"
+    },
+    {
       "name": "delegate_to_coder",
       "file": "delegate_to_coder.json"
+    },
+    {
+      "name": "spawn_graph",
+      "file": "spawn_graph.json"
+    },
+    {
+      "name": "get_graph",
+      "file": "get_graph.json"
     },
     {
       "name": "spawn_agent",
@@ -105,6 +317,10 @@
     {
       "name": "wait_for_agent",
       "file": "wait_for_agent.json"
+    },
+    {
+      "name": "computer_use_step",
+      "file": "computer_use_step.json"
     }
   ]
 }

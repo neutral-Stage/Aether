@@ -1,0 +1,35 @@
+{
+  "name": "click_element",
+  "description": "Click a control by its NAME, e.g. name='Save', role='button'. Best way to click: reads the live accessibility tree at click time, so it never hits a stale index. Pass app='Name' for a background app.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "visible label, title or tooltip"
+      },
+      "role": {
+        "type": "string",
+        "description": "button, link, field, checkbox, tab, menu item, \u2026"
+      },
+      "app": {
+        "type": "string"
+      },
+      "button": {
+        "type": "string",
+        "enum": [
+          "left",
+          "right"
+        ]
+      },
+      "double": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "name"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

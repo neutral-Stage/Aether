@@ -40,6 +40,9 @@ class PTYSession(AgentSession):
             self._emit("stderr", f"unknown PTY agent: {self.agent_type}")
             self._set_state("error")
             return
+        from ..effectors import sandbox
+
+        cmd, _profile = sandbox.wrap_coder(cmd, str(self.workspace))
         master, slave = pty.openpty()
         self._master_fd = master
         env = build_subprocess_env(self.env_allowlist)

@@ -73,23 +73,39 @@ class FailoverLLMClient:
         tools: list[dict],
         *,
         abort_event: threading.Event | None = None,
+        on_token: Any = None,
     ) -> Any:
+        from .llm import accepts_on_token
+
         last_err: BaseException | None = None
+        streamed = [False]
+
+        def relay(chunk: str) -> None:
+            streamed[0] = True
+            on_token(chunk)
+
         for name, client in self._clients:
             try:
-                try:
-                    resp = client.step(
-                        system, messages, tools, abort_event=abort_event,
-                    )
-                except TypeError:
-                    resp = client.step(system, messages, tools)
+                if on_token is not None and accepts_on_token(client.step):
+                    resp = client.step(system, messages, tools, abort_event=abort_event,
+                                       on_token=relay)
+                else:
+                    try:
+                        resp = client.step(
+                            system, messages, tools, abort_event=abort_event,
+                        )
+                    except TypeError:
+                        resp = client.step(system, messages, tools)
+                    if on_token is not None and getattr(resp, "text", ""):
+                        relay(resp.text)
                 resp.backend = getattr(resp, "backend", name)
                 return resp
             except Exception as exc:  # noqa: BLE001
                 from .stop import StopRequested
                 if isinstance(exc, StopRequested):
                     raise
-                if is_transient_llm_error(exc):
+                # Once text has reached the user, another provider would repeat it.
+                if is_transient_llm_error(exc) and not streamed[0]:
                     last_err = exc
                     continue
                 raise

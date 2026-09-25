@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import re
 import shlex
@@ -16,6 +17,7 @@ from .security import (
     InjectionScan,
     InjectionSeverity,
     redact_secrets_extended,
+    redact_tokens,
     scan_injection,
     wrap_untrusted,
 )
@@ -259,6 +261,99 @@ def _url_is_dangerous(url: str) -> bool:
                 or addr.is_reserved or addr.is_unspecified)
 
 
+# --- Desktop tools (Phase B) ---------------------------------------------
+# Writes here persist across logins or change how Aether itself behaves, so an
+# injected "just add this line to ~/.zshrc" is surfaced, never silent.
+_PERSISTENCE_PATH_RE = re.compile(
+    r"LaunchAgents|LaunchDaemons|/Library/StartupItems|\.(?:zshrc|zprofile|zshenv|bashrc|"
+    r"bash_profile|profile|login)\b|/etc/|crontab|authorized_keys|"
+    r"Application Support/Aether|\.aether/|/config\.yaml$|/configs/router\.yaml$",
+    re.IGNORECASE)
+# Opening these runs code rather than showing a document.
+_EXECUTABLE_SUFFIXES = (".app", ".command", ".sh", ".tool", ".pkg", ".mpkg", ".dmg",
+                        ".terminal", ".workflow", ".scpt", ".applescript", ".jar",
+                        ".action", ".prefpane", ".kext", ".mobileconfig")
+# System menu commands that end the session or the machine's state.
+_SYSTEM_MENU_RE = re.compile(r"^\s*(?:log\s*out|restart|shut\s*down|force\s*quit|lock\s*screen)\b",
+                             re.IGNORECASE)
+# Money gate (avatar-cursor): controls that spend money or make a binding
+# commitment. Always confirmed; the prompt says so when the user never asked.
+_MONEY_ACTION_RE = re.compile(
+    r"\b(?:buy(?:\s+now)?|purchase|place\s+(?:your\s+)?order|check\s*out|pay(?:\s+now)?|"
+    r"complete\s+(?:purchase|order|payment)|confirm\s+(?:purchase|order|payment|booking)|"
+    r"subscribe|start\s+(?:free\s+)?trial|donate|book\s+now|reserve|upgrade\s+now)\b",
+    re.IGNORECASE)
+_MONEY_INTENT_RE = re.compile(
+    r"\b(?:buy|purchase|order|pay|payment|checkout|check\s*out|subscribe|subscription|"
+    r"book|reserve|donate|trial|upgrade)\b|[$€£¥]", re.IGNORECASE)
+
+
+def _path_exists(path: str) -> bool:
+    try:
+        return Path(os.path.expanduser(str(path))).exists()
+    except (OSError, ValueError):
+        return False
+
+
+def _looks_executable(path: str) -> bool:
+    p = os.path.expanduser(str(path or "")).rstrip("/")
+    if p.lower().endswith(_EXECUTABLE_SUFFIXES):
+        return True
+    try:
+        return os.path.isfile(p) and os.access(p, os.X_OK)
+    except OSError:
+        return False
+
+
+# Every tool that clicks a control. The gate judges them on the control's
+# label: click/click_mark via the label the orchestrator resolves into
+# focus.label, click_element/click_text via the name the model asked for (and
+# their handlers refuse when the element they resolve is more sensitive than
+# that name — see is_sensitive_label).
+CLICK_TOOLS = frozenset({"click", "click_element", "click_text", "click_mark",
+                         "click_described"})
+
+
+def _click_target(name: str, args: dict, focus: "FocusState") -> str:
+    """The label of the control a click tool would press ("" if unknown)."""
+    if name in ("click", "click_mark"):
+        return focus.label or ""
+    if name == "click_element":
+        return str(args.get("name") or focus.label or "")
+    if name == "click_text":
+        return str(args.get("text") or "")
+    if name == "click_described":
+        return str(args.get("description") or "")
+    return ""
+
+
+def is_sensitive_label(label: str) -> bool:
+    """Would the gate treat a click on a control with this label specially
+    (commit/destroy/send, or spend money)?"""
+    t = (label or "").strip()
+    return bool(t and (_COMMIT_LABEL_RE.match(t) or _MONEY_ACTION_RE.search(t)))
+
+
+def _money_target(name: str, args: dict, focus: "FocusState") -> str:
+    """The control text a money-gated action would act on ("" if none)."""
+    if name in CLICK_TOOLS:
+        return _click_target(name, args, focus)
+    if name == "browser_click":
+        return str(args.get("selector", "") or "")
+    if name == "menu_item":
+        return str(args.get("path", "") or "")
+    return ""
+
+
+# Self-written tools (aether/toolsmith) are registered as my_<name>.
+SELF_TOOL_PREFIX = "my_"
+
+# Integrations writes (aether/tools/integration_tools.py) always show an
+# editable draft, whatever the impact classification or careful mode say —
+# they touch the user's real Calendar/Reminders/Notes.
+_ALWAYS_CONFIRM = frozenset({"calendar_create_event", "reminders_add", "notes_create"})
+
+
 def normalize_file_roots(roots: list[str] | None) -> list[str]:
     """Expand ``~`` and narrow legacy ``/Users`` default to the current home."""
     home = str(Path.home())
@@ -282,6 +377,8 @@ class PolicyConfig:
         str(Path.home()),
     ])
     network_allowlist: list[str] = field(default_factory=list)
+    # Shortcuts the user trusts to run without a confirmation (exact names).
+    trusted_shortcuts: list[str] = field(default_factory=list)
     redact_secrets: bool = True
     block_injection_goals: bool = True
     flag_injection_in_context: bool = True
@@ -297,11 +394,45 @@ class PolicyConfig:
 class Policy:
     def __init__(self, config: PolicyConfig | None = None):
         self.config = config or PolicyConfig()
+        self._goal_wants_money = False
+
+    def set_run_goal(self, goal: str) -> None:
+        """The user's own request for this run (money-gate context)."""
+        self._goal_wants_money = bool(_MONEY_INTENT_RE.search(goal or ""))
+
+    def is_money_action(self, name: str, args: dict,
+                        focus: "FocusState | None" = None) -> bool:
+        target = _money_target(name, args, focus or FocusState())
+        return bool(target and _MONEY_ACTION_RE.search(target))
+
+    def file_paths(self, name: str, args: dict) -> list[str]:
+        """Filesystem paths a tool call touches (checked against approved roots)."""
+        if name in ("read_file", "write_file", "list_dir", "open_path"):
+            path = str(args.get("path", "") or "")
+            return [path] if path else []
+        return []
+
+    def allows_file_path(self, path: str) -> bool:
+        roots = self.config.approved_file_roots
+        if not roots:
+            return True
+        norm_roots = [os.path.normpath(str(Path(r).expanduser())) for r in roots]
+        cand = os.path.normpath(str(Path(os.path.expanduser(str(path))).resolve()))
+        return any(cand == r or cand.startswith(r + os.sep) for r in norm_roots)
 
     def impact_of(self, spec: "ToolSpec", args: dict,
                   focus: "FocusState | None" = None) -> str:
         name = spec.name
         focus = focus or FocusState()
+
+        # Money gate first: several branches below return "reversible" early
+        # (browser_*), which would skip it.
+        if self.is_money_action(name, args, focus):
+            return "destructive"
+
+        if name.startswith(SELF_TOOL_PREFIX):
+            # Self-written code: never "read", whatever its registration says.
+            return "destructive" if spec.impact == "destructive" else "reversible"
 
         if name == "run_shell":
             return ("destructive" if _shell_impact_destructive(args.get("command", ""))
@@ -354,7 +485,8 @@ class Policy:
             if focus.surface == "outbound_draft":
                 return "destructive"
 
-        if name == "click" and focus.label and _COMMIT_LABEL_RE.match(focus.label.strip()):
+        if name in CLICK_TOOLS and _COMMIT_LABEL_RE.match(
+                _click_target(name, args, focus).strip()):
             return "destructive"
 
         # `open -a` accepts an absolute bundle path, so a "/" turns open_app
@@ -373,10 +505,51 @@ class Policy:
             if _shell_impact_destructive(str(args.get("text", "") or "")):
                 return "destructive"
 
+        # A Shortcut can do anything; only the ones the user named are trusted.
+        if name == "shortcuts_run":
+            wanted = str(args.get("name") or "").strip().casefold()
+            trusted = {str(n).strip().casefold() for n in self.config.trusted_shortcuts or []}
+            return "reversible" if wanted and wanted in trusted else "destructive"
+
         # A trigger that fires a model-chosen goal with nobody present.
         if name == "watch_app" and args.get("then_goal") and args.get("auto"):
             return "destructive"
 
+        # --- desktop tools (Phase B) ---
+        path = str(args.get("path", "") or "")
+        if name == "read_file" and _CRED_MATERIAL_RE.search(path):
+            return "destructive"
+        if name == "write_file":
+            if _PERSISTENCE_PATH_RE.search(path) or _CRED_MATERIAL_RE.search(path):
+                return "destructive"
+            if str(args.get("mode") or "overwrite") == "overwrite" and _path_exists(path):
+                return "destructive"
+        if name == "open_path" and _looks_executable(path):
+            return "destructive"
+        if name == "open_url":
+            url = str(args.get("url", "") or "")
+            host, scheme = "", ""
+            try:
+                parsed = urlparse(url)
+                host, scheme = (parsed.hostname or "").lower(), parsed.scheme.lower()
+            except Exception:  # noqa: BLE001
+                pass
+            # A System Settings pane link only navigates Settings: nothing runs and
+            # nothing leaves the Mac. Other app schemes (shortcuts://run-shortcut…)
+            # can act, so they stay destructive.
+            if scheme == "x-apple.systempreferences":
+                return "reversible"
+            if url and _url_is_dangerous(url) and not (host and self._host_in_allowlist(host)):
+                return "destructive"
+            if url and not self._network_allowed(url):
+                return "destructive"
+        if name == "menu_item":
+            from ..effectors.menus import split_path
+
+            parts = split_path(args.get("path", ""))
+            last = parts[-1] if parts else ""
+            if last and (_COMMIT_LABEL_RE.match(last) or _SYSTEM_MENU_RE.match(last)):
+                return "destructive"
         if spec.impact == "destructive":
             return "destructive"
 
@@ -422,11 +595,15 @@ class Policy:
                          focus: "FocusState | None" = None) -> bool:
         # remember_fact is NOT exempt: it is the only durable write in this list
         # (it lands in the system prompt of every future session).
-        if self.config.careful and spec.name not in (
-            "get_screen_context", "finish", "analyze_screen",
-        ):
-            return True
         impact = self.impact_of(spec, args, focus)
+        if spec.name in _ALWAYS_CONFIRM:
+            return True
+        # Careful mode confirms every action that changes something (BETA.md:
+        # "confirms before every non-read tool"); reading the screen, a file or
+        # the menus does not need a prompt. remember_fact is reversible, so it
+        # still confirms: it is a durable write into future system prompts.
+        if self.config.careful and spec.name != "finish" and impact != "read":
+            return True
         if impact == "destructive":
             return True
         # Injection in tool arguments (e.g. pasted screen text) → confirm
@@ -446,6 +623,17 @@ class Policy:
         """The EXACT operation for a confirmation dialog — the literal command,
         not a model summary. Defeats 'Lies-in-the-Loop', where injected text
         makes the model describe a destructive action as something benign."""
+        text = self._describe_operation(spec, args, focus)
+        if self.is_money_action(spec.name, args, focus):
+            note = ("💳 This spends money or commits you to something."
+                    if self._goal_wants_money else
+                    "💳 This spends money or commits you to something — and your request "
+                    "did not ask to buy anything.")
+            return f"{note}\n{text}"
+        return text
+
+    def _describe_operation(self, spec: "ToolSpec", args: dict,
+                            focus: "FocusState | None" = None) -> str:
         name = spec.name
         if name == "run_shell":
             return f"run shell command:\n  {str(args.get('command', ''))[:400]}"
@@ -487,12 +675,35 @@ class Policy:
         if name == "press_key":
             mods = args.get("modifiers") or []
             return "press " + "+".join([*(str(m) for m in mods), str(args.get("key", ""))])
-        if name == "click" and focus is not None and focus.label:
-            return f"click the '{focus.label[:80]}' control"
+        if name in CLICK_TOOLS:
+            target = _click_target(name, args, focus or FocusState())
+            if target:
+                return f"click the '{target[:80]}' control"
         if name == "mail_compose":
             return (f"send-ready draft to {args.get('to', '')} / "
                     f"{str(args.get('subject', ''))[:80]}\n"
                     f"  {str(args.get('body', ''))[:400]}")
+        if name == "write_file":
+            mode = str(args.get("mode") or "overwrite")
+            verb = ("OVERWRITE" if mode == "overwrite" and _path_exists(str(args.get("path", "")))
+                    else mode)
+            return (f"{verb} file {str(args.get('path', ''))[:200]} "
+                    f"({len(str(args.get('content', '')))} chars):\n"
+                    f"  {str(args.get('content', ''))[:300]}")
+        if name == "read_file":
+            return f"read file {str(args.get('path', ''))[:200]}"
+        if name == "open_path":
+            return f"open {str(args.get('path', ''))[:200]}" + (
+                f" in {args['app']}" if args.get("app") else "")
+        if name == "open_url":
+            return f"open URL in the browser: {str(args.get('url', ''))[:300]}"
+        if name == "menu_item":
+            return f"press menu command: {str(args.get('path', ''))[:200]}"
+        if name == "clipboard_set":
+            return f"put on the clipboard:\n  {str(args.get('text', ''))[:300]}"
+        if name.startswith(SELF_TOOL_PREFIX):
+            shown = json.dumps(args, ensure_ascii=False, default=str)[:400]
+            return f"run your self-written tool {name} with:\n  {shown}"
         shown = ", ".join(f"{k}={str(v)[:60]}" for k, v in args.items())
         return f"{name}({shown})"
 
@@ -502,6 +713,7 @@ class Policy:
         "browser_navigate", "browser_fill", "browser_click", "safari_open_url",
         "browser_new_tab",   # same page.goto() as browser_navigate
         "mail_compose",      # an addressed outbound message IS the exfil shape
+        "open_url",          # the default browser is an egress channel too
     })
     # Arbitrary-code-execution tools — always surfaced under untrusted content.
     # The fleet tools belong here: spawn_agent(agent_type="terminal") writes its
@@ -509,19 +721,23 @@ class Policy:
     # so both are shell execution wearing a different name. delegate_to_coder
     # Popens a third-party coding CLI (it is declared permission="shell").
     _CODE_EXEC_TOOLS = frozenset({
-        "run_shell", "run_applescript",
+        "run_shell", "run_applescript", "shortcuts_run",
         "spawn_agent", "spawn_graph", "send_to_agent", "delegate_to_coder",
     })
     # Durable writes into FUTURE system prompts, or deferred unattended
     # execution. Injected content that lands here outlives the run that carried
     # it, so a human approves the write while untrusted content is present.
     _PERSISTENCE_TOOLS = frozenset({"remember_fact", "watch_app"})
+    # Staging: writing files, loading the clipboard, or opening a downloaded
+    # file while untrusted content is in context is how injected payloads get
+    # onto disk or into the next paste. Confirm them under taint.
+    _STAGING_TOOLS = frozenset({"write_file", "clipboard_set", "open_path"})
 
     # Synthetic input. NOT blanket-confirmed under untrusted content: keystrokes
     # are the agent's normal motor output (a UI run emits dozens, and any
     # ordinary web page trips the injection scanner), so a blanket here would
     # mean confirm-on-every-keystroke. Gated on the TARGET instead.
-    _UI_INPUT_TOOLS = frozenset({"type_text", "press_key", "click"})
+    _UI_INPUT_TOOLS = frozenset({"type_text", "press_key", *CLICK_TOOLS})
 
     def is_rule_of_two_risk(
         self, spec: "ToolSpec", args: dict, untrusted_present: bool,
@@ -556,13 +772,13 @@ class Policy:
         if (spec.name == "type_text" and focus.surface == ""
                 and looks_like_command_line(str(args.get("text", "") or ""))):
             return True
-        if spec.name in self._CODE_EXEC_TOOLS:
+        if spec.name in self._CODE_EXEC_TOOLS or spec.name.startswith(SELF_TOOL_PREFIX):
             # Arbitrary code execution under untrusted content ALWAYS confirms —
             # enumerating every obfuscation (base64, ${IFS}, novel interpreters)
             # is unwinnable, so flip to "a human approves any shell/AppleScript
             # while untrusted content is on screen" (the durable Rule-of-Two fix).
             return True
-        if spec.name in self._PERSISTENCE_TOOLS:
+        if spec.name in self._PERSISTENCE_TOOLS or spec.name in self._STAGING_TOOLS:
             return True
         return spec.name in self._EGRESS_TOOLS
 
@@ -687,6 +903,16 @@ class Policy:
                 lines.append(line)
         redacted = "\n".join(lines)
         return redact_secrets_extended(redacted)
+
+    def redact_observation(self, text: str, *, screen: bool = False) -> tuple[str, int]:
+        """Hide secrets in a tool result before the model sees it: (text, how many).
+
+        Only secrets recognised by their format, so code and file contents the
+        agent may write back stay intact. Text read off the screen also gets
+        the random-looking-string check."""
+        if not self.config.redact_secrets or not text:
+            return text, 0
+        return redact_tokens(text, entropy=screen)
 
     def prepare_context_for_model(self, text: str) -> str:
         """Sanitize perceived content: redact secrets, wrap as untrusted data."""

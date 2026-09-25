@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Host Mac only: runs the VM benchmark every night (scripts/nightly_eval.py).
+     install_nightly.sh fills in __AETHER__, __PYTHON__, __HOUR__, __MINUTE__ and __LOGDIR__. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.aether.nightly-eval</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON__</string>
+        <string>__AETHER__/scripts/nightly_eval.py</string>
+        <string>--stamp-recipes</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__AETHER__</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>__HOUR__</integer>
+        <key>Minute</key>
+        <integer>__MINUTE__</integer>
+    </dict>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__LOGDIR__/nightly-eval.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOGDIR__/nightly-eval.log</string>
+</dict>
+</plist>

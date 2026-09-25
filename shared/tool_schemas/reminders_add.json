@@ -1,0 +1,26 @@
+{
+  "name": "reminders_add",
+  "description": "Add a reminder. ALWAYS confirmed with an editable draft. due is ISO 8601 local time (optional).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      },
+      "due": {
+        "type": "string"
+      },
+      "list": {
+        "type": "string"
+      },
+      "notes": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ]
+  },
+  "permission": "calendar",
+  "impact": "reversible"
+}

@@ -20,5 +20,6 @@ recipes:
 gotchas:
   - "Editing requires clicking Edit (⌘E) before fields are writable"
   - "Duplicate names need disambiguation by company or email"
+  - "If Contacts is connected under Integrations, prefer contacts_search over UI automation"
 scripting:
   run_applescript: "Query/modify contacts deterministically via AppleScript"

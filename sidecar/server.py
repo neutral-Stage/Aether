@@ -4,7 +4,8 @@ Endpoints:
   GET  /health          liveness
   GET  /status          current run + world snapshot
   GET  /metrics         JSON observability snapshot
-  GET  /dashboard       local HTML metrics dashboard
+  GET  /dashboard       local HTML metrics dashboard (with nightly eval history)
+  GET  /eval/history    nightly VM evaluation results
   GET  /tools/schemas   exported tool contracts
   POST /run             start agent (JSON body; optional SSE stream)
   POST /stop            global STOP
@@ -47,6 +48,7 @@ from aether.core import stop as stop_ctl
 from aether.core.orchestrator import Agent
 from aether.core.metrics import MetricsCollector
 from aether.core.audit_log import AuditLog
+from aether.core.paths import data_dir, resolve_data_path
 from aether.voice.stt import STT
 from aether.voice.tts import TTS
 from aether.tools.mcp_client import MCPClient, get_active_mcp_client, set_active_mcp_client
@@ -95,10 +97,41 @@ from .apps_api import router as _apps_router  # noqa: E402
 from .fleet_api import register_sink as _register_fleet_sink  # noqa: E402
 from .fleet_api import router as _fleet_router  # noqa: E402
 from .mcp_server import router as _mcp_router  # noqa: E402
+from .sessions_api import router as _sessions_router  # noqa: E402
+from .talk_api import router as _talk_router  # noqa: E402
+from . import talk_api  # noqa: E402
+from .guide_api import router as _guide_router  # noqa: E402
+from . import guide_api  # noqa: E402
+from .toolsmith_api import router as _toolsmith_router  # noqa: E402
+from .onboarding_api import router as _onboarding_router  # noqa: E402
+from .dictation_api import router as _dictation_router  # noqa: E402
+from .quick_skills_api import router as _quick_skills_router  # noqa: E402
+from .chips_api import router as _chips_router  # noqa: E402
+from .screen_memory_api import router as _screen_memory_router  # noqa: E402
+from .hints_api import router as _hints_router  # noqa: E402
+from .meetings_api import router as _meetings_router  # noqa: E402
+from .integrations_api import router as _integrations_router  # noqa: E402
+from . import screen_memory_api  # noqa: E402
+from . import questions  # noqa: E402
+from aether.core import session_grants  # noqa: E402
+from aether.core import cost_history  # noqa: E402
+from . import session_store  # noqa: E402
 
 app.include_router(_fleet_router)
+app.include_router(_sessions_router)
+app.include_router(_talk_router)
+app.include_router(_guide_router)
 app.include_router(_mcp_router)
 app.include_router(_apps_router)
+app.include_router(_toolsmith_router)
+app.include_router(_onboarding_router)
+app.include_router(_dictation_router)
+app.include_router(_quick_skills_router)
+app.include_router(_chips_router)
+app.include_router(_screen_memory_router)
+app.include_router(_hints_router)
+app.include_router(_meetings_router)
+app.include_router(_integrations_router)
 
 
 @app.on_event("startup")
@@ -106,6 +139,12 @@ async def _fleet_startup() -> None:
     _register_fleet_sink(asyncio.get_running_loop(), _broadcast)
     _register_apps_sink(asyncio.get_running_loop(), _broadcast)
     _reconcile_persisted_state()
+    MetricsCollector.get().on_run_end = cost_history.record
+    try:
+        if screen_memory_api.start_if_enabled():
+            log.info("screen memory is recording (screen_memory.enabled)")
+    except Exception:  # noqa: BLE001 — never block startup
+        log.warning("screen memory did not start", exc_info=True)
 
 
 def _reconcile_persisted_state() -> None:
@@ -169,11 +208,15 @@ class RunRequest(BaseModel):
     narrate: bool = False
     stream: bool = True
     max_steps: int | None = None
+    # Continue this conversation; omitted → a new session is started.
+    session_id: str | None = None
 
 
 class STTRequest(BaseModel):
     audio_base64: str = Field(..., description="WAV audio, base64-encoded")
     engine: str | None = None
+    # Dictation: bias recognition toward the user's vocabulary (names, jargon).
+    use_vocabulary: bool = False
 
 
 class TTSRequest(BaseModel):
@@ -184,6 +227,16 @@ class TTSRequest(BaseModel):
 class ConfirmRequest(BaseModel):
     request_id: str
     approved: bool
+    # The user's edits to an outgoing draft (field → new value).
+    edits: dict[str, str] | None = None
+    # Approve the same thing for the rest of the conversation (rule-of-two only;
+    # ignored unless the request offered it).
+    remember: bool = False
+
+
+class AnswerRequest(BaseModel):
+    request_id: str
+    answer: str | None = None     # None or empty = the user skipped the question
 
 
 class VoiceMetricsRequest(BaseModel):
@@ -361,6 +414,10 @@ async def _broadcast(event: dict[str, Any]) -> None:
                 _event_subscribers.remove(q)
 
 
+talk_api.set_broadcaster(_broadcast)
+guide_api.set_broadcaster(_broadcast)
+
+
 async def _run_agent_task(
     run_id: str,
     goal: str,
@@ -371,6 +428,7 @@ async def _run_agent_task(
     max_steps: int | None,
     event_queue: asyncio.Queue[dict[str, Any]],
     loop: asyncio.AbstractEventLoop,
+    session_id: str | None = None,
 ) -> None:
     state = RunState(run_id=run_id, goal=goal)
     _run_registry.register(state)
@@ -393,7 +451,15 @@ async def _run_agent_task(
     agent = Agent(cfg, hud=hud)
     if stream_summary:
         agent.world.set_screen_stream(stream_summary)
-    patch_agent_for_sidecar(agent, hud, event_queue, loop)
+    patch_agent_for_sidecar(agent, hud, event_queue, loop, run_id=run_id)
+    if session_id:
+        agent.session_grants = session_grants.for_session(session_id)
+    history: list[dict[str, str]] = []
+    if session_id:
+        try:
+            history = await asyncio.to_thread(session_store.history, session_id)
+        except Exception:  # noqa: BLE001 — a broken store must not block the run
+            log.warning("could not load session %s", session_id, exc_info=True)
     if not narrate:
         agent.cfg.raw.setdefault("agent", {})["narrate"] = False
 
@@ -401,7 +467,8 @@ async def _run_agent_task(
     # other run in flight, so a new run can't clear a sibling's pending STOP.
     # The reset itself happens inside agent.run_async (single source of truth).
     reset_stop = len(_run_registry.active()) <= 1  # this run is already registered
-    await _broadcast({"type": "run_start", "run_id": run_id, "goal": goal})
+    await _broadcast({"type": "run_start", "run_id": run_id, "goal": goal,
+                      "session_id": session_id})
 
     async def pump_events() -> None:
         while True:
@@ -424,7 +491,8 @@ async def _run_agent_task(
     pump_task = asyncio.create_task(pump_events())
 
     try:
-        result = await agent.run_async(goal, run_id=run_id, reset_stop=reset_stop)
+        result = await agent.run_async(goal, run_id=run_id, reset_stop=reset_stop,
+                                       history=history)
         state.status = "idle"
         state.result = result
         state.finished_at = time.time()
@@ -438,6 +506,7 @@ async def _run_agent_task(
             "run_id": run_id,
             "result": result,
             "world": state.world_snapshot,
+            "session_id": session_id,
         }
         event_queue.put_nowait(done_event)
         await _broadcast(done_event)
@@ -460,6 +529,13 @@ async def _run_agent_task(
             state.status = "stopped"
             state.finished_at = time.time()
             _persist_run(state)
+        if session_id:
+            try:
+                await asyncio.to_thread(
+                    session_store.add_turn, session_id, run_id, goal,
+                    state.result or state.error or "", agent.world.task_trace(), state.status)
+            except Exception:  # noqa: BLE001
+                log.warning("could not save turn to session %s", session_id, exc_info=True)
 
 
 def _skill_store():
@@ -600,6 +676,27 @@ async def replay_skill(
         store.close()
 
 
+@app.get("/doctor")
+async def doctor(online: bool = False, _auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Preflight checks for the app's onboarding screen (same as `aether doctor`)."""
+    import os
+
+    from aether.core import doctor as doc
+
+    prev = os.environ.get("AETHER_DOCTOR_ONLINE")
+    if online:
+        os.environ["AETHER_DOCTOR_ONLINE"] = "1"
+    try:
+        checks = await asyncio.to_thread(doc.run_checks)
+    finally:
+        if online:
+            if prev is None:
+                os.environ.pop("AETHER_DOCTOR_ONLINE", None)
+            else:
+                os.environ["AETHER_DOCTOR_ONLINE"] = prev
+    return {"verdict": doc.verdict(checks), "checks": doc.as_dicts(checks)}
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     from aether.perception import accessibility as ax
@@ -637,21 +734,85 @@ async def health() -> dict[str, Any]:
     }
 
 
+def _audit() -> AuditLog:
+    audit_cfg = load_config().get("audit") or {}
+    return AuditLog.get(path=audit_cfg.get("path"),
+                        enabled=bool(audit_cfg.get("enabled", True)))
+
+
 @app.get("/audit/verify")
 async def audit_verify() -> dict[str, Any]:
-    cfg = load_config()
-    audit_cfg = cfg.get("audit") or {}
-    audit = AuditLog.get(
-        path=audit_cfg.get("path"),
-        enabled=bool(audit_cfg.get("enabled", True)),
-    )
-    ok, msg = audit.verify_chain()
+    """Check the whole log's signatures and hash chain (reveals no entries)."""
+    audit = _audit()
+    ok, msg = await asyncio.to_thread(audit.verify_chain)
     return {"ok": ok, "message": msg, "path": str(audit.path)}
+
+
+@app.get("/audit")
+async def audit_entries(limit: int = 200, q: str = "", event: str = "", run_id: str = "",
+                        _auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Recent audit entries, newest first (the activity log in the app)."""
+    entries = await asyncio.to_thread(_audit().recent, max(1, min(limit, 1000)),
+                                      query=q, event=event, run_id=run_id)
+    return {"entries": entries}
+
+
+@app.get("/estimate")
+async def estimate(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """What tasks usually cost (recent runs) and the per-task cost limit."""
+    cap = float((load_config().get("agent") or {}).get("cost_cap_usd", 2.0) or 0.0)
+    est = await asyncio.to_thread(cost_history.estimate, cap)
+    return {**est, "summary": cost_history.summary(est)}
 
 
 @app.get("/metrics")
 async def metrics(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     return MetricsCollector.get().snapshot()
+
+
+@app.get("/eval/history")
+async def eval_history_endpoint(limit: int = 60,
+                                _auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Nightly VM evaluation results (scripts/nightly_eval.py), oldest first."""
+    from aether.core import eval_history
+
+    entries = eval_history.load(max(1, min(limit, 365)))
+    return {"entries": entries, "trend": eval_history.trend(entries)}
+
+
+def _eval_section() -> str:
+    from aether.core import eval_history
+
+    entries = eval_history.load(30)
+    if not entries:
+        return ("<h2>Nightly evaluation</h2><p class=\"meta\">No runs yet. Install it with "
+                "scripts/vm/install_nightly.sh (see docs/BENCHMARK_VM.md).</p>")
+    t = eval_history.trend(entries)
+    meta = "no completed runs yet"
+    if t.get("runs"):
+        last = t["last"]
+        meta = (f"last: {last.get('passed')}/{last.get('total')} "
+                f"({last.get('pass_rate_pct')}%, bar {last.get('bar_pct')}%) · "
+                f"7-night average {t['avg_last_7_pct']}% · best {t['best_pct']}% · "
+                f"{t['nights_meeting_bar_in_a_row']} night(s) in a row at the bar")
+    rows = "".join(
+        "<tr>" + "".join(f"<td>{_esc(v)}</td>" for v in (
+            e.get("date", ""), e.get("status", ""),
+            f"{e.get('passed')}/{e.get('total')}" if e.get("status") == "ok" else "",
+            f"{e.get('pass_rate_pct')}%" if e.get("status") == "ok" else "",
+            e.get("commit", ""),
+            ", ".join(e.get("failed") or []) or e.get("reason", ""))) + "</tr>"
+        for e in reversed(entries))
+    return (f"<h2>Nightly evaluation</h2><p class=\"meta\">{_esc(meta)}</p>"
+            f"{eval_history.sparkline_svg(entries)}"
+            "<table><tr><th>Night</th><th>Status</th><th>Passed</th><th>Rate</th>"
+            f"<th>Commit</th><th>Failed / note</th></tr>{rows}</table>")
+
+
+def _esc(value: Any) -> str:
+    import html
+
+    return html.escape(str(value if value is not None else ""))
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -660,25 +821,27 @@ async def dashboard(_auth: None = Depends(require_auth)) -> str:
     counters = snap.get("counters", {})
     histograms = snap.get("histograms", {})
     runs = snap.get("recent_runs", [])
+    # Goals and names can carry text from anywhere (web pages, watched apps):
+    # escape every value that goes into the page.
     rows = "".join(
-        f"<tr><td>{r.get('goal','')}</td><td>{r.get('status')}</td>"
-        f"<td>{r.get('steps')}</td><td>{r.get('tool_calls')}</td>"
-        f"<td>{r.get('duration_ms')}</td></tr>"
+        f"<tr><td>{_esc(r.get('goal', ''))}</td><td>{_esc(r.get('status'))}</td>"
+        f"<td>{_esc(r.get('steps'))}</td><td>{_esc(r.get('tool_calls'))}</td>"
+        f"<td>{_esc(r.get('duration_ms'))}</td></tr>"
         for r in runs
     )
     hist_rows = "".join(
-        f"<tr><td>{name}</td><td>{h.get('count')}</td>"
-        f"<td>{h.get('p50')}</td><td>{h.get('p95')}</td></tr>"
+        f"<tr><td>{_esc(name)}</td><td>{_esc(h.get('count'))}</td>"
+        f"<td>{_esc(h.get('p50'))}</td><td>{_esc(h.get('p95'))}</td></tr>"
         for name, h in histograms.items()
     )
     counter_rows = "".join(
-        f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in sorted(counters.items())
+        f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in sorted(counters.items())
     )
     provider_costs = snap.get("provider_costs", {})
     total_cost = snap.get("total_cost_usd", 0.0)
     cost_rows = "".join(
-        f"<tr><td>{p}</td><td>{c.get('tokens_in')}</td>"
-        f"<td>{c.get('tokens_out')}</td><td>{c.get('calls')}</td>"
+        f"<tr><td>{_esc(p)}</td><td>{_esc(c.get('tokens_in'))}</td>"
+        f"<td>{_esc(c.get('tokens_out'))}</td><td>{_esc(c.get('calls'))}</td>"
         f"<td>${c.get('cost_usd', 0.0):.4f}</td></tr>"
         for p, c in sorted(provider_costs.items())
     )
@@ -688,7 +851,7 @@ async def dashboard(_auth: None = Depends(require_auth)) -> str:
     )
     fleet = snap.get("fleet", {})
     fleet_agent_rows = "".join(
-        f"<tr><td>{a}</td><td>${c:.4f}</td></tr>"
+        f"<tr><td>{_esc(a)}</td><td>${c:.4f}</td></tr>"
         for a, c in sorted((fleet.get("cost_usd_by_agent") or {}).items())
     ) or "<tr><td colspan=2>—</td></tr>"
     fleet_meta = (
@@ -717,6 +880,7 @@ th {{ background: #161b22; }}
 <p class="meta">{fleet_meta}</p>
 <table><tr><th>Agent</th><th>Cost USD</th></tr>{fleet_agent_rows}</table>
 <h2>Recent runs</h2><table><tr><th>Goal</th><th>Status</th><th>Steps</th><th>Tools</th><th>Duration ms</th></tr>{rows}</table>
+{_eval_section()}
 </body></html>"""
 
 
@@ -799,6 +963,7 @@ async def stop(
     # stop signal is process-global). run_id only narrows which run rows we mark.
     # Off the event loop: the fleet bridge does blocking per-session proc.wait().
     await asyncio.to_thread(stop_ctl.trigger, "sidecar")
+    talk_api.cancel_all()
     run_id = body.run_id if body else None
     targets = ([_run_registry.get(run_id)] if run_id
                else _run_registry.active())
@@ -836,6 +1001,7 @@ async def voice_config() -> dict[str, Any]:
         "realtime_voice": bool(beta.get("realtime_voice", False)),
         "barge_in": bool(cfg.get("voice", "barge_in", default=True)),
         "vad_energy_threshold": float(cfg.get("voice", "vad_energy_threshold", default=0.02)),
+        "speculative_talk": bool(cfg.get("voice", "speculative_talk", default=True)),
     }
 
 
@@ -935,8 +1101,13 @@ async def stt(body: STTRequest, _auth: None = Depends(require_auth)) -> dict[str
 
     path = Path(tempfile.gettempdir()) / f"aether-stt-{uuid.uuid4().hex}.wav"
     path.write_bytes(raw)
+    prompt = ""
+    if body.use_vocabulary:
+        from aether import dictation
+
+        prompt = dictation.load_settings().stt_prompt()
     try:
-        text = stt_engine.transcribe_file(path)
+        text = stt_engine.transcribe_file(path, prompt=prompt)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"STT failed: {exc}") from exc
     finally:
@@ -1062,14 +1233,34 @@ async def voice_realtime_bridge(websocket: WebSocket) -> None:
     from aether.voice.realtime import RealtimeConfig, RealtimeSession
 
     rt_cfg = RealtimeConfig.from_env(
-        voice=str(cfg.get("voice", "tts_voice", default="alloy")),
+        model=str(cfg.get("voice", "realtime_model", default="") or "") or None,
+        voice=str(cfg.get("voice", "realtime_speaker", default="") or "") or None,
     )
     if rt_cfg is None:
         await websocket.close(code=4401, reason="OPENAI_API_KEY not configured")
         return
 
     await websocket.accept()
-    session = RealtimeSession(config=rt_cfg)
+    loop = asyncio.get_running_loop()
+
+    async def screen() -> str | None:
+        from aether.perception import screen as screen_mod
+
+        return await asyncio.to_thread(screen_mod.try_capture_to_file)
+
+    async def do_task(goal: str) -> str:
+        # A normal agent run: same policy gate, confirmations and audit log.
+        run_id = f"rt-{uuid.uuid4().hex[:8]}"
+        await _run_agent_task(run_id, goal, careful=False, local_only=False, narrate=False,
+                              max_steps=None, event_queue=asyncio.Queue(), loop=loop)
+        state = _run_registry.get(run_id)
+        if state is None:
+            return "The task did not start."
+        if state.status == "error":
+            return f"It failed: {state.error}"
+        return state.result or "Done."
+
+    session = RealtimeSession(config=rt_cfg, screen_fn=screen, task_fn=do_task)
     metrics = MetricsCollector.get()
     session_t0 = time.perf_counter()
     metrics.inc("voice_realtime_sessions")
@@ -1095,6 +1286,10 @@ async def voice_realtime_bridge(websocket: WebSocket) -> None:
                 await session.send_audio_chunk(raw)
             elif mtype == "input_audio.commit":
                 await session.commit_audio()
+            elif mtype == "input_audio.clear":
+                await session.clear_audio()
+            elif mtype == "interrupt":
+                await session.interrupt(msg.get("item_id"), int(msg.get("audio_end_ms") or 0))
             elif mtype == "input_text":
                 await session.send_text(str(msg.get("text", "")))
             elif mtype == "close":
@@ -1118,10 +1313,22 @@ async def confirm_action(
     body: ConfirmRequest,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    ok = confirmation.resolve_confirmation(body.request_id, body.approved)
+    ok = confirmation.resolve_confirmation(body.request_id, body.approved, body.edits,
+                                           body.remember)
     if not ok:
         raise HTTPException(404, "Unknown or expired confirmation request")
     return {"status": "ok", "approved": body.approved}
+
+
+@app.post("/answer")
+async def answer_question(
+    body: AnswerRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """The user's answer to an ask_user question (empty = skipped)."""
+    if not questions.resolve_answer(body.request_id, body.answer):
+        raise HTTPException(404, "Unknown or expired question")
+    return {"status": "ok"}
 
 
 @app.post("/metrics/voice")
@@ -1182,7 +1389,7 @@ async def crash_report(body: CrashReportRequest) -> dict[str, str]:
     beta = cfg.get("beta") or {}
     if not bool(beta.get("crash_reporting", False)):
         raise HTTPException(503, "Crash reporting is disabled (beta.crash_reporting)")
-    store = ROOT / "data" / "crash_reports.jsonl"
+    store = data_dir() / "crash_reports.jsonl"
     store.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": time.time(),
@@ -1215,7 +1422,7 @@ async def submit_feedback(
         raise HTTPException(400, "message too long (max 2000 characters)")
     category = (body.category or "general")[:64]
     email = (body.email or "")[:254] if body.email else None
-    store = ROOT / str(fb_cfg.get("store_path", "data/feedback.jsonl"))
+    store = resolve_data_path(fb_cfg.get("store_path"), "feedback.jsonl")
     store.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": time.time(),
@@ -1308,11 +1515,18 @@ async def run_agent(
             "(see configs/router.yaml).",
         )
 
+    session_id = (body.session_id or "").strip() or None
+    if session_id and not await asyncio.to_thread(session_store.exists, session_id):
+        raise HTTPException(404, "Unknown session")
+    if session_id is None:
+        session_id = await asyncio.to_thread(session_store.create_session, goal)
+
     run_id = uuid.uuid4().hex[:12]
     loop = asyncio.get_running_loop()
 
     async def run_coro(event_queue: asyncio.Queue[dict[str, Any]]) -> None:
-        event_queue.put_nowait({"type": "run_start", "run_id": run_id, "goal": goal})
+        event_queue.put_nowait({"type": "run_start", "run_id": run_id, "goal": goal,
+                                "session_id": session_id})
         await _run_agent_task(
             run_id,
             goal,
@@ -1322,6 +1536,7 @@ async def run_agent(
             max_steps=body.max_steps,
             event_queue=event_queue,
             loop=loop,
+            session_id=session_id,
         )
 
     if body.stream or "text/event-stream" in request.headers.get("accept", ""):
@@ -1337,10 +1552,12 @@ async def run_agent(
         max_steps=body.max_steps,
         event_queue=queue,
         loop=loop,
+        session_id=session_id,
     )
     done = _run_registry.get(run_id)
     return {
         "run_id": run_id,
+        "session_id": session_id,
         "status": done.status if done else "idle",
         "result": done.result if done else None,
         "error": done.error if done else None,

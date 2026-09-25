@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextvars
 import threading
+from collections.abc import Callable
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -34,7 +35,7 @@ LATENCY_BUDGETS_MS: dict[str, float] = {
 # pricing is ignored. Keyed by provider (LLMResponse.backend); MODEL_PRICES
 # overrides per model where known. local_http is free.
 PROVIDER_PRICES: dict[str, dict[str, float]] = {
-    "anthropic": {"in": 0.003, "out": 0.015},
+    "anthropic": {"in": 0.002, "out": 0.010},        # claude-sonnet-5 (default)
     "openai": {"in": 0.00015, "out": 0.0006},
     "google": {"in": 0.0001, "out": 0.0004},
     "groq": {"in": 0.00059, "out": 0.00079},
@@ -42,12 +43,19 @@ PROVIDER_PRICES: dict[str, dict[str, float]] = {
     "openrouter": {"in": 0.003, "out": 0.015},
     "kilo": {"in": 0.003, "out": 0.015},
     "kie": {"in": 0.00125, "out": 0.005},
-    "zai": {"in": 0.0006, "out": 0.0022},
-    "zai_vision": {"in": 0.0006, "out": 0.0022},
+    "zai": {"in": 0.00015, "out": 0.0005},           # glm-5.3-flash (default)
+    "zai_vision": {"in": 0.00015, "out": 0.0005},
     "local_http": {"in": 0.0, "out": 0.0},
 }
 
 MODEL_PRICES: dict[str, dict[str, float]] = {
+    # Z.ai list price (Sep 2026): $0.15 / $0.50 per 1M tokens.
+    "glm-5.3-flash": {"in": 0.00015, "out": 0.0005},
+    # Anthropic first-party rates.
+    "claude-sonnet-5": {"in": 0.002, "out": 0.010},
+    "claude-opus-5": {"in": 0.005, "out": 0.025},
+    "claude-opus-5-5": {"in": 0.004, "out": 0.020},
+    "claude-haiku-4-5": {"in": 0.001, "out": 0.005},
     "claude-sonnet-4-6": {"in": 0.003, "out": 0.015},
     "gpt-4o-mini": {"in": 0.00015, "out": 0.0006},
     "gemini-2.0-flash": {"in": 0.0001, "out": 0.0004},
@@ -108,6 +116,8 @@ class MetricsCollector:
         self._max_hist = 200
         self._provider_costs: dict[str, dict[str, float]] = {}
         self._agent_costs: dict[str, dict[str, float]] = {}
+        # Called with each finished run (the sidecar keeps a cost history with it).
+        self.on_run_end: Callable[[RunMetrics], None] | None = None
 
     @classmethod
     def get(cls) -> MetricsCollector:
@@ -174,6 +184,11 @@ class MetricsCollector:
                 self._runs = self._runs[-self._max_runs :]
             self.inc(f"runs_{status}")
         _active_run.set(None)
+        if self.on_run_end is not None:
+            try:
+                self.on_run_end(rm)
+            except Exception:  # noqa: BLE001 — bookkeeping must never break a run
+                pass
 
     def record_step(self, route_tier: str, latency_ms: float) -> None:
         with self._mutex:
@@ -237,6 +252,17 @@ class MetricsCollector:
                 rm.tokens_out += to
                 rm.cost_usd += cost
 
+    def run_cost(self, run_id: str | None = None) -> float:
+        """Estimated USD spent by a run so far (the current run when None)."""
+        with self._mutex:
+            if run_id is None:
+                cur = self._current_locked()
+                return float(cur.cost_usd) if cur else 0.0
+            for r in (*self._in_progress.values(), *reversed(self._runs)):
+                if r.run_id == run_id:
+                    return float(r.cost_usd)
+        return 0.0
+
     def snapshot(self) -> dict[str, Any]:
         with self._mutex:
             cur = self._current_locked()
@@ -254,6 +280,7 @@ class MetricsCollector:
                     "errors": r.errors,
                     "route_tiers": r.route_tiers,
                     "duration_ms": duration,
+                    "cost_usd": round(r.cost_usd, 6),
                     "avg_step_ms": (
                         round(sum(r.step_latencies_ms) / len(r.step_latencies_ms), 1)
                         if r.step_latencies_ms

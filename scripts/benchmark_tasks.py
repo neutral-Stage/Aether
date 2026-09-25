@@ -6,6 +6,11 @@ Mock mode (default, CI-safe):
 
 Live sidecar mode (requires running sidecar + API keys):
   python scripts/benchmark_tasks.py --sidecar http://127.0.0.1:8765 --token $AETHER_SIDECAR_TOKEN
+
+Live VM mode (tests/benchmark/live_tasks.yaml in throwaway Lume clones,
+scored by real end state; see docs/BENCHMARK_VM.md):
+  python scripts/benchmark_tasks.py --vm [--only id1,id2] [--have mail_account]
+      [--reuse-vm] [--keep] [--vm-config scripts/vm/lume.yaml] [--out results.json]
 """
 from __future__ import annotations
 
@@ -22,7 +27,6 @@ from tests.benchmark.scorer import (  # noqa: E402
     load_tasks,
     run_mock_suite,
     run_repeat_suite,
-    score_trace,
     summarize,
     summarize_repeat,
 )
@@ -119,7 +123,45 @@ def main() -> int:
         help="Score repeat/skill-assisted traces (Phase 11)",
     )
     parser.add_argument("--json", action="store_true", help="Print JSON summary")
+    parser.add_argument("--vm", action="store_true",
+                        help="Run tests/benchmark/live_tasks.yaml in Lume VM clones")
+    parser.add_argument("--vm-config", type=Path, default=None, help="scripts/vm/lume.yaml")
+    parser.add_argument("--only", type=str, default="", help="Comma-separated task ids")
+    parser.add_argument("--have", type=str, default="",
+                        help="Comma-separated golden-image capabilities, e.g. mail_account")
+    parser.add_argument("--reuse-vm", action="store_true",
+                        help="Run all tasks in one clone (faster, less isolated)")
+    parser.add_argument("--keep", action="store_true", help="Keep clones for debugging")
+    parser.add_argument("--out", type=Path, default=None, help="Write the VM summary JSON here")
+    parser.add_argument("--stamp-recipes", action="store_true",
+                        help="Mark pack recipes whose linked task passed as tested today "
+                             "(aether/knowledge/verified.json)")
     args = parser.parse_args()
+
+    if args.vm:
+        from tests.benchmark import vm_runner
+
+        split = lambda text: [x.strip() for x in text.split(",") if x.strip()]  # noqa: E731
+        tasks, skipped = vm_runner.select_tasks(
+            vm_runner.load_live_tasks(), split(args.only), split(args.have))
+        config = vm_runner.load_vm_config(args.vm_config)
+        results = vm_runner.run_suite(tasks, config, reuse_vm=args.reuse_vm, keep=args.keep)
+        summary = vm_runner.summarize_live(results, skipped)
+        summary["recipes_passed"] = vm_runner.passed_recipes(tasks, results)
+        if args.stamp_recipes and summary["recipes_passed"]:
+            import datetime
+
+            from aether.knowledge import loader
+
+            loader.stamp_verified(summary["recipes_passed"], datetime.date.today().isoformat())
+            print(f"Stamped {len(summary['recipes_passed'])} recipe(s) as tested: "
+                  + ", ".join(summary["recipes_passed"]))
+        if args.out:
+            args.out.write_text(json.dumps(summary, indent=2))
+        print(f"Benchmark (vm): {summary['passed']}/{summary['total']} passed "
+              f"({summary['pass_rate_pct']}%, bar {summary['bar_pct']}%)"
+              + (f"; skipped {', '.join(summary['skipped'])}" if summary["skipped"] else ""))
+        return 0 if summary["meets_bar"] else 1
 
     if args.sidecar:
         summary = run_live(args.sidecar, args.token or None)

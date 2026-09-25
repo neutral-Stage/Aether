@@ -189,7 +189,11 @@ def validate_config(raw: dict[str, Any], *, strict: bool = False) -> list[str]:
 def load_config(path: str | Path | None = None, *, validate: bool = True) -> Config:
     """Load .env + config.yaml into a Config object."""
     load_dotenv(ROOT / ".env")
-    cfg_path = Path(path) if path else ROOT / "config.yaml"
+    # AETHER_CONFIG_PATH lets the bundled app read a user-editable config from
+    # Application Support instead of the (signed, read-only) copy in the bundle.
+    env_path = os.getenv("AETHER_CONFIG_PATH", "").strip()
+    cfg_path = Path(path) if path else (Path(env_path).expanduser() if env_path
+                                        else ROOT / "config.yaml")
     raw: dict[str, Any] = {}
     if cfg_path.exists():
         raw = yaml.safe_load(cfg_path.read_text()) or {}

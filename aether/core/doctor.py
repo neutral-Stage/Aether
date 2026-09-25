@@ -118,6 +118,127 @@ def check_screen_recording() -> Check:
                  "System Settings → Screen Recording — needed for the vision fallback")
 
 
+def _brain_role() -> tuple[str, dict]:
+    """(provider name, merged role config) for the default reasoning role."""
+    from .config import ROOT
+    from .providers import merge_role_config
+    from .router import RouterConfig
+
+    raw = RouterConfig.load(ROOT / "configs" / "router.yaml").raw
+    provider = str(((raw.get("roles") or {}).get("cloud_frontier") or {}).get("provider") or "")
+    return provider, merge_role_config(raw, "cloud_frontier")
+
+
+def check_brain_key() -> Check:
+    """The default brain's own key, not just 'any cloud key'."""
+    import os
+
+    provider, role = _brain_role()
+    env = str(role.get("api_key_env") or "")
+    model = str(role.get("model") or "?")
+    name = f"Default brain ({provider or 'unset'} / {model})"
+    if not env:
+        return Check(name, OK, "no key needed")
+    if os.environ.get(env, "").strip():
+        return Check(name, OK, f"{env} set")
+    others = [k for k in _env_keys_present() if k != env]
+    if others:
+        return Check(name, WARN, f"{env} missing; failover keys present: {', '.join(others)}",
+                     f"add {env} in Settings → API Keys (or .env) to use {model}")
+    return Check(name, FAIL, f"{env} missing",
+                 f"add {env} in Settings → API Keys (or .env)")
+
+
+def check_brain_online() -> Check:
+    """One cheap authenticated request to the default brain (no tokens billed).
+
+    Only runs with `aether doctor --online` / AETHER_DOCTOR_ONLINE=1: it
+    leaves the machine."""
+    import json
+    import os
+    import urllib.error
+    import urllib.request
+
+    name = "Default brain reachable"
+    if os.environ.get("AETHER_DOCTOR_ONLINE") != "1":
+        return Check(name, OK, "skipped (run with --online to test the API key)")
+    provider, role = _brain_role()
+    key = os.environ.get(str(role.get("api_key_env") or ""), "").strip()
+    if not key:
+        return Check(name, WARN, "no key to test")
+    backend = str(role.get("backend", "")).lower()
+    try:
+        if backend == "anthropic":
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/models/" + str(role.get("model")),
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+        else:
+            base = str(role.get("base_url") or "").rstrip("/")
+            req = urllib.request.Request(base + "/models",
+                                         headers={"Authorization": f"Bearer {key}"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            body = json.loads(r.read() or b"{}")
+        ids = {m.get("id") for m in body.get("data", []) if isinstance(m, dict)}
+        model = str(role.get("model"))
+        if ids and model not in ids and backend != "anthropic":
+            return Check(name, WARN, f"{provider} reachable, but '{model}' is not listed",
+                         "check the model id / base_url in configs/router.yaml")
+        return Check(name, OK, f"{provider} accepted the key")
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return Check(name, FAIL, f"{provider} rejected the key (HTTP {e.code})",
+                         "re-enter the key in Settings → API Keys")
+        return Check(name, WARN, f"{provider} answered HTTP {e.code}")
+    except Exception as e:  # noqa: BLE001
+        return Check(name, WARN, f"could not reach {provider}: {e}")
+
+
+def check_playwright() -> Check:
+    from pathlib import Path
+
+    if not _importable("playwright"):
+        return Check("Browser automation (Playwright)", WARN, "playwright not installed",
+                     "pip install playwright (browser_* tools unavailable)")
+    cache = Path.home() / "Library" / "Caches" / "ms-playwright"
+    if any(cache.glob("chromium*")):
+        return Check("Browser automation (Playwright)", OK, "chromium installed")
+    return Check("Browser automation (Playwright)", WARN, "chromium not downloaded",
+                 "python -m playwright install chromium (or use browser attach to Chrome)")
+
+
+def check_data_dir() -> Check:
+    from .paths import data_dir
+
+    d = data_dir()
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        probe = d / ".doctor-write-test"
+        probe.write_text("ok")
+        probe.unlink()
+        return Check("Data directory writable", OK, str(d))
+    except OSError as e:
+        return Check("Data directory writable", FAIL, f"{d}: {e}",
+                     "fix permissions or set AETHER_DATA_DIR")
+
+
+def check_grounding_calibrated() -> Check:
+    from .paths import data_dir
+
+    cal = data_dir() / "grounding_calibration.json"
+    if cal.exists():
+        try:
+            import json
+
+            d = json.loads(cal.read_text())
+            return Check("Vision grounding calibrated", OK,
+                         f"{d.get('model', '?')}: {d.get('coord_space')} @ "
+                         f"{d.get('max_image_edge')}px, {float(d.get('hit_rate', 0)):.0%} hits")
+        except Exception:  # noqa: BLE001
+            return Check("Vision grounding calibrated", WARN, "calibration file unreadable")
+    return Check("Vision grounding calibrated", WARN, "not calibrated yet",
+                 "python scripts/calibrate_grounding.py --write (pointing uses defaults until then)")
+
+
 def check_config() -> Check:
     try:
         from .config import load_config
@@ -148,8 +269,9 @@ def _ollama_up(url: str = "http://localhost:11434/api/tags") -> bool:
 
 CHECKS: list[Callable[[], Check]] = [
     check_python, check_sidecar_deps, check_perception_deps, check_llm_backend,
-    check_coding_clis, check_git, check_accessibility, check_screen_recording,
-    check_config,
+    check_brain_key, check_brain_online, check_coding_clis, check_git,
+    check_accessibility, check_screen_recording, check_playwright, check_data_dir,
+    check_grounding_calibrated, check_config,
 ]
 
 
@@ -187,6 +309,11 @@ def format_report(checks: list[Check]) -> str:
     }[v]
     lines += ["", summary]
     return "\n".join(lines)
+
+
+def as_dicts(checks: list[Check]) -> list[dict]:
+    return [{"name": c.name, "status": c.status, "detail": c.detail, "fix": c.fix}
+            for c in checks]
 
 
 def main() -> int:

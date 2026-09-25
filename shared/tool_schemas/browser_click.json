@@ -1,11 +1,14 @@
 {
   "name": "browser_click",
-  "description": "Click an element in the Playwright browser by CSS selector.",
+  "description": "Click an element in the browser by CSS selector (optional tab_id).",
   "input_schema": {
     "type": "object",
     "properties": {
       "selector": {
         "type": "string"
+      },
+      "tab_id": {
+        "type": "integer"
       }
     },
     "required": [

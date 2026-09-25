@@ -20,6 +20,7 @@ from . import loader
 
 MAX_LEARNED_RECIPES = 20      # per app, newest kept
 MAX_STEPS = 12                # per recipe
+PROVEN_AFTER = 3              # identical successes before a recipe is "proven"
 
 
 def _learned_dir() -> Path:
@@ -45,23 +46,41 @@ def _recipe_name(task: str) -> str:
     return "_".join(w.lower() for w in words) or "task"
 
 
-def record_success(app_key: str, task: str, steps: list[str]) -> str | None:
-    """Append a learned recipe for an app. Returns the recipe name, or None when
-    there's nothing worth recording. Best-effort — never raises into the caller."""
+def safe_to_learn(steps: list[str]) -> bool:
+    """Learned recipes are re-injected into future prompts, so text that looks
+    like instructions to an AI never gets in (audit residual 7)."""
+    from ..core.security import InjectionSeverity, scan_injection
+
+    scan = scan_injection("\n".join(steps))
+    return scan.severity not in (InjectionSeverity.HIGH, InjectionSeverity.MEDIUM)
+
+
+def record_success(app_key: str, task: str, steps: list[str], *,
+                   tainted: bool = False) -> str | None:
+    """Append (or re-confirm) a learned recipe for an app. Returns the recipe
+    name, or None when there's nothing worth recording. Runs that read
+    untrusted content teach nothing. Best-effort — never raises."""
     steps = [s for s in (steps or []) if s][:MAX_STEPS]
-    if not app_key or not steps or len(steps) < 2:
+    if tainted or not app_key or not steps or len(steps) < 2:
         return None  # single-step "recipes" aren't worth learning
+    if not safe_to_learn(steps):
+        return None
     name = _recipe_name(task)
     try:
         data = load_learned(app_key)
         recipes: dict[str, Any] = data.get("recipes") or {}
+        counts: dict[str, int] = data.get("counts") or {}
         if recipes.get(name) == steps:
-            return None  # already known, identical
+            counts[name] = int(counts.get(name, 1)) + 1   # the same way worked again
+        else:
+            counts[name] = 1
+        data["counts"] = counts
         recipes[name] = steps
         # keep newest MAX_LEARNED_RECIPES (dict preserves insertion order)
         if len(recipes) > MAX_LEARNED_RECIPES:
             for old in list(recipes)[: len(recipes) - MAX_LEARNED_RECIPES]:
                 recipes.pop(old, None)
+                counts.pop(old, None)
         data["recipes"] = recipes
         data["app_key"] = app_key
         path = _learned_path(app_key)
@@ -80,7 +99,13 @@ def learned_prompt_slice(app_key: str) -> str:
     recipes = data.get("recipes") or {}
     if not recipes:
         return ""
+    counts = data.get("counts") or {}
+    proven = [(n, st) for n, st in recipes.items() if int(counts.get(n, 1)) >= PROVEN_AFTER]
+    other = [(n, st) for n, st in recipes.items() if int(counts.get(n, 1)) < PROVEN_AFTER]
     lines = ["Learned from your past successful runs:"]
-    for name, steps in list(recipes.items())[-6:]:
+    for name, steps in proven[-4:]:
+        lines.append(f"- {name} (proven: worked {counts[name]} times the same way): "
+                     + " → ".join(str(s) for s in steps[:8]))
+    for name, steps in other[-(6 - min(len(proven), 4)):]:
         lines.append(f"- {name}: " + " → ".join(str(s) for s in steps[:6]))
     return "\n".join(lines)

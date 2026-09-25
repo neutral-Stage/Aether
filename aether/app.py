@@ -43,11 +43,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="prefer local model (Ollama); cloud fallback if needed")
     parser.add_argument("--no-preflight", action="store_true",
                         help="skip the permission check")
+    parser.add_argument("--online", action="store_true",
+                        help="with --doctor: also test the API key against the provider")
     parser.add_argument("--doctor", action="store_true",
                         help="run the first-run environment preflight and exit")
     args = parser.parse_args(argv)
 
     if args.doctor:
+        if args.online:
+            import os
+
+            os.environ["AETHER_DOCTOR_ONLINE"] = "1"
         from .core.doctor import main as doctor_main
         return doctor_main()
 

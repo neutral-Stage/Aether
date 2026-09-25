@@ -1,0 +1,24 @@
+{
+  "name": "ask_user",
+  "description": "Ask the user a short question and wait for the answer, when the request is ambiguous and a wrong guess would cost them something. Offer options when there are a few obvious choices. Never ask for passwords or codes.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "question": {
+        "type": "string"
+      },
+      "options": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 6
+      }
+    },
+    "required": [
+      "question"
+    ]
+  },
+  "permission": "none",
+  "impact": "read"
+}

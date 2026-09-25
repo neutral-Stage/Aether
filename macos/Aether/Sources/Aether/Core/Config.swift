@@ -33,6 +33,8 @@ enum AetherConfig {
 
     /// Global command bar: ⌥Space (Phase 7)
     static let commandBarModifiers: NSEvent.ModifierFlags = [.option]
+    /// Hold this chord alone to talk about what the mouse points at (talk mode).
+    static let talkModifiers: NSEvent.ModifierFlags = [.control, .option]
     static let commandBarKeyCode: UInt16 = 49 // Space
 
     static var appVersion: String {

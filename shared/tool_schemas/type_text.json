@@ -1,11 +1,17 @@
 {
   "name": "type_text",
-  "description": "Type text into the currently focused field.",
+  "description": "Type text into the currently focused field. For a BACKGROUND app pass app='Name' + element_index (sets the field value via AX without stealing focus).",
   "input_schema": {
     "type": "object",
     "properties": {
       "text": {
         "type": "string"
+      },
+      "app": {
+        "type": "string"
+      },
+      "element_index": {
+        "type": "integer"
       }
     },
     "required": [

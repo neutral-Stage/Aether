@@ -16,9 +16,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PATH = ROOT / "data" / "audit.jsonl"
-_KEY_PATH = ROOT / "data" / ".audit_hmac_key"
+from .paths import ROOT, data_dir, resolve_data_path  # noqa: F401
+
+DEFAULT_PATH = data_dir() / "audit.jsonl"  # informational; resolved per instance
+
+
+def _key_path() -> Path:
+    return data_dir() / ".audit_hmac_key"
 _KEYCHAIN_SERVICE = "com.aether.audit"
 _KEYCHAIN_ACCOUNT = "hmac-key"
 
@@ -60,13 +64,14 @@ def resolve_audit_hmac_key() -> tuple[bytes, str]:
     env = os.getenv("AETHER_AUDIT_KEY")
     if env:
         return env.encode("utf-8"), "env"
-    if _KEY_PATH.exists():
-        return _KEY_PATH.read_bytes(), "file"
-    _KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    key_path = _key_path()
+    if key_path.exists():
+        return key_path.read_bytes(), "file"
+    key_path.parent.mkdir(parents=True, exist_ok=True)
     key = os.urandom(32)
-    _KEY_PATH.write_bytes(key)
+    key_path.write_bytes(key)
     try:
-        _KEY_PATH.chmod(0o600)
+        key_path.chmod(0o600)
     except OSError:
         pass
     return key, "generated"
@@ -85,7 +90,7 @@ class AuditLog:
         enabled: bool = True,
         hmac_key: bytes | None = None,
     ) -> None:
-        self.path = Path(path) if path else DEFAULT_PATH
+        self.path = resolve_data_path(path, "audit.jsonl")
         self.enabled = enabled
         self._lock = threading.Lock()
         self._prev_hash = ""
@@ -156,7 +161,6 @@ class AuditLog:
         entry: dict[str, Any] = {
             "ts": time.time(),
             "event": event_type,
-            "prev_hash": self._prev_hash,
         }
         if run_id:
             entry["run_id"] = run_id
@@ -175,50 +179,96 @@ class AuditLog:
         if extra:
             entry["extra"] = extra
 
-        canonical = json.dumps(entry, sort_keys=True, separators=(",", ":"))
-        entry["hmac"] = self._sign(canonical)
-        entry["record_hash"] = hashlib.sha256(
-            (self._prev_hash + canonical + entry["hmac"]).encode("utf-8")
-        ).hexdigest()
-
+        # Link, sign and write under one lock: two threads that read the same
+        # previous hash would fork the chain, and verification would then fail.
         with self._lock:
-            self._prev_hash = entry["record_hash"]
+            entry["prev_hash"] = self._prev_hash
+            canonical = json.dumps(entry, sort_keys=True, separators=(",", ":"))
+            entry["hmac"] = self._sign(canonical)
+            entry["record_hash"] = hashlib.sha256(
+                (self._prev_hash + canonical + entry["hmac"]).encode("utf-8")
+            ).hexdigest()
             try:
                 with self.path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
             except OSError:
                 return None
+            self._prev_hash = entry["record_hash"]
         return entry["record_hash"]
 
-    def verify_chain(self, max_records: int = 500) -> tuple[bool, str]:
-        """Verify HMAC + hash chain for recent records."""
+    def _lines(self) -> list[str]:
+        return [ln for ln in self.path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+    def verify_chain(self, max_records: int | None = None) -> tuple[bool, str]:
+        """Verify the HMAC and hash chain of the whole log, or of its last
+        `max_records` (the first of those is taken to link to what came before)."""
         if not self.path.exists():
             return True, "empty"
-        prev = ""
-        count = 0
         try:
-            lines = self.path.read_text(encoding="utf-8").strip().splitlines()
+            lines = self._lines()
         except OSError as exc:
             return False, str(exc)
-        for line in lines[-max_records:]:
-            if not line.strip():
-                continue
-            rec = json.loads(line)
+        total = len(lines)
+        window = lines[-max_records:] if max_records else lines
+        start = total - len(window)
+        prev: str | None = "" if start == 0 else None
+        count = 0
+        for n, line in enumerate(window, start=start + 1):
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                return False, f"record {n} is not readable"
+            if not isinstance(rec, dict) or not isinstance(rec.get("hmac"), str):
+                return False, f"record {n} is not an audit record"
+            if prev is None:
+                prev = str(rec.get("prev_hash", ""))
             if rec.get("prev_hash") != prev:
-                return False, f"chain break at ts={rec.get('ts')}"
+                return False, f"chain break at record {n} (ts={rec.get('ts')})"
             body = {k: v for k, v in rec.items() if k not in ("hmac", "record_hash")}
             canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
             expected = self._sign(canonical)
-            if not hmac.compare_digest(expected, rec.get("hmac", "")):
-                return False, f"hmac mismatch at ts={rec.get('ts')}"
+            if not hmac.compare_digest(expected, rec["hmac"]):
+                return False, f"signature mismatch at record {n} (ts={rec.get('ts')})"
             rh = hashlib.sha256(
                 (prev + canonical + rec["hmac"]).encode("utf-8")
             ).hexdigest()
             if rh != rec.get("record_hash"):
-                return False, f"record_hash mismatch at ts={rec.get('ts')}"
+                return False, f"record_hash mismatch at record {n} (ts={rec.get('ts')})"
             prev = rec["record_hash"]
             count += 1
-        return True, f"ok ({count} records)"
+        scope = f"{count} records" if start == 0 else f"last {count} of {total} records"
+        return True, f"ok ({scope})"
+
+    def recent(self, limit: int = 200, *, query: str = "", event: str = "",
+               run_id: str = "") -> list[dict[str, Any]]:
+        """Newest first, filtered; signature fields are left out, `id` is a short hash."""
+        if not self.path.exists():
+            return []
+        try:
+            lines = self._lines()
+        except OSError:
+            return []
+        q = query.strip().lower()
+        out: list[dict[str, Any]] = []
+        for line in reversed(lines):
+            if q and q not in line.lower():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            if event and rec.get("event") != event:
+                continue
+            if run_id and rec.get("run_id") != run_id:
+                continue
+            item = {k: v for k, v in rec.items() if k not in ("hmac", "record_hash", "prev_hash")}
+            item["id"] = str(rec.get("record_hash", ""))[:12]
+            out.append(item)
+            if len(out) >= limit:
+                break
+        return out
 
 
 def _safe_args(args: dict[str, Any]) -> dict[str, Any]:

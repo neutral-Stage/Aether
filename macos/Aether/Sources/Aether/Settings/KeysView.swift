@@ -6,12 +6,12 @@ struct KeysView: View {
     var onSaved: () -> Void = {}
 
     private let providers: [(label: String, account: String)] = [
-        ("Anthropic (Claude)", "ANTHROPIC_API_KEY"),
+        ("Z.ai (GLM · default)", "ZAI_API_KEY"),
+        ("Anthropic (failover)", "ANTHROPIC_API_KEY"),
+        ("Groq (voice)", "GROQ_API_KEY"),
         ("OpenAI", "OPENAI_API_KEY"),
-        ("Groq", "GROQ_API_KEY"),
-        ("Google (Gemini)", "GOOGLE_API_KEY"),
         ("OpenRouter", "OPENROUTER_API_KEY"),
-        ("Z.ai (GLM)", "ZAI_API_KEY"),
+        ("Google (Gemini)", "GOOGLE_API_KEY"),
     ]
 
     @State private var drafts: [String: String] = [:]

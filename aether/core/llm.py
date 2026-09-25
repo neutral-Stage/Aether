@@ -4,6 +4,7 @@ Kept provider-isolated so the router can swap backends per step.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -11,9 +12,12 @@ import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 log = logging.getLogger(__name__)
+
+# Anthropic fallback model (failover + computer-use); see configs/router.yaml.
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
 
 
 def _check_abort(abort_event: threading.Event | None) -> None:
@@ -22,12 +26,21 @@ def _check_abort(abort_event: threading.Event | None) -> None:
         raise StopRequested("STOP requested — LLM call cancelled.")
 
 
-def _http_client_for_llm(abort_event: threading.Event | None):
-    """Create an httpx client registered for STOP cancellation."""
-    import httpx
+def _http_client_for_llm(abort_event: threading.Event | None, *, factory=None):  # noqa: ANN001
+    """Create an HTTP client registered for STOP cancellation.
+
+    ``factory`` builds the client; the default is a plain ``httpx.Client`` (the
+    OpenAI SDK). The Anthropic SDK 1.x is built on ``httpx2`` and rejects
+    ``httpx`` objects, so its callers pass ``anthropic.DefaultHttpxClient``.
+    """
     from . import stop as stop_ctl
 
-    client = httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0))
+    if factory is None:
+        import httpx
+
+        client = httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0))
+    else:
+        client = factory()
 
     def _close() -> None:
         try:
@@ -50,6 +63,7 @@ class LLMResponse:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    model: str | None = None        # model id that produced the turn (for pricing)
 
 
 class LLMBackend(Protocol):
@@ -63,7 +77,91 @@ class LLMBackend(Protocol):
     ) -> LLMResponse: ...
 
 
+TokenCallback = Callable[[str], None]
+
+
+def accepts_on_token(step_fn: Any) -> bool:
+    """Does this step() take on_token= (a streaming backend)?"""
+    try:
+        params = inspect.signature(step_fn).parameters
+    except (TypeError, ValueError):
+        return False
+    # Only an explicit parameter counts: a wrapper taking **kwargs may forward to a
+    # step() that doesn't stream.
+    return "on_token" in params
+
+
+def step_with_tokens(client: Any, system: str, messages: list[dict], tools: list[dict], *,
+                     abort_event: threading.Event | None = None,
+                     on_token: TokenCallback | None = None) -> Any:
+    """client.step(), streaming text to ``on_token`` when the backend can.
+
+    Backends that can't stream deliver their text as one chunk at the end.
+    """
+    if on_token is not None and accepts_on_token(client.step):
+        return client.step(system, messages, tools, abort_event=abort_event, on_token=on_token)
+    resp = client.step(system, messages, tools, abort_event=abort_event)
+    if on_token is not None and getattr(resp, "text", ""):
+        on_token(resp.text)
+    return resp
+
+
+class TokenGate:
+    """Pass streamed text through, except a turn that is really a tool call written
+    as text (JSON or a code fence), which some models emit instead of tool_calls."""
+
+    def __init__(self, sink: TokenCallback) -> None:
+        self.sink = sink
+        self._head = ""
+        self._decided: bool | None = None       # True: pass, False: suppress
+
+    def __call__(self, chunk: str) -> None:
+        if not chunk or self._decided is False:
+            return
+        if self._decided is None:
+            self._head += chunk
+            stripped = self._head.lstrip()
+            if len(stripped) < 3:
+                return
+            self._decided = not stripped.startswith(("{", "[", "```", "<tool", "<|"))
+            if self._decided:
+                self.sink(self._head)
+            return
+        self.sink(chunk)
+
+    def flush(self) -> None:
+        """End of turn: release a short held-back head (e.g. "Ok")."""
+        if self._decided is None and self._head.strip():
+            self.sink(self._head)
+        self._decided = self._decided if self._decided is not None else True
+
+
+# Current Claude models reject sampling parameters (temperature/top_p/top_k)
+# with a 400; older ones (Sonnet/Opus 4.6, Haiku 4.5) still accept them. The
+# 1.x SDK removed these keywords from messages.create, so they travel in
+# extra_body for the models that still honour them.
+_NO_SAMPLING_PREFIXES = (
+    "claude-sonnet-5", "claude-opus-5", "claude-opus-4-7", "claude-opus-4-8",
+    "claude-fable", "claude-mythos",
+)
+
+
+def anthropic_accepts_sampling(model: str) -> bool:
+    return not str(model or "").startswith(_NO_SAMPLING_PREFIXES)
+
+
+def _image_media_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    return "image/png"
+
+
 class LLM:
+    """Anthropic Messages API backend (native tool use)."""
+
     def __init__(self, api_key: str, model: str, max_tokens: int = 1024,
                  temperature: float = 0.0):
         if not api_key:
@@ -73,6 +171,46 @@ class LLM:
         self.max_tokens = max_tokens
         self.temperature = temperature
 
+    def _sampling(self) -> dict[str, Any]:
+        if anthropic_accepts_sampling(self.model):
+            return {"extra_body": {"temperature": self.temperature}}
+        return {}
+
+    def _create(self, abort_event: threading.Event | None, *,  # noqa: ANN202
+                on_token: TokenCallback | None = None, **params: Any):
+        """One messages call on a STOP-cancellable client (streamed with on_token)."""
+        _check_abort(abort_event)
+        import anthropic
+        from . import stop as stop_ctl
+
+        http_client, closer = _http_client_for_llm(
+            abort_event,
+            factory=lambda: anthropic.DefaultHttpxClient(
+                timeout=anthropic.Timeout(120.0, connect=10.0)),
+        )
+        try:
+            client = anthropic.Anthropic(api_key=self._api_key, http_client=http_client)
+            _check_abort(abort_event)
+            if on_token is None:
+                return client.messages.create(model=self.model, max_tokens=self.max_tokens,
+                                              **self._sampling(), **params)
+            try:
+                with client.messages.stream(model=self.model, max_tokens=self.max_tokens,
+                                            **self._sampling(), **params) as stream:
+                    for text in stream.text_stream:
+                        on_token(text)
+                    return stream.get_final_message()
+            except Exception as e:  # noqa: BLE001
+                if stop_ctl.is_set() or (abort_event is not None and abort_event.is_set()):
+                    raise stop_ctl.StopRequested() from e
+                raise
+        finally:
+            stop_ctl.unregister_http_closer(closer)
+            try:
+                http_client.close()
+            except Exception:
+                pass
+
     def step(
         self,
         system: str,
@@ -80,30 +218,11 @@ class LLM:
         tools: list[dict],
         *,
         abort_event: threading.Event | None = None,
+        on_token: TokenCallback | None = None,
     ) -> LLMResponse:
         """One model turn. `messages` is the running Anthropic message list."""
-        _check_abort(abort_event)
-        import anthropic
-        from . import stop as stop_ctl
-
-        http_client, closer = _http_client_for_llm(abort_event)
-        try:
-            client = anthropic.Anthropic(api_key=self._api_key, http_client=http_client)
-            _check_abort(abort_event)
-            resp = client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                system=system,
-                tools=tools,
-                messages=messages,
-            )
-        finally:
-            stop_ctl.unregister_http_closer(closer)
-            try:
-                http_client.close()
-            except Exception:
-                pass
+        resp = self._create(abort_event, on_token=on_token, system=system, tools=tools,
+                            messages=messages)
         text_parts: list[str] = []
         tool_calls: list[dict] = []
         for block in resp.content:
@@ -118,9 +237,10 @@ class LLM:
                 })
         in_tok, out_tok = _usage_from_anthropic(resp)
         return LLMResponse(
+            model=self.model,
             text="\n".join(text_parts).strip(),
             tool_calls=tool_calls,
-            raw_content=resp.content,
+            raw_content=[_block_dict(b) for b in resp.content],
             stop_reason=resp.stop_reason,
             backend="anthropic",
             input_tokens=in_tok,
@@ -130,27 +250,18 @@ class LLM:
     def analyze_image(self, image_path: str, prompt: str) -> str:
         """Send a screenshot to Claude vision."""
         import base64
-        from pathlib import Path as P
 
-        media_type = "image/png"
-        p = P(image_path)
-        if p.suffix.lower() in (".jpg", ".jpeg"):
-            media_type = "image/jpeg"
+        p = Path(image_path)
         data = base64.standard_b64encode(p.read_bytes()).decode("ascii")
-        resp = self._client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {
-                        "type": "base64", "media_type": media_type, "data": data,
-                    }},
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-        )
+        resp = self._create(None, messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": _image_media_type(p), "data": data,
+                }},
+                {"type": "text", "text": prompt},
+            ],
+        }])
         parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
         return "\n".join(parts).strip()
 
@@ -164,14 +275,180 @@ class LLM:
         return assistant_tool_results_turn(results)
 
 
+def _block_dict(block: Any) -> Any:
+    """SDK content block -> plain dict, so history is JSON-safe and prunable."""
+    if isinstance(block, dict):
+        return block
+    dump = getattr(block, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(mode="json", exclude_none=True)
+        except Exception:  # noqa: BLE001 — echo the object back unchanged
+            return block
+    return block
+
+
+def image_block(path: str) -> dict:
+    """A base64 Anthropic image block for a PNG/JPEG on disk."""
+    import base64
+
+    p = Path(path)
+    return {"type": "image", "source": {
+        "type": "base64", "media_type": _image_media_type(p),
+        "data": base64.standard_b64encode(p.read_bytes()).decode("ascii"),
+    }}
+
+
 def assistant_tool_results_turn(results: list[dict]) -> dict:
-    """Anthropic-format tool results turn (shared across backends)."""
-    blocks = [{
-        "type": "tool_result",
-        "tool_use_id": r["tool_use_id"],
-        "content": r["content"],
-    } for r in results]
+    """Anthropic-format tool results turn (shared across backends).
+
+    A result may carry ``images`` (paths). Each image is sent with its
+    geometry label (pixel size, display, cursor) so coordinates the model
+    reads off it can be mapped back to screen points.
+    """
+    blocks = []
+    for r in results:
+        images = [i for i in (r.get("images") or []) if i and Path(i).exists()]
+        if not images:
+            blocks.append({"type": "tool_result", "tool_use_id": r["tool_use_id"],
+                           "content": r["content"]})
+            continue
+        from ..perception import screen
+
+        content: list[dict] = [{"type": "text", "text": str(r["content"])}]
+        for img in images:
+            content.append({"type": "text", "text": screen.image_label(img)})
+            content.append(image_block(img))
+        blocks.append({"type": "tool_result", "tool_use_id": r["tool_use_id"],
+                       "content": content})
     return {"role": "user", "content": blocks}
+
+
+def tool_result_text(block: dict) -> str:
+    """The text of a tool_result block, whether its content is a str or blocks."""
+    content = block.get("content", "")
+    if isinstance(content, list):
+        return "\n".join(str(c.get("text", "")) for c in content
+                         if isinstance(c, dict) and c.get("type") == "text")
+    return str(content)
+
+
+def tool_result_images(block: dict) -> list[dict]:
+    content = block.get("content")
+    if not isinstance(content, list):
+        return []
+    return [c for c in content if isinstance(c, dict) and c.get("type") == "image"]
+
+
+_OMITTED = {"type": "text", "text": "[earlier screenshot omitted]"}
+_COLLAPSED_MARK = "chars of older output collapsed"
+
+
+def _tool_results(messages: list[dict]) -> list[tuple[int, dict]]:
+    """(message index, tool_result block) in conversation order."""
+    out = []
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+            out += [(i, b) for b in msg["content"]
+                    if isinstance(b, dict) and b.get("type") == "tool_result"]
+    return out
+
+
+def collapse_tool_results(messages: list[dict], budget_chars: int, keep_recent: int = 6) -> int:
+    """Shrink the oldest tool results once their text passes ``budget_chars``.
+
+    Long runs accumulate screen dumps and command output; the model needs the
+    recent ones verbatim and only the gist of the old ones. Each collapsed
+    result keeps its first line. The newest ``keep_recent`` results are never
+    touched. Returns how many results were collapsed.
+    """
+    if budget_chars <= 0:
+        return 0
+    results = _tool_results(messages)
+    total = sum(len(tool_result_text(b)) for _, b in results)
+    collapsed = 0
+    for _, block in results[:max(0, len(results) - keep_recent)]:
+        if total <= budget_chars:
+            break
+        text = tool_result_text(block)
+        if _COLLAPSED_MARK in text or len(text) < 400:
+            continue
+        head = text.strip().splitlines()[0][:200] if text.strip() else ""
+        stub = f"{head}\n[{len(text)} {_COLLAPSED_MARK} to save context]"
+        content = block.get("content")
+        if isinstance(content, list):   # keep any image (pruned separately)
+            block["content"] = [{"type": "text", "text": stub},
+                                *[c for c in content if isinstance(c, dict)
+                                  and c.get("type") != "text"]]
+        else:
+            block["content"] = stub
+        total -= len(text) - len(stub)
+        collapsed += 1
+    return collapsed
+
+
+def prune_images(messages: list[dict], keep: int = 2) -> int:
+    """Keep only the newest ``keep`` images in tool results; returns how many were dropped.
+
+    Screenshots are ~1-2K tokens each; old ones only cost money and attention.
+    """
+    seen = dropped = 0
+    for msg in reversed(messages):
+        if msg.get("role") != "user" or not isinstance(msg.get("content"), list):
+            continue
+        for block in reversed(msg["content"]):
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            content = block.get("content")
+            if not isinstance(content, list):
+                continue
+            for i in range(len(content) - 1, -1, -1):
+                c = content[i]
+                if isinstance(c, dict) and c.get("type") == "image":
+                    seen += 1
+                    if seen > keep:
+                        content[i] = dict(_OMITTED)
+                        dropped += 1
+    return dropped
+
+
+def _stream_chat(client: Any, kwargs: dict[str, Any],
+                 on_token: TokenCallback) -> tuple[str, list[dict], str | None, Any]:
+    """Stream a chat completion: (text, tool calls, finish reason, usage holder)."""
+    try:
+        stream = client.chat.completions.create(**kwargs, stream=True,
+                                                stream_options={"include_usage": True})
+    except Exception as e:  # noqa: BLE001 — some servers reject stream_options
+        if "stream_options" not in str(e):
+            raise
+        stream = client.chat.completions.create(**kwargs, stream=True)
+    text: list[str] = []
+    calls: dict[int, dict[str, str]] = {}
+    finish: str | None = None
+    usage = None
+    for chunk in stream:
+        if getattr(chunk, "usage", None) is not None:
+            usage = chunk
+        for ch in getattr(chunk, "choices", None) or []:
+            delta = ch.delta
+            if getattr(delta, "content", None):
+                text.append(delta.content)
+                if not calls:
+                    on_token(delta.content)
+            for tc in getattr(delta, "tool_calls", None) or []:
+                slot = calls.setdefault(int(getattr(tc, "index", 0) or 0),
+                                        {"id": "", "name": "", "arguments": ""})
+                if getattr(tc, "id", None):
+                    slot["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        slot["name"] = slot["name"] or fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["arguments"] += fn.arguments
+            if getattr(ch, "finish_reason", None):
+                finish = ch.finish_reason
+    return "".join(text), [calls[i] for i in sorted(calls)], finish, usage
 
 
 class OpenAICompatibleClient:
@@ -186,12 +463,17 @@ class OpenAICompatibleClient:
         temperature: float = 0.0,
         backend_name: str = "openai_compatible",
         extra_headers: dict[str, str] | None = None,
+        images: bool = True,
     ):
         if not api_key:
             raise RuntimeError("API key is not set for OpenAI-compatible provider.")
         from openai import OpenAI
 
         self.model = model
+        # False for text-only models (router.yaml `images: false`): screenshots
+        # in tool results are replaced by a note instead of a request the
+        # provider would reject.
+        self.supports_images = images
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.backend = backend_name
@@ -208,7 +490,10 @@ class OpenAICompatibleClient:
         tools: list[dict],
         *,
         abort_event: threading.Event | None = None,
+        on_token: TokenCallback | None = None,
     ) -> LLMResponse:
+        """One model turn. With ``on_token`` the reply streams: text is passed on as it
+        arrives, and STOP closes the stream."""
         _check_abort(abort_event)
         from openai import OpenAI
         from . import stop as stop_ctl
@@ -221,7 +506,8 @@ class OpenAICompatibleClient:
                 default_headers=self._extra_headers,
                 http_client=http_client,
             )
-            oai_messages = _anthropic_messages_to_openai(system, messages)
+            oai_messages = _anthropic_messages_to_openai(
+                system, messages, images=self.supports_images)
             oai_tools = _anthropic_tools_to_openai(tools) if tools else None
             kwargs: dict[str, Any] = {
                 "model": self.model,
@@ -233,37 +519,56 @@ class OpenAICompatibleClient:
                 kwargs["tools"] = oai_tools
                 kwargs["tool_choice"] = "auto"
             _check_abort(abort_event)
-            resp = client.chat.completions.create(**kwargs)
+            if on_token is not None:
+                try:
+                    text, calls, finish, usage = _stream_chat(client, kwargs, on_token)
+                except Exception as e:  # noqa: BLE001
+                    if stop_ctl.is_set() or (abort_event is not None and abort_event.is_set()):
+                        raise stop_ctl.StopRequested() from e
+                    raise
+            else:
+                resp = client.chat.completions.create(**kwargs)
+                choice = resp.choices[0]
+                text = choice.message.content or ""
+                calls = [{"id": tc.id, "name": tc.function.name,
+                          "arguments": tc.function.arguments}
+                         for tc in choice.message.tool_calls or []]
+                finish = choice.finish_reason
+                usage = resp
         finally:
             stop_ctl.unregister_http_closer(closer)
             try:
                 http_client.close()
             except Exception:
                 pass
-        choice = resp.choices[0]
-        text = choice.message.content or ""
+        return self._response(text, calls, finish, usage, tools)
+
+    def _response(self, text: str, calls: list[dict], finish: str | None, usage: Any,
+                  tools: list[dict]) -> LLMResponse:
         tool_calls: list[dict] = []
         raw_blocks: list[dict] = []
         if text:
             raw_blocks.append({"type": "text", "text": text})
-        for tc in choice.message.tool_calls or []:
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            call = {"id": tc.id, "name": tc.function.name, "input": args}
+        for i, tc in enumerate(calls):
+            args = _args_or_marker(tc.get("arguments") or "")
+            call = {"id": tc.get("id") or f"call_{i}", "name": tc.get("name") or "",
+                    "input": args}
             tool_calls.append(call)
-            raw_blocks.append({
-                "type": "tool_use",
-                "id": tc.id,
-                "name": tc.function.name,
-                "input": args,
-            })
-        stop = choice.finish_reason or "end_turn"
-        if tool_calls and stop == "tool_calls":
+            raw_blocks.append({"type": "tool_use", **call})
+        if not tool_calls and text and tools:
+            # Some models (GLM included, now and then) write the call as JSON in
+            # the reply instead of using tool_calls. Accept it for known tools.
+            known = {t.get("name") for t in tools}
+            for call in _parse_tool_calls_from_text(text):
+                if call["name"] in known:
+                    tool_calls.append(call)
+                    raw_blocks.append({"type": "tool_use", **call})
+        stop = finish or "end_turn"
+        if tool_calls and stop in ("tool_calls", "stop"):
             stop = "tool_use"
-        in_tok, out_tok = _usage_from_openai(resp)
+        in_tok, out_tok = _usage_from_openai(usage) if usage is not None else (None, None)
         return LLMResponse(
+            model=self.model,
             text=text if not tool_calls else "",
             tool_calls=tool_calls,
             raw_content=raw_blocks,
@@ -377,7 +682,7 @@ class LocalHTTPClient:
                 for block in content:
                     if isinstance(block, dict):
                         if block.get("type") == "tool_result":
-                            text_parts.append(f"[tool result]: {block.get('content', '')}")
+                            text_parts.append(f"[tool result]: {tool_result_text(block)}")
                         elif block.get("type") == "text":
                             text_parts.append(block.get("text", ""))
                     else:
@@ -426,6 +731,7 @@ class LocalHTTPClient:
         raw = [{"type": "text", "text": text}] if text else []
         in_tok, out_tok = _usage_from_ollama(body)
         return LLMResponse(
+            model=self.model,
             text=text if not tool_calls else "",
             tool_calls=tool_calls,
             raw_content=raw,
@@ -434,6 +740,23 @@ class LocalHTTPClient:
             input_tokens=in_tok,
             output_tokens=out_tok,
         )
+
+
+def _model_image(image_path: str) -> tuple[str, str]:
+    """A model-sized copy of a screenshot plus its geometry label.
+
+    OCR runs on the full-resolution capture; the model gets a copy capped at
+    the calibrated long edge, labelled with its pixel size and display so the
+    model's coordinates can be mapped back to screen points.
+    """
+    from ..perception import screen
+
+    try:
+        edge = int(screen.grounding_settings().get("max_image_edge") or 0)
+        path = screen.resized_copy(image_path, edge) if edge else image_path
+    except Exception:  # noqa: BLE001 — never block vision on resizing
+        path = image_path
+    return path, screen.image_label(path)
 
 
 class VisionLLM:
@@ -470,9 +793,11 @@ class VisionLLM:
         tools: list[dict],
         *,
         abort_event: threading.Event | None = None,
+        on_token: TokenCallback | None = None,
     ) -> LLMResponse:
         # Vision tier still uses cloud for reasoning; OCR context is injected upstream
-        return self.cloud.step(system, messages, tools, abort_event=abort_event)
+        return step_with_tokens(self.cloud, system, messages, tools, abort_event=abort_event,
+                                on_token=on_token)
 
     def analyze_screenshot(self, image_path: str, prompt: str | None = None) -> str:
         from ..perception import ocr as ocr_mod
@@ -502,11 +827,10 @@ class VisionLLM:
             try:
                 analyze = getattr(self.cloud, "analyze_image", None)
                 if callable(analyze):
-                    analysis = analyze(
-                        image_path,
-                        prompt or ("Describe visible UI elements, buttons, and text. "
-                                   "Be concise and actionable."),
-                    )
+                    model_path, label = _model_image(image_path)
+                    ask = prompt or ("Describe visible UI elements, buttons, and text. "
+                                     "Be concise and actionable.")
+                    analysis = analyze(model_path, f"{label}\n\n{ask}" if label else ask)
                 else:
                     analysis = ""
                 if analysis:
@@ -610,18 +934,55 @@ def _parse_ollama_tool_calls(body: dict) -> list[dict]:
         fn = tc.get("function") if isinstance(tc, dict) else None
         if not isinstance(fn, dict):
             continue
-        args = fn.get("arguments")
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except json.JSONDecodeError:
-                args = {}
         calls.append({
             "id": f"local_{uuid.uuid4().hex[:12]}",
             "name": fn.get("name", ""),
-            "input": dict(args or {}),
+            "input": _args_or_marker(fn.get("arguments")),
         })
     return calls
+
+
+INVALID_ARGS_KEY = "__invalid_arguments__"
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+
+
+def repair_json_args(raw: Any) -> dict | None:
+    """Tool-call arguments as a dict, tolerating common model slips: code
+    fences, prose around the object, trailing commas, double encoding.
+    None when nothing parses (the caller reports it back to the model)."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    text = str(raw).strip()
+    if not text:
+        return {}
+    candidates = [text]
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.S)
+    if fenced:
+        candidates.append(fenced.group(1))
+    lo, hi = text.find("{"), text.rfind("}")
+    if 0 <= lo < hi:
+        candidates.append(text[lo:hi + 1])
+    candidates += [_TRAILING_COMMA_RE.sub(r"\1", c) for c in list(candidates)]
+    for c in candidates:
+        try:
+            obj = json.loads(c)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, str):
+            try:
+                obj = json.loads(obj)
+            except json.JSONDecodeError:
+                continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def _args_or_marker(raw: Any) -> dict:
+    args = repair_json_args(raw)
+    return args if args is not None else {INVALID_ARGS_KEY: str(raw)[:500]}
 
 
 def _json_to_tool_call(raw: str) -> dict | None:
@@ -653,8 +1014,10 @@ def _anthropic_tools_to_openai(tools: list[dict]) -> list[dict]:
     return oai_tools
 
 
-def _anthropic_messages_to_openai(system: str, messages: list[dict]) -> list[dict]:
+def _anthropic_messages_to_openai(system: str, messages: list[dict], *,
+                                  images: bool = True) -> list[dict]:
     oai: list[dict] = []
+    pending_images: list[dict] = []
     if system:
         oai.append({"role": "system", "content": system})
     for msg in messages:
@@ -693,6 +1056,9 @@ def _anthropic_messages_to_openai(system: str, messages: list[dict]) -> list[dic
                 oai.append({"role": "assistant", "content": str(content)})
             continue
         if role == "user" and isinstance(content, list):
+            # Plain user content (text and images, e.g. a talk question with a
+            # screenshot) becomes ONE multimodal message, in its original order.
+            user_parts: list[dict] = []
             for block in content:
                 if not isinstance(block, dict):
                     continue
@@ -700,10 +1066,43 @@ def _anthropic_messages_to_openai(system: str, messages: list[dict]) -> list[dic
                     oai.append({
                         "role": "tool",
                         "tool_call_id": block.get("tool_use_id", ""),
-                        "content": str(block.get("content", "")),
+                        "content": tool_result_text(block),
                     })
+                    pending_images.extend(tool_result_images(block))
                 elif block.get("type") == "text":
-                    oai.append({"role": "user", "content": str(block.get("text", ""))})
+                    user_parts.append({"type": "text", "text": str(block.get("text", ""))})
+                elif block.get("type") == "image":
+                    src = block.get("source") or {}
+                    if images:
+                        user_parts.append({"type": "image_url", "image_url": {
+                            "url": f"data:{src.get('media_type', 'image/png')};base64,"
+                                   f"{src.get('data', '')}"}})
+                    else:
+                        user_parts.append({"type": "text", "text": "[image omitted: this "
+                                                                   "model cannot see images]"})
+            if user_parts:
+                if all(p["type"] == "text" for p in user_parts):
+                    oai.append({"role": "user",
+                                "content": "\n".join(p["text"] for p in user_parts)})
+                else:
+                    oai.append({"role": "user", "content": user_parts})
+            if pending_images and not images:
+                oai.append({"role": "user", "content": (
+                    f"[{len(pending_images)} screenshot(s) omitted: this model cannot see "
+                    "images. Use get_screen_context or analyze_screen for text.]")})
+                pending_images = []
+            if pending_images:
+                # Tool messages are text-only on OpenAI-compatible APIs, so the
+                # screenshots follow as one user message after the tool results.
+                parts: list[dict] = [{"type": "text",
+                                      "text": "Images returned by the tool calls above:"}]
+                for img in pending_images:
+                    src = img.get("source") or {}
+                    parts.append({"type": "image_url", "image_url": {
+                        "url": f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}",
+                    }})
+                oai.append({"role": "user", "content": parts})
+                pending_images = []
             continue
         oai.append({"role": role, "content": str(content)})
     return oai

@@ -1,0 +1,14 @@
+{
+  "name": "activity_summary",
+  "description": "Which apps and windows the user worked in over the last hours (from screen memory).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "hours": {
+        "type": "number"
+      }
+    }
+  },
+  "permission": "screen",
+  "impact": "read"
+}

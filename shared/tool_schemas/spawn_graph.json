@@ -1,0 +1,82 @@
+{
+  "name": "spawn_graph",
+  "description": "Orchestrate a MULTI-AGENT task graph. Decompose a goal into nodes with `depends_on` edges and file `paths` each node will touch. Independent, non-path-conflicting nodes run in PARALLEL; dependent ones wait. Each node runs in an isolated git worktree, is committed + gated (optional `gate_cmd`, e.g. a test command), and all results are merged into one `aether/integration/<id>` branch (conflicts reported, not force-merged). Use for anything with parallelizable sub-tasks; use spawn_agent for a single agent.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "goal": {
+        "type": "string"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "Project dir (git repo)"
+      },
+      "budget_usd": {
+        "type": "number",
+        "description": "Stop scheduling past this fleet cost"
+      },
+      "nodes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "agent_type": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "opencode",
+                "cursor",
+                "kilo",
+                "terminal"
+              ]
+            },
+            "depends_on": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "File globs this node touches (for conflict avoidance)"
+            },
+            "gate_cmd": {
+              "type": "string",
+              "description": "Deterministic check, e.g. 'pytest -q'"
+            },
+            "difficulty": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "prompt"
+          ]
+        }
+      }
+    },
+    "required": [
+      "nodes"
+    ]
+  },
+  "permission": "agents",
+  "impact": "reversible"
+}

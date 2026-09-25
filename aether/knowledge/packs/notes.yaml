@@ -21,3 +21,18 @@ gotchas:
   - "Deleting notes is destructive — confirm first"
   - "iCloud sync may delay visibility of new notes"
   - "Shared notes have different permissions"
+  - "If Notes is connected under Integrations, prefer notes_search / notes_create over UI automation"
+verified_recipes:
+  create_note:
+    match: ["create a note", "create note", "make a note", "write a note", "add a note",
+            "start a new note", "take a note", "jot down"]
+    steps:
+      - {tool: open_app, args: {name: Notes}}
+      - {tool: wait, args: {for_app: Notes, timeout: 10}}
+      - {tool: press_key, args: {key: n, modifiers: [cmd]}}
+      - {tool: type_text, args: {text: "<the title, a new line, then the body>"}}
+      - {tool: get_screen_context, args: {}}
+    guide:
+      - {say: "Open Notes.", done_when: app, expect: Notes}
+      - {say: "Press Command N to start a new note.", done_when: any}
+      - {say: "Type the title on the first line and the note below it.", done_when: any}

@@ -1,0 +1,17 @@
+{
+  "name": "clipboard_set",
+  "description": "Put text on the clipboard.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

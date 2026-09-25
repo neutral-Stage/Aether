@@ -1,0 +1,32 @@
+{
+  "name": "drag",
+  "description": "Drag from one element/point to another (move files, reorder, select ranges, sliders).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "from_index": {
+        "type": "integer"
+      },
+      "from_x": {
+        "type": "number"
+      },
+      "from_y": {
+        "type": "number"
+      },
+      "to_index": {
+        "type": "integer"
+      },
+      "to_x": {
+        "type": "number"
+      },
+      "to_y": {
+        "type": "number"
+      },
+      "duration": {
+        "type": "number"
+      }
+    }
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

@@ -9,15 +9,179 @@ enum SidecarEvent {
     case error(String)
     case stopped
     case ping
-    case confirmRequest(requestId: String, description: String)
+    /// `grant`: what "allow for this conversation" would cover, or "" when not offered.
+    case confirmRequest(requestId: String, description: String, grant: String)
+    /// An outgoing message to approve, with fields the user can edit first.
+    case draftRequest(requestId: String, description: String, fields: [DraftField])
     case fleet([String: Any])
     case runRequest(goal: String)   // proactive trigger auto-run (Phase 11)
+    case question(requestId: String, question: String, options: [String])  // ask_user
+    case session(String)            // conversation id for follow-ups
+    case step([String: Any])        // tool_call / tool_result / screenshot / text / plan
+    case pointer([OverlayTarget])   // show the user where something is
+    case guideStep(id: String, index: Int, total: Int, say: String, target: OverlayTarget?)
+    case guideDone(id: String, status: String)
+    case token(step: Int, text: String)           // an agent run's reply as it streams
+    case talkToken(id: String, text: String)      // a talk answer as it streams (tags removed)
+    case talkDone(id: String, answer: String)
+
+    /// Events carried by one SSE `data:` object from POST /run (unknown types → none).
+    static func parse(_ obj: [String: Any], fallbackGoal: String) -> [SidecarEvent] {
+        guard let type = obj["type"] as? String else { return [] }
+        var out: [SidecarEvent] = []
+        switch type {
+        case "run_start":
+            if let sid = obj["session_id"] as? String { out.append(.session(sid)) }
+            out.append(.runStart(runId: obj["run_id"] as? String ?? "",
+                                 goal: obj["goal"] as? String ?? fallbackGoal))
+        case "hud":
+            out.append(.hud(obj))
+        case "say":
+            if let text = obj["text"] as? String { out.append(.say(text)) }
+        case "fleet":
+            out.append(.fleet(obj))
+        case "run_request":
+            if let g = obj["goal"] as? String { out.append(.runRequest(goal: g)) }
+        case "done":
+            if let sid = obj["session_id"] as? String { out.append(.session(sid)) }
+            var world: WorldSnapshot?
+            if let w = obj["world"] as? [String: Any],
+               let wData = try? JSONSerialization.data(withJSONObject: w) {
+                world = try? JSONDecoder().decode(WorldSnapshot.self, from: wData)
+            }
+            out.append(.done(result: obj["result"] as? String ?? "Done.", world: world))
+        case "error":
+            out.append(.error(obj["message"] as? String ?? "Unknown error"))
+        case "stopped":
+            out.append(.stopped)
+        case "ping":
+            out.append(.ping)
+        case "confirm_request":
+            let rid = obj["request_id"] as? String ?? ""
+            let text = obj["description"] as? String ?? "Proceed?"
+            let fields = (obj["draft"] as? [[String: Any]] ?? []).compactMap(DraftField.parse)
+            if fields.isEmpty {
+                out.append(.confirmRequest(requestId: rid, description: text,
+                                           grant: obj["grant"] as? String ?? ""))
+            } else {
+                out.append(.draftRequest(requestId: rid, description: text, fields: fields))
+            }
+        case "question":
+            // The agent's own copy of the event has no request id and cannot be
+            // answered; the sidecar's copy does.
+            let rid = obj["request_id"] as? String ?? ""
+            let q = obj["question"] as? String ?? ""
+            if !rid.isEmpty, !q.isEmpty {
+                out.append(.question(requestId: rid, question: q,
+                                     options: obj["options"] as? [String] ?? []))
+            }
+        case "tool_call", "tool_result", "screenshot", "text", "plan", "redaction":
+            out.append(.step(obj))
+        case "pointer":
+            let targets = (obj["targets"] as? [[String: Any]] ?? []).compactMap(OverlayTarget.init(json:))
+            if !targets.isEmpty { out.append(.pointer(targets)) }
+        case "guide_step":
+            guard let id = obj["guide_id"] as? String, let say = obj["say"] as? String else { break }
+            let target = (obj["target"] as? [String: Any]).flatMap(OverlayTarget.init(json:))
+            out.append(.guideStep(id: id, index: (obj["index"] as? NSNumber)?.intValue ?? 0,
+                                  total: (obj["total"] as? NSNumber)?.intValue ?? 0,
+                                  say: say, target: target))
+        case "token":
+            if let text = obj["text"] as? String {
+                out.append(.token(step: obj["step"] as? Int ?? 0, text: text))
+            }
+        case "talk_token":
+            if let id = obj["talk_id"] as? String, let text = obj["text"] as? String {
+                out.append(.talkToken(id: id, text: text))
+            }
+        case "talk_done":
+            if let id = obj["talk_id"] as? String {
+                out.append(.talkDone(id: id, answer: obj["answer"] as? String ?? ""))
+            }
+        case "guide_done":
+            if let id = obj["guide_id"] as? String {
+                out.append(.guideDone(id: id, status: obj["status"] as? String ?? "done"))
+            }
+        default:
+            break
+        }
+        return out
+    }
+}
+
+struct DoctorCheck: Identifiable, Equatable {
+    var id: String { name }
+    let name: String
+    let status: String   // ok | warn | fail
+    let detail: String
+    let fix: String
+}
+
+struct DoctorReport: Equatable {
+    let verdict: String
+    let checks: [DoctorCheck]
+
+    static func parse(_ data: Data) -> DoctorReport? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let verdict = json["verdict"] as? String else { return nil }
+        let checks = (json["checks"] as? [[String: Any]] ?? []).compactMap { raw -> DoctorCheck? in
+            guard let name = raw["name"] as? String, let status = raw["status"] as? String else {
+                return nil
+            }
+            return DoctorCheck(name: name, status: status,
+                               detail: raw["detail"] as? String ?? "",
+                               fix: raw["fix"] as? String ?? "")
+        }
+        return DoctorReport(verdict: verdict, checks: checks)
+    }
+}
+
+/// "Show me how to …" requests go to guide mode; spoken controls steer it.
+enum GuideIntent {
+    private static let prefixes = ["show me how", "teach me", "walk me through", "guide me",
+                                   "how do i "]
+
+    static func isGuideRequest(_ text: String) -> Bool {
+        var t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        for lead in ["hey aether, ", "hey aether ", "ok aether, ", "please "] where t.hasPrefix(lead) {
+            t = String(t.dropFirst(lead.count))
+        }
+        return prefixes.contains { t.hasPrefix($0) }
+    }
+
+    /// The guide control a spoken phrase asks for, if any.
+    static func control(for text: String) -> String? {
+        let t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        if t.contains("do it for me") || t == "do it" || t.contains("you do it") { return "do_it" }
+        if ["stop", "cancel", "quit", "stop the guide", "never mind"].contains(t) { return "stop" }
+        if ["back", "go back", "previous", "previous step"].contains(t) { return "back" }
+        if ["repeat", "again", "say that again", "repeat that"].contains(t) { return "repeat" }
+        if ["skip", "skip it", "skip this"].contains(t) { return "skip" }
+        if ["next", "done", "next step", "ok", "okay", "got it"].contains(t) { return "next" }
+        return nil
+    }
+}
+
+/// POST /talk's reply: what to say and where to point.
+struct TalkReply {
+    let answer: String
+    let targets: [OverlayTarget]
+    let sessionId: String?
+
+    static func parse(_ data: Data) -> TalkReply? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let answer = json["answer"] as? String else { return nil }
+        let targets = (json["targets"] as? [[String: Any]] ?? []).compactMap(OverlayTarget.init(json:))
+        return TalkReply(answer: answer, targets: targets, sessionId: json["session_id"] as? String)
+    }
 }
 
 struct RunOptions {
     var careful: Bool = false
     var localOnly: Bool = false
     var stream: Bool = true
+    /// Continue this conversation (nil starts a new one).
+    var sessionId: String? = nil
 }
 
 @MainActor
@@ -53,6 +217,25 @@ final class OrchestratorClient: ObservableObject {
         }
     }
 
+    /// Preflight checks from the sidecar (`GET /doctor`). `online` also tests
+    /// the default brain's API key against the provider.
+    func fetchDoctor(online: Bool = false) async -> DoctorReport? {
+        var comps = URLComponents(url: AetherConfig.sidecarBaseURL.appendingPathComponent("doctor"),
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "online", value: online ? "true" : "false")]
+        guard let url = comps?.url else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 25
+        applySidecarAuth(&request)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            return DoctorReport.parse(data)
+        } catch {
+            return nil
+        }
+    }
+
     func fetchVoiceConfig() async -> VoiceSettings? {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("config/voice")
         do {
@@ -72,7 +255,8 @@ final class OrchestratorClient: ObservableObject {
                 realtimeProvider: json["realtime_provider"] as? String ?? "openai",
                 realtimeVoice: json["realtime_voice"] as? Bool ?? false,
                 bargeIn: json["barge_in"] as? Bool ?? true,
-                vadEnergyThreshold: (json["vad_energy_threshold"] as? NSNumber)?.floatValue ?? 0.02
+                vadEnergyThreshold: (json["vad_energy_threshold"] as? NSNumber)?.floatValue ?? 0.02,
+                speculativeTalk: json["speculative_talk"] as? Bool ?? true
             )
         } catch {
             return nil
@@ -113,18 +297,461 @@ final class OrchestratorClient: ObservableObject {
         }
     }
 
-    func submitConfirmation(requestId: String, approved: Bool) async {
+    func submitConfirmation(requestId: String, approved: Bool,
+                            edits: [String: String]? = nil, remember: Bool = false) async {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("confirm")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = ["request_id": requestId, "approved": approved]
+        var body: [String: Any] = ["request_id": requestId, "approved": approved]
+        if let edits, !edits.isEmpty { body["edits"] = edits }
+        if remember { body["remember"] = true }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
         _ = try? await URLSession.shared.data(for: request)
     }
 
-    func reportVoiceMetrics(sttMs: Double? = nil, ttsMs: Double? = nil, voiceRttMs: Double? = nil) async {
+    /// Talk mode: ask about what is at `point` (global top-left points).
+    /// `speculative`: fired before push-to-talk was released, on a settled partial
+    /// transcript — may be cancelled (throws `CancellationError`) if the final
+    /// transcript doesn't match.
+    func talk(question: String, at point: CGPoint?, sessionId: String?,
+              talkId: String? = nil, speculative: Bool = false) async throws -> TalkReply {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("talk")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["question": question]
+        if let point {
+            body["x"] = point.x
+            body["y"] = point.y
+        }
+        if let sessionId { body["session_id"] = sessionId }
+        if let talkId {
+            // The answer also streams as talk_token events carrying this id.
+            body["talk_id"] = talkId
+            body["stream"] = true
+        } else {
+            body["stream"] = false
+        }
+        if speculative { body["speculative"] = true }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        applySidecarAuth(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "Talk failed"
+            throw NSError(domain: "Aether", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           json["cancelled"] as? Bool == true {
+            throw CancellationError()
+        }
+        guard let reply = TalkReply.parse(data) else {
+            let msg = String(data: data, encoding: .utf8) ?? "Talk failed"
+            throw NSError(domain: "Aether", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+        return reply
+    }
+
+    /// Cancel a talk in flight (speculative or not). Best-effort — errors are ignored.
+    func cancelTalk(id: String) async {
+        _ = try? await postJSON("talk/\(id)/cancel", [:])
+    }
+
+    // MARK: onboarding interview and tour
+
+    func fetchOnboardingQuestions() async -> (questions: [OnboardingQuestion],
+                                              answers: [String: String], memoryEnabled: Bool)? {
+        guard let result = try? await URLSession.shared.data(
+                for: sessionsRequest("onboarding/questions")),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return nil
+        }
+        let qs = (obj["questions"] as? [[String: Any]] ?? []).compactMap { q -> OnboardingQuestion? in
+            guard let id = q["id"] as? String, let text = q["question"] as? String else { return nil }
+            return OnboardingQuestion(id: id, question: text,
+                                      placeholder: q["placeholder"] as? String ?? "")
+        }
+        return (qs, obj["answers"] as? [String: String] ?? [:],
+                obj["memory_enabled"] as? Bool ?? false)
+    }
+
+    /// Store the answers; returns a short status line for the view.
+    func saveProfile(_ answers: [String: String]) async -> String {
+        var request = sessionsRequest("onboarding/profile", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["answers": answers])
+        guard let result = try? await URLSession.shared.data(for: request),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return "Couldn't save — is the sidecar running?"
+        }
+        let refused = obj["refused"] as? [String] ?? []
+        return refused.isEmpty ? "Saved." : "Saved, except \(refused.joined(separator: ", "))."
+    }
+
+    func fetchTour() async -> [TourExample] {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("onboarding/tour")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return []
+        }
+        return (obj["examples"] as? [[String: Any]] ?? []).compactMap(TourExample.parse)
+    }
+
+    // MARK: dictation and select-and-transform
+
+    private func postJSON(_ path: String, _ body: [String: Any],
+                          timeout: TimeInterval = 30) async throws -> [String: Any] {
+        var request = sessionsRequest(path, method: "POST")
+        request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+            let detail = obj["detail"] as? String ?? String(data: data, encoding: .utf8) ?? "failed"
+            throw NSError(domain: "Aether", code: 1, userInfo: [NSLocalizedDescriptionKey: detail])
+        }
+        return obj
+    }
+
+    /// Spoken text → text to type in the app in front (tone per app, vocabulary).
+    func cleanDictation(_ text: String, bundleId: String, app: String) async -> String? {
+        let obj = try? await postJSON("dictation/clean",
+                                      ["text": text, "bundle_id": bundleId, "app": app])
+        return obj?["text"] as? String
+    }
+
+    /// Rewrite selected text following an instruction.
+    func transformText(_ text: String, instruction: String, bundleId: String) async throws -> String {
+        let obj = try await postJSON("dictation/transform",
+                                     ["text": text, "instruction": instruction,
+                                      "bundle_id": bundleId], timeout: 60)
+        return obj["text"] as? String ?? ""
+    }
+
+    // MARK: suggestion chips
+
+    func fetchChips(at point: CGPoint, selection: String) async throws -> [Chip] {
+        let obj = try await postJSON("chips", ["x": point.x, "y": point.y, "selection": selection])
+        return (obj["chips"] as? [[String: Any]] ?? []).compactMap(Chip.parse)
+    }
+
+    // MARK: quick skills
+
+    func listQuickSkills() async -> [QuickSkill] {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("quick-skills")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return []
+        }
+        return (obj["skills"] as? [[String: Any]] ?? []).compactMap(QuickSkill.parse)
+    }
+
+    func saveQuickSkill(_ skill: QuickSkill) async throws {
+        var body = skill.json
+        if skill.id.isEmpty { body.removeValue(forKey: "id") }
+        _ = try await postJSON("quick-skills", body)
+    }
+
+    func deleteQuickSkill(_ id: String) async {
+        _ = try? await URLSession.shared.data(for: sessionsRequest("quick-skills/\(id)",
+                                                                   method: "DELETE"))
+    }
+
+    /// Run a skill on what was captured; returns the text and where it should go.
+    func runQuickSkill(_ id: String, selection: String = "", clipboard: String = "",
+                       spoken: String = "") async throws -> (text: String, destination: String,
+                                                            file: String?) {
+        let obj = try await postJSON("quick-skills/\(id)/run",
+                                     ["selection": selection, "clipboard": clipboard,
+                                      "spoken": spoken], timeout: 90)
+        return (obj["text"] as? String ?? "", obj["destination"] as? String ?? "show",
+                obj["file"] as? String)
+    }
+
+    // MARK: meeting notes
+
+    func meetingTranscription() async -> MeetingTranscription? {
+        guard let result = try? await URLSession.shared.data(
+                for: sessionsRequest("meetings/transcription")),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return nil
+        }
+        return MeetingTranscription.parse(obj)
+    }
+
+    func startMeeting(app: String, title: String? = nil) async throws -> (id: String, title: String) {
+        var body: [String: Any] = ["app": app]
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            body["title"] = title
+        }
+        let obj = try await postJSON("meetings", body)
+        guard let id = obj["id"] as? String else {
+            throw NSError(domain: "Aether", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "No meeting id in the reply"])
+        }
+        return (id, obj["title"] as? String ?? "Meeting")
+    }
+
+    /// One WAV piece of the meeting; `offset` is seconds since the meeting started.
+    func uploadMeetingAudio(id: String, channel: String, offset: Double, wav: Data) async throws {
+        var comps = URLComponents(url: AetherConfig.sidecarBaseURL
+                                    .appendingPathComponent("meetings/\(id)/audio"),
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "channel", value: channel),
+                             URLQueryItem(name: "offset_s", value: String(format: "%.2f", offset))]
+        guard let url = comps?.url else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 180            // local transcription can be slow
+        request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
+        request.httpBody = wav
+        applySidecarAuth(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+            let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+            throw NSError(domain: "Aether", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: obj["detail"] as? String ?? "upload failed"])
+        }
+    }
+
+    /// Ends the meeting; returns the notes as text.
+    func stopMeeting(id: String) async throws -> String {
+        let obj = try await postJSON("meetings/\(id)/stop", [:], timeout: 180)
+        return obj["text"] as? String ?? ""
+    }
+
+    // MARK: proactive hints
+
+    func hintsEnabled() async -> Bool {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("hints/status")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return false
+        }
+        return obj["enabled"] as? Bool ?? false
+    }
+
+    /// A hint to show now, or nil (the sidecar throttles and filters).
+    func checkHint(idle: Double, typing: Bool) async -> ScreenHint? {
+        guard let obj = try? await postJSON("hints/check", ["idle_s": idle, "typing": typing],
+                                            timeout: 45),
+              let hint = obj["hint"] as? [String: Any] else {
+            return nil
+        }
+        return ScreenHint.parse(hint)
+    }
+
+    func muteHints(category: String) async {
+        _ = try? await postJSON("hints/mute", ["category": category, "muted": true])
+    }
+
+    // MARK: cost
+
+    /// One line such as "Tasks usually cost about $0.02 · stops at $2.00"; nil when unreachable.
+    func fetchEstimate() async -> String? {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("estimate")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return nil
+        }
+        return obj["summary"] as? String
+    }
+
+    // MARK: activity log
+
+    func fetchAudit(query: String = "", event: String = "", limit: Int = 300) async -> [AuditEntry] {
+        var comps = URLComponents(url: AetherConfig.sidecarBaseURL.appendingPathComponent("audit"),
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "limit", value: String(limit)),
+                             URLQueryItem(name: "q", value: query),
+                             URLQueryItem(name: "event", value: event)]
+        guard let url = comps?.url else { return [] }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        applySidecarAuth(&request)
+        guard let result = try? await URLSession.shared.data(for: request),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return []
+        }
+        return (obj["entries"] as? [[String: Any]] ?? []).compactMap(AuditEntry.parse)
+    }
+
+    /// Nil when the sidecar can't be reached.
+    func verifyAudit() async -> AuditVerdict? {
+        var request = sessionsRequest("audit/verify")
+        request.timeoutInterval = 60
+        guard let result = try? await URLSession.shared.data(for: request),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any],
+              let ok = obj["ok"] as? Bool else {
+            return nil
+        }
+        return AuditVerdict(ok: ok, message: obj["message"] as? String ?? "")
+    }
+
+    // MARK: screen memory
+
+    /// Nil when the sidecar can't be reached.
+    func screenMemoryStatus() async -> ScreenMemoryStatus? {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("screen-memory/status")),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return nil
+        }
+        return ScreenMemoryStatus.parse(obj)
+    }
+
+    func setScreenMemoryPaused(_ paused: Bool) async throws {
+        _ = try await postJSON(paused ? "screen-memory/pause" : "screen-memory/resume", [:])
+    }
+
+    /// Allows (or stops allowing) a browser whose private windows can't be confirmed
+    /// (Safari and others — see docs/SCREEN_MEMORY.md). Returns the new allowed set.
+    @discardableResult
+    func setScreenMemoryBrowser(bundleId: String, allowed: Bool) async throws -> [String] {
+        let obj = try await postJSON("screen-memory/browsers",
+                                     ["bundle_id": bundleId, "allowed": allowed])
+        return obj["allow_browsers"] as? [String] ?? []
+    }
+
+    /// Deletes the last `minutes` of screen memory, or all of it when nil. Returns how many.
+    func deleteScreenMemory(minutes: Int?) async throws -> Int {
+        var comps = URLComponents(url: AetherConfig.sidecarBaseURL.appendingPathComponent("screen-memory"),
+                                  resolvingAgainstBaseURL: false)
+        if let minutes {
+            comps?.queryItems = [URLQueryItem(name: "minutes", value: String(minutes))]
+        }
+        guard let url = comps?.url else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 30
+        applySidecarAuth(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+            let detail = obj["detail"] as? String ?? "failed"
+            throw NSError(domain: "Aether", code: 1, userInfo: [NSLocalizedDescriptionKey: detail])
+        }
+        return obj["deleted"] as? Int ?? 0
+    }
+
+    // MARK: integrations
+
+    /// The integrations catalog with each entry's on/off state (GET /integrations).
+    /// Empty when the sidecar can't be reached.
+    func fetchIntegrations() async -> [[String: Any]] {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("integrations")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return []
+        }
+        return obj["integrations"] as? [[String: Any]] ?? []
+    }
+
+    /// Turns one integration on or off (POST /integrations/{id}).
+    func setIntegration(_ id: String, enabled: Bool) async throws {
+        _ = try await postJSON("integrations/\(id)", ["enabled": enabled])
+    }
+
+    // MARK: conversations (chat window)
+
+    private func sessionsRequest(_ path: String, method: String = "GET") -> URLRequest {
+        var request = URLRequest(url: AetherConfig.sidecarBaseURL.appendingPathComponent(path))
+        request.httpMethod = method
+        request.timeoutInterval = 15
+        applySidecarAuth(&request)
+        return request
+    }
+
+    func listSessions(limit: Int = 50) async throws -> [ChatSessionSummary] {
+        var comps = URLComponents(url: AetherConfig.sidecarBaseURL.appendingPathComponent("sessions"),
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        var request = URLRequest(url: comps?.url ?? AetherConfig.sidecarBaseURL)
+        request.timeoutInterval = 15
+        applySidecarAuth(&request)
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let rows = obj?["sessions"] as? [[String: Any]] ?? []
+        return rows.compactMap(ChatSessionSummary.parse)
+    }
+
+    /// One conversation's turns (goal, result, actions, status).
+    func fetchSession(_ id: String) async throws -> [[String: Any]] {
+        let (data, response) = try await URLSession.shared.data(for: sessionsRequest("sessions/\(id)"))
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "Aether", code: 404,
+                          userInfo: [NSLocalizedDescriptionKey: "Conversation not found"])
+        }
+        return obj["turns"] as? [[String: Any]] ?? []
+    }
+
+    /// What the user allowed for the rest of a conversation.
+    func listGrants(session id: String) async -> [String] {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("sessions/\(id)/grants")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return []
+        }
+        return obj["grants"] as? [String] ?? []
+    }
+
+    func revokeGrants(session id: String) async {
+        _ = try? await URLSession.shared.data(for: sessionsRequest("sessions/\(id)/grants",
+                                                                   method: "DELETE"))
+    }
+
+    func deleteSession(_ id: String) async {
+        _ = try? await URLSession.shared.data(for: sessionsRequest("sessions/\(id)", method: "DELETE"))
+    }
+
+    /// Guide mode: plan steps for `goal` and start pointing at them. Returns the guide id.
+    func startGuide(goal: String) async throws -> String {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("guide")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["goal": goal])
+        applySidecarAuth(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = json["guide_id"] as? String else {
+            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String
+            throw NSError(domain: "Aether", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: msg ?? "Could not start the guide.",
+            ])
+        }
+        return id
+    }
+
+    /// next | back | repeat | skip | stop | do_it
+    func controlGuide(id: String, action: String) async {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("guide").appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["action": action])
+        applySidecarAuth(&request)
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    /// Answer an ask_user question; nil or empty skips it.
+    func submitAnswer(requestId: String, answer: String?) async {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("answer")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["request_id": requestId]
+        if let answer, !answer.isEmpty { body["answer"] = answer }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        applySidecarAuth(&request)
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    func reportVoiceMetrics(sttMs: Double? = nil, ttsMs: Double? = nil, voiceRttMs: Double? = nil,
+                            firstAudioMs: Double? = nil) async {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("metrics/voice")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -133,6 +760,7 @@ final class OrchestratorClient: ObservableObject {
         if let sttMs { body["stt_ms"] = sttMs }
         if let ttsMs { body["tts_ms"] = ttsMs }
         if let voiceRttMs { body["voice_rtt_ms"] = voiceRttMs }
+        if let firstAudioMs { body["first_audio_ms"] = firstAudioMs }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
         _ = try? await URLSession.shared.data(for: request)
@@ -472,30 +1100,26 @@ final class OrchestratorClient: ObservableObject {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                     continue
                 }
-                var lineBuffer = ""
-                for try await byte in bytes {
+                for try await line in bytes.lines {
                     try Task.checkCancellation()
-                    let ch = Character(UnicodeScalar(byte))
-                    if ch == "\n" {
-                        let line = lineBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-                        lineBuffer = ""
-                        guard line.hasPrefix("data:") else { continue }
-                        let jsonStr = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                        guard let data = jsonStr.data(using: .utf8),
-                              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                              let type = obj["type"] as? String else { continue }
-                        switch type {
-                        case "run_request":
-                            if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
-                        case "say":
-                            if let t = obj["text"] as? String { onEvent(.say(t)) }
-                        case "fleet":
-                            onEvent(.fleet(obj))
-                        default:
-                            break
-                        }
-                    } else {
-                        lineBuffer.append(ch)
+                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard trimmed.hasPrefix("data:") else { continue }
+                    let jsonStr = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                    guard let data = jsonStr.data(using: .utf8),
+                          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let type = obj["type"] as? String else { continue }
+                    switch type {
+                    case "guide_step", "guide_done", "talk_token", "talk_done",
+                         "confirm_request", "question":
+                        for event in SidecarEvent.parse(obj, fallbackGoal: "") { onEvent(event) }
+                    case "run_request":
+                        if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
+                    case "say":
+                        if let t = obj["text"] as? String { onEvent(.say(t)) }
+                    case "fleet":
+                        onEvent(.fleet(obj))
+                    default:
+                        break
                     }
                 }
             } catch {
@@ -516,13 +1140,14 @@ final class OrchestratorClient: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "goal": goal,
             "careful": options.careful,
             "local_only": options.localOnly,
             "stream": options.stream,
             "narrate": false,
         ]
+        if let sessionId = options.sessionId { body["session_id"] = sessionId }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
 
@@ -544,69 +1169,30 @@ final class OrchestratorClient: ObservableObject {
             ])
         }
 
-        var lineBuffer = ""
-        for try await byte in bytes {
+        for try await line in bytes.lines {
             try Task.checkCancellation()
-            let ch = Character(UnicodeScalar(byte))
-            if ch == "\n" {
-                let line = lineBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-                lineBuffer = ""
-                guard line.hasPrefix("data:") else { continue }
-                let jsonStr = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                guard let data = jsonStr.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let type = obj["type"] as? String else { continue }
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("data:") else { continue }
+            let jsonStr = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            guard let data = jsonStr.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  obj["type"] is String else { continue }
 
-                await MainActor.run {
-                    switch type {
-                    case "run_start":
-                        let runId = obj["run_id"] as? String ?? ""
-                        let g = obj["goal"] as? String ?? goal
-                        onEvent(.runStart(runId: runId, goal: g))
-                    case "hud":
-                        onEvent(.hud(obj))
-                    case "say":
-                        if let text = obj["text"] as? String { onEvent(.say(text)) }
-                    case "fleet":
-                        onEvent(.fleet(obj))
-                    case "run_request":
-                        if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
-                    case "done":
-                        let result = obj["result"] as? String ?? "Done."
-                        var world: WorldSnapshot?
-                        if let w = obj["world"] as? [String: Any],
-                           let wData = try? JSONSerialization.data(withJSONObject: w) {
-                            world = try? JSONDecoder().decode(WorldSnapshot.self, from: wData)
-                        }
-                        onEvent(.done(result: result, world: world))
-                    case "error":
-                        let msg = obj["message"] as? String ?? "Unknown error"
-                        onEvent(.error(msg))
-                    case "stopped":
-                        onEvent(.stopped)
-                    case "ping":
-                        onEvent(.ping)
-                    case "confirm_request":
-                        let rid = obj["request_id"] as? String ?? ""
-                        let desc = obj["description"] as? String ?? "Proceed?"
-                        onEvent(.confirmRequest(requestId: rid, description: desc))
-                    default:
-                        break
-                    }
-                }
-            } else {
-                lineBuffer.append(ch)
+            let events = SidecarEvent.parse(obj, fallbackGoal: goal)
+            await MainActor.run {
+                for event in events { onEvent(event) }
             }
         }
     }
 
-    func transcribe(wavData: Data) async throws -> String {
+    func transcribe(wavData: Data, useVocabulary: Bool = false) async throws -> String {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("stt")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = [
             "audio_base64": wavData.base64EncodedString(),
+            "use_vocabulary": useVocabulary,
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)

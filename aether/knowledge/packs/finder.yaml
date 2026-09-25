@@ -20,3 +20,22 @@ gotchas:
   - "Multiple windows: activate Finder first"
 scripting:
   finder_go_to: "Set front window target to POSIX path"
+verified_recipes:
+  open_folder:
+    match: ["open downloads", "show downloads", "open documents", "show documents",
+            "open desktop folder", "open applications folder", "go to folder"]
+    steps:
+      - {tool: finder_go_to, args: {path: "<the folder, e.g. ~/Downloads>"}}
+      - {tool: get_screen_context, args: {}}
+  new_folder:
+    match: ["new folder", "create a folder", "create folder", "make a folder"]
+    steps:
+      - {tool: finder_go_to, args: {path: "<the folder the new one goes in>"}}
+      - {tool: menu_item, args: {path: "File > New Folder", app: Finder}}
+      - {tool: type_text, args: {text: "<the folder name>"}}
+      - {tool: press_key, args: {key: return}}
+    guide:
+      - {say: "In Finder, open the folder where the new folder should go.", done_when: app, expect: Finder}
+      - {say: "Open the File menu.", target: File, role: "menu bar item", app: Finder, done_when: menu}
+      - {say: "Choose New Folder.", target: New Folder, role: "menu item", app: Finder, done_when: click}
+      - {say: "Type the name and press Return.", done_when: any}

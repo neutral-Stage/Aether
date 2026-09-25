@@ -52,9 +52,11 @@ class NullTTS:
         return
 
 
-def patch_agent_for_sidecar(agent, hud: StreamingHUD, emit_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
-    """Route spoken lines to SSE; disable Python TTS; wire async confirmations."""
-    from . import confirmation
+def patch_agent_for_sidecar(agent, hud: StreamingHUD, emit_queue: asyncio.Queue,
+                            loop: asyncio.AbstractEventLoop, *, run_id: str = ""):
+    """Route spoken lines to SSE; disable Python TTS; wire async confirmations,
+    questions (ask_user) and structured step events."""
+    from . import confirmation, questions
 
     hud.bind(emit_queue, loop)
     agent.hud = hud
@@ -69,7 +71,26 @@ def patch_agent_for_sidecar(agent, hud: StreamingHUD, emit_queue: asyncio.Queue,
     async def confirm_hook(description: str) -> bool:
         return await confirmation.request_confirmation(description)
 
+    async def draft_hook(description: str, draft: list[dict]) -> tuple[bool, dict[str, str]]:
+        return await confirmation.request_draft_confirmation(description, draft)
+
+    async def grant_hook(description: str, grant: str) -> tuple[bool, bool]:
+        return await confirmation.request_grant_confirmation(description, grant)
+
     agent.confirm_async = confirm_hook
+    agent.confirm_draft_async = draft_hook
+    agent.confirm_grant_async = grant_hook
+
+    async def ask_hook(question: str, options: list[str]) -> str | None:
+        return await questions.request_answer(question, options, run_id=run_id,
+                                              broadcaster=_broadcast)
+
+    agent.ask_async = ask_hook
+
+    def emit(event: dict) -> None:
+        loop.call_soon_threadsafe(emit_queue.put_nowait, {**event, "run_id": run_id})
+
+    agent.emit = emit
 
     def say_with_event(text: str) -> None:
         loop.call_soon_threadsafe(

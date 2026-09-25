@@ -1,0 +1,27 @@
+{
+  "name": "click_described",
+  "description": "Click something you can describe but not name, e.g. 'the gear icon right of Wi-Fi' or 'the blue Export button at the bottom'. A vision model finds it on a fresh screenshot. Use after click_element and click_text fail; include any visible text in the description.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "description": {
+        "type": "string"
+      },
+      "button": {
+        "type": "string",
+        "enum": [
+          "left",
+          "right"
+        ]
+      },
+      "double": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "description"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

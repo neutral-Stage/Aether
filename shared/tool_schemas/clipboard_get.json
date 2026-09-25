@@ -1,0 +1,10 @@
+{
+  "name": "clipboard_get",
+  "description": "Read the text on the clipboard.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "permission": "screen",
+  "impact": "read"
+}

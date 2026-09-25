@@ -1,11 +1,14 @@
 {
   "name": "browser_get_text",
-  "description": "Read text from an element in the Playwright browser.",
+  "description": "Read text from an element in the browser (optional tab_id).",
   "input_schema": {
     "type": "object",
     "properties": {
       "selector": {
         "type": "string"
+      },
+      "tab_id": {
+        "type": "integer"
       }
     },
     "required": [

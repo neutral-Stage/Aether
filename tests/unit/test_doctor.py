@@ -56,3 +56,87 @@ def test_main_exit_code(monkeypatch):
     assert doctor.main() == 0
     monkeypatch.setattr(doctor, "CHECKS", [lambda: Check("x", FAIL, "bad", "fix it")])
     assert doctor.main() == 1
+
+
+# ---- default-brain and first-run checks (Phase A) ----
+
+def test_brain_key_uses_the_configured_provider(monkeypatch):
+    monkeypatch.setattr(doctor, "_brain_role",
+                        lambda: ("zai", {"api_key_env": "ZAI_API_KEY", "model": "glm-5.3-flash"}))
+    for k in doctor._PROVIDER_ENVS:  # noqa: SLF001
+        monkeypatch.delenv(k, raising=False)
+    assert doctor.check_brain_key().status == FAIL
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    c = doctor.check_brain_key()
+    assert c.status == WARN and "failover" in c.detail
+    monkeypatch.setenv("ZAI_API_KEY", "y")
+    assert doctor.check_brain_key().status == OK
+
+
+def test_brain_online_is_opt_in(monkeypatch):
+    monkeypatch.delenv("AETHER_DOCTOR_ONLINE", raising=False)
+    c = doctor.check_brain_online()
+    assert c.status == OK and "skipped" in c.detail
+
+
+def test_brain_online_reports_rejected_key(monkeypatch):
+    import io
+    import urllib.error
+
+    monkeypatch.setenv("AETHER_DOCTOR_ONLINE", "1")
+    monkeypatch.setenv("ZAI_API_KEY", "bad")
+    monkeypatch.setattr(doctor, "_brain_role", lambda: ("zai", {
+        "api_key_env": "ZAI_API_KEY", "model": "glm-5.3-flash", "backend": "openai_compatible",
+        "base_url": "https://api.z.ai/api/coding/paas/v4"}))
+
+    def reject(req, timeout=0):  # noqa: ANN001
+        raise urllib.error.HTTPError(req.full_url, 401, "no", {}, io.BytesIO(b""))
+    monkeypatch.setattr("urllib.request.urlopen", reject)
+    assert doctor.check_brain_online().status == FAIL
+
+
+def test_brain_online_flags_unlisted_model(monkeypatch):
+    import json
+
+    monkeypatch.setenv("AETHER_DOCTOR_ONLINE", "1")
+    monkeypatch.setenv("ZAI_API_KEY", "ok")
+    monkeypatch.setattr(doctor, "_brain_role", lambda: ("zai", {
+        "api_key_env": "ZAI_API_KEY", "model": "glm-5.3-flash", "backend": "openai_compatible",
+        "base_url": "https://example.test/v4"}))
+
+    class Resp:
+        def __init__(self, ids):  # noqa: ANN001
+            self.body = json.dumps({"data": [{"id": i} for i in ids]}).encode()
+        def read(self):  # noqa: ANN201
+            return self.body
+        def __enter__(self):  # noqa: ANN204
+            return self
+        def __exit__(self, *a):  # noqa: ANN002
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=0: Resp(["glm-5-turbo"]))
+    assert doctor.check_brain_online().status == WARN
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=0: Resp(["glm-5.3-flash"]))
+    assert doctor.check_brain_online().status == OK
+
+
+def test_grounding_calibration_check(monkeypatch, tmp_path):
+    monkeypatch.setenv("AETHER_DATA_DIR", str(tmp_path))
+    assert doctor.check_grounding_calibrated().status == WARN
+    (tmp_path / "grounding_calibration.json").write_text(
+        '{"model": "glm-5.3-flash", "coord_space": "pixels", "max_image_edge": 1600, "hit_rate": 0.85}')
+    c = doctor.check_grounding_calibrated()
+    assert c.status == OK and "85%" in c.detail
+
+
+def test_data_dir_check(monkeypatch, tmp_path):
+    monkeypatch.setenv("AETHER_DATA_DIR", str(tmp_path / "state"))
+    assert doctor.check_data_dir().status == OK
+    assert (tmp_path / "state").is_dir()
+
+
+def test_sidecar_doctor_endpoint(sidecar_client):
+    body = sidecar_client.get("/doctor").json()
+    assert body["verdict"] in (OK, WARN, FAIL)
+    names = {c["name"] for c in body["checks"]}
+    assert "Data directory writable" in names

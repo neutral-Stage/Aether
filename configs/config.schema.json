@@ -26,11 +26,76 @@
       "type": "object",
       "properties": {
         "max_steps": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "cost_cap_usd": { "type": "number", "minimum": 0 },
+        "context_budget_chars": { "type": "integer", "minimum": 0 },
+        "fast_router": { "type": "boolean" },
         "careful": { "type": "boolean" },
         "narrate": { "type": "boolean" },
         "local_only": { "type": "boolean" },
         "explicit_planner": { "type": "boolean" },
-        "planner_use_llm": { "type": "boolean" }
+        "planner_use_llm": { "type": "boolean" },
+        "verify_screenshots": { "type": "string", "enum": ["auto", "always", "off"] }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "shell": { "type": "boolean" },
+        "coders": { "type": "boolean" },
+        "shell_network": { "type": "boolean" },
+        "coder_network": { "type": "boolean" },
+        "extra_write_roots": { "type": "array", "items": { "type": "string" } },
+        "extra_deny_read": { "type": "array", "items": { "type": "string" } },
+        "protect_self": { "type": "boolean" }
+      }
+    },
+    "meetings": {
+      "type": "object",
+      "properties": {
+        "transcription": { "enum": ["local", "cloud"] },
+        "summarize": { "type": "boolean" },
+        "db_path": { "type": "string" }
+      }
+    },
+    "hints": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "min_confidence": { "type": "number", "minimum": 0.5, "maximum": 1 },
+        "idle_s": { "type": "number", "minimum": 2 },
+        "gap_s": { "type": "number", "minimum": 10 },
+        "category_cooldown_min": { "type": "number", "minimum": 0 },
+        "daily_cap": { "type": "integer", "minimum": 0 },
+        "max_queries_per_hour": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "screen_memory": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "paused": { "type": "boolean" },
+        "db_path": { "type": "string" },
+        "poll_s": { "type": "number", "minimum": 0.5 },
+        "settle_s": { "type": "number", "minimum": 0 },
+        "interval_s": { "type": "number", "minimum": 5 },
+        "retention_days": { "type": "number", "minimum": 0.5 },
+        "ocr_fallback": { "type": "boolean" },
+        "exclude_bundle_ids": { "type": "array", "items": { "type": "string" } },
+        "exclude_window_globs": { "type": "array", "items": { "type": "string" } },
+        "only_bundle_ids": { "type": "array", "items": { "type": "string" } },
+        "allow_browsers": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "toolsmith": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "timeout_s": { "type": "integer", "minimum": 1, "maximum": 300 },
+        "max_repairs": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "restrict_reads_with_network": { "type": "boolean" },
+        "extra_read_roots": { "type": "array", "items": { "type": "string" } },
+        "allow_unsandboxed": { "type": "boolean" }
       }
     },
     "mcp_server": {
@@ -62,7 +127,15 @@
             "keep": { "type": "boolean" }
           }
         },
-        "require_isolation": { "type": "boolean" }
+        "require_isolation": { "type": "boolean" },
+        "warm_pool": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "max_total": { "type": "integer", "minimum": 0, "maximum": 8 },
+            "max_age_sec": { "type": "number", "minimum": 30 }
+          }
+        }
       }
     },
     "delegation": {
@@ -98,6 +171,8 @@
       "properties": {
         "mode": { "enum": ["pipeline", "realtime"] },
         "realtime_provider": { "type": "string" },
+        "realtime_model": { "type": "string" },
+        "realtime_speaker": { "type": "string" },
         "tts": { "enum": ["groq", "kokoro", "macos", "none"] },
         "tts_stream": { "type": "boolean" },
         "tts_model": { "type": "string" },
@@ -108,7 +183,8 @@
         "ack_text": { "type": "string" },
         "record_seconds": { "type": "number", "minimum": 1 },
         "barge_in": { "type": "boolean" },
-        "vad_energy_threshold": { "type": "number", "minimum": 0, "maximum": 1 }
+        "vad_energy_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "speculative_talk": { "type": "boolean" }
       }
     },
     "beta": {

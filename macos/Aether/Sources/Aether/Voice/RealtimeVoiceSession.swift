@@ -5,14 +5,21 @@ import Foundation
 @MainActor
 final class RealtimeVoiceSession: NSObject, ObservableObject {
     @Published var isConnected = false
+    /// The reply's transcript so far.
     @Published var lastTranscript = ""
+    /// The user's last spoken turn, as the realtime model heard it.
+    @Published var lastUserTranscript = ""
     @Published var lastError: String?
 
     private var webSocket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
 
-    var onAudioDelta: ((Data) -> Void)?
+    /// Reply audio (24 kHz PCM16) and the id of the reply item it belongs to.
+    var onAudioDelta: ((Data, String?) -> Void)?
     var onTextDelta: ((String) -> Void)?
+    /// A reply finished (its transcript), for the HUD.
+    var onReplyDone: ((String) -> Void)?
+    private var sendChain: Task<Void, Never>?
 
     func connect() async {
         guard !isConnected else { return }
@@ -59,19 +66,39 @@ final class RealtimeVoiceSession: NSObject, ObservableObject {
         await sendJSON(payload)
     }
 
+    /// End of the user's turn (push-to-talk released).
     func commitAudio() async {
         await sendJSON(["type": "input_audio.commit"])
     }
 
+    /// Start of a new turn: drop any half-sent audio.
+    func clearInput() async {
+        await sendJSON(["type": "input_audio.clear"])
+    }
+
+    /// The user talked over the reply: stop it where they stopped hearing it.
+    func interrupt(itemId: String?, audioEndMs: Int) async {
+        var msg: [String: Any] = ["type": "interrupt", "audio_end_ms": audioEndMs]
+        if let itemId { msg["item_id"] = itemId }
+        await sendJSON(msg)
+    }
+
+    /// Sends go out in the order they were made (audio chunks, then the commit).
     private func sendJSON(_ obj: [String: Any]) async {
-        guard let ws = webSocket,
-              let data = try? JSONSerialization.data(withJSONObject: obj),
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
               let text = String(data: data, encoding: .utf8) else { return }
-        do {
-            try await ws.send(.string(text))
-        } catch {
-            lastError = error.localizedDescription
+        let previous = sendChain
+        let task = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, let ws = self.webSocket else { return }
+            do {
+                try await ws.send(.string(text))
+            } catch {
+                self.lastError = error.localizedDescription
+            }
         }
+        sendChain = task
+        await task.value
     }
 
     private func receiveLoop() async {
@@ -107,13 +134,21 @@ final class RealtimeVoiceSession: NSObject, ObservableObject {
         switch type {
         case "session.ready":
             break
-        case "response.audio.delta":
+        case "response.output_audio.delta", "response.audio.delta":
             if let b64 = obj["delta"] as? String,
                let audio = Data(base64Encoded: b64) {
-                onAudioDelta?(audio)
+                onAudioDelta?(audio, obj["item_id"] as? String)
             }
-        case "response.audio_transcript.delta",
-             "conversation.item.input_audio_transcription.completed":
+        case "response.done":
+            onReplyDone?(lastTranscript)
+            lastTranscript = ""
+        case "conversation.item.input_audio_transcription.completed":
+            // What the user said, not the reply: kept apart so it never shows
+            // up in (or replaces) the reply's transcript.
+            if let transcript = obj["transcript"] as? String {
+                lastUserTranscript = transcript
+            }
+        case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
             if let delta = obj["delta"] as? String {
                 lastTranscript += delta
                 onTextDelta?(delta)

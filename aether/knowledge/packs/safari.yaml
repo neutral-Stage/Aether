@@ -20,3 +20,23 @@ gotchas:
   - "After navigation, wait and call get_screen_context again"
 scripting:
   safari_open_url: "Set URL of front Safari document"
+verified_recipes:
+  open_website:
+    match: ["open website", "go to website", "open the site", "open the page", "in safari open"]
+    steps:
+      - {tool: safari_open_url, args: {url: "<the full https URL>"}}
+      - {tool: wait, args: {for_app: Safari, timeout: 10}}
+      - {tool: get_screen_context, args: {}}
+  web_search:
+    match: ["search the web", "search in safari", "search google", "look up online"]
+    steps:
+      - {tool: open_app, args: {name: Safari}}
+      - {tool: press_key, args: {key: l, modifiers: [cmd]}}
+      - {tool: type_text, args: {text: "<the search words>"}}
+      - {tool: press_key, args: {key: return}}
+      - {tool: wait, args: {seconds: 2}}
+      - {tool: get_screen_context, args: {}}
+    guide:
+      - {say: "Open Safari.", done_when: app, expect: Safari}
+      - {say: "Click the address bar at the top.", target: "Address and Search", role: field, app: Safari, done_when: focus}
+      - {say: "Type what you're looking for and press Return.", done_when: any}

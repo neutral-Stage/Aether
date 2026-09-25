@@ -109,6 +109,7 @@ def _load_pack_file(app_key: str) -> dict[str, Any] | None:
     if path is None:
         return None
     data = yaml.safe_load(path.read_text()) or {}
+    data["_key"] = app_key
     for bid in data.get("bundle_ids") or []:
         _BUNDLE_TO_PACK[str(bid)] = app_key
     for alias in data.get("aliases") or []:
@@ -205,6 +206,9 @@ def prompt_slice(
         lines.append("Key shortcuts:")
         for s in shortcuts[:12]:
             lines.append(f"- {s}")
+    verified = match_verified_recipe(pack, task_hint) if task_hint else None
+    if verified:
+        lines.append(render_verified_recipe(key_for_pack(pack), *verified))
     recipes = pack.get("recipes") or {}
     if task_hint:
         hint = task_hint.lower()
@@ -235,4 +239,110 @@ def prompt_slice(
                 lines.append(learned_block)
         except Exception:  # noqa: BLE001 — learning is additive, never fatal
             pass
+    return "\n".join(lines)
+
+
+# ---- verified recipes (pack schema v2) ---------------------------------------------------
+#
+#   verified_recipes:
+#     create_note:
+#       match: ["new note", "create a note", "make a note"]   # key phrases
+#       steps:                                                  # exact tool calls
+#         - {tool: open_app, args: {name: Notes}}
+#         - {tool: press_key, args: {key: n, modifiers: [cmd]}}
+#         - {tool: type_text, args: {text: "<the note's text>"}}
+#       guide:                                                  # optional, for guide mode
+#         - {say: "Open Notes", done_when: app, expect: Notes}
+#
+# A recipe counts as tested once it passed in the VM benchmark; that result is
+# stored in verified.json ({"<pack>.<recipe>": "YYYY-MM-DD"}), not in the pack.
+
+VERIFIED_PATH = Path(__file__).resolve().parent / "verified.json"
+_STOP_WORDS = frozenset({"a", "an", "the", "to", "my", "me", "for", "in", "on", "of", "and",
+                         "please", "can", "you", "i", "it", "this", "that", "with", "how"})
+
+
+def _words(text: str) -> list[str]:
+    import re
+
+    return [w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if w not in _STOP_WORDS]
+
+
+def key_for_pack(pack: dict[str, Any]) -> str:
+    return str(pack.get("_key") or str(pack.get("app", "")).lower().replace(" ", "_"))
+
+
+def verified_dates() -> dict[str, str]:
+    try:
+        import json
+
+        data = json.loads(VERIFIED_PATH.read_text(encoding="utf-8"))
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def stamp_verified(refs: list[str], date: str) -> int:
+    """Record that recipes passed in the VM benchmark on `date`. Returns how many."""
+    import json
+
+    data = verified_dates()
+    for ref in refs:
+        data[ref] = date
+    VERIFIED_PATH.write_text(json.dumps(dict(sorted(data.items())), indent=2) + "\n",
+                             encoding="utf-8")
+    return len(refs)
+
+
+def match_verified_recipe(pack: dict[str, Any], goal: str, *, min_words: int = 1
+                          ) -> tuple[str, dict[str, Any]] | None:
+    """The pack's recipe whose key phrase is fully contained in the goal (the
+    longest such phrase wins), or None. Phrases shorter than ``min_words``
+    content words are ignored."""
+    goal_words = set(_words(goal))
+    if not goal_words:
+        return None
+    best: tuple[int, str, dict[str, Any]] | None = None
+    for name, recipe in (pack.get("verified_recipes") or {}).items():
+        if not isinstance(recipe, dict):
+            continue
+        for phrase in recipe.get("match") or []:
+            words = _words(str(phrase))
+            if len(words) < max(min_words, 1) or not set(words) <= goal_words:
+                continue
+            if best is None or len(words) > best[0]:
+                best = (len(words), str(name), recipe)
+    return (best[1], best[2]) if best else None
+
+
+def verified_recipe_for(goal: str, app_name: str = "", bundle_id: str = ""
+                        ) -> tuple[str, str, dict[str, Any]] | None:
+    """Best recipe for a goal: the front app's pack first, then every pack.
+    Returns (pack key, recipe name, recipe) or None."""
+    first = resolve_pack_key(app_name, bundle_id) if (app_name or bundle_id) else None
+    keys = ([first] if first else []) + [k for k in list_packs() if k != first]
+    best: tuple[int, str, str, dict[str, Any]] | None = None
+    for key in keys:
+        pack = _load_pack_file(key) or {}
+        # Another app's recipe needs a longer phrase to count: less guessing.
+        hit = match_verified_recipe(pack, goal, min_words=1 if key == first else 2)
+        if not hit:
+            continue
+        name, recipe = hit
+        size = max(len(_words(str(p))) for p in recipe.get("match") or [""])
+        if best is None or size > best[0] or (key == first and size == best[0]):
+            best = (size, key, name, recipe)
+    return (best[1], best[2], best[3]) if best else None
+
+
+def render_verified_recipe(pack_key: str, name: str, recipe: dict[str, Any]) -> str:
+    import json
+
+    date = verified_dates().get(f"{pack_key}.{name}")
+    status = f"tested on a Mac on {date}" if date else "not yet tested"
+    lines = [f"Recipe for this task ({name}, {status}). Follow these tool calls in order, "
+             "filling in <placeholders> from the request; adapt only if the screen differs:"]
+    for i, step in enumerate(recipe.get("steps") or [], 1):
+        args = json.dumps(step.get("args") or {}, ensure_ascii=False)
+        lines.append(f"  {i}. {step.get('tool')} {args}")
     return "\n".join(lines)

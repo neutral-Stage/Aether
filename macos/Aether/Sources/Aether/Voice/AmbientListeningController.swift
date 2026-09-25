@@ -9,6 +9,7 @@ final class AmbientListeningController: ObservableObject {
     private let audio: AudioEngine
     private let wake: WakeWordDetector
     private var monitorTask: Task<Void, Never>?
+    private static let monitorOwner = "ambient"
 
     var onWake: (() -> Void)?
 
@@ -29,6 +30,7 @@ final class AmbientListeningController: ObservableObject {
         let wakeRate = wake.porcupineActive ? wake.requiredSampleRate : 0
         do {
             try audio.startContinuousMonitoring(
+                owner: Self.monitorOwner,
                 threshold: threshold,
                 wakeSampleRate: wakeRate,
                 onEnergy: { [weak self] energy in
@@ -54,7 +56,7 @@ final class AmbientListeningController: ObservableObject {
         indicatorVisible = false
         wake.isListening = false
         wake.reset()
-        audio.stopContinuousMonitoring()
+        audio.stopContinuousMonitoring(owner: Self.monitorOwner)
         monitorTask?.cancel()
         monitorTask = nil
     }

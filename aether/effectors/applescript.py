@@ -37,41 +37,65 @@ def run_applescript(source: str, timeout: int = 30) -> AppleScriptResult:
         return AppleScriptResult(1, "", str(e))
 
 
+def run_applescript_args(source: str, args: list[str], timeout: int = 10) -> AppleScriptResult:
+    """Run ``source`` with ``args`` as its argv, never spliced into the script text.
+
+    ``source`` reads them with ``on run argv`` / ``item N of argv``, so a value
+    that happens to contain quotes or AppleScript syntax can't escape into the
+    script. Same never-raise behaviour as :func:`run_applescript`.
+    """
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", source, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return AppleScriptResult(proc.returncode, proc.stdout, proc.stderr)
+    except subprocess.TimeoutExpired:
+        return AppleScriptResult(124, "", f"Timed out after {timeout}s")
+    except Exception as e:  # noqa: BLE001
+        return AppleScriptResult(1, "", str(e))
+
+
+def as_applescript_string(s: str) -> str:
+    """A quoted, escaped AppleScript string literal for ``s`` (e.g. ``"it\\"s"``)."""
+    escaped = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return f'"{escaped}"'
+
+
 def finder_go_to(path: str) -> str:
-    escaped = path.replace("\\", "\\\\").replace('"', '\\"')
     script = f'''
 tell application "Finder"
     activate
-    set target of front window to POSIX file "{escaped}"
+    set target of front window to POSIX file {as_applescript_string(path)}
 end tell
 '''
     return run_applescript(script).summary()
 
 
 def safari_open_url(url: str) -> str:
-    escaped = url.replace("\\", "\\\\").replace('"', '\\"')
     script = f'''
 tell application "Safari"
     activate
     if (count of windows) = 0 then
         make new document
     end if
-    set URL of front document to "{escaped}"
+    set URL of front document to {as_applescript_string(url)}
 end tell
 '''
     return run_applescript(script).summary()
 
 
 def mail_compose(to: str = "", subject: str = "", body: str = "") -> str:
-  # AppleScript strings need escaping
-    def esc(s: str) -> str:
-        return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-
-    to_part = f'make new to recipient with properties {{address:"{esc(to)}"}}' if to else ""
+    to_part = (f'make new to recipient with properties {{address:{as_applescript_string(to)}}}'
+              if to else "")
+    subject_lit = as_applescript_string(subject)
+    body_lit = as_applescript_string(body)
     script = f'''
 tell application "Mail"
     activate
-    set newMessage to make new outgoing message with properties {{subject:"{esc(subject)}", content:"{esc(body)}", visible:true}}
+    set newMessage to make new outgoing message with properties {{subject:{subject_lit}, content:{body_lit}, visible:true}}
     tell newMessage
         {to_part}
     end tell

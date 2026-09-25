@@ -1,0 +1,20 @@
+{
+  "name": "reminders_list",
+  "description": "Read the user's reminders, optionally from one named list.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "list": {
+        "type": "string"
+      },
+      "include_completed": {
+        "type": "boolean"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    }
+  },
+  "permission": "calendar",
+  "impact": "read"
+}

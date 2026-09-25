@@ -1,6 +1,18 @@
 import AppKit
 import SwiftUI
 
+/// A talk request fired speculatively (before push-to-talk was released), on a
+/// settled partial transcript. `tokens`/`done` buffer the streamed reply so it
+/// can be replayed instantly if the final transcript matches; `task` is the
+/// in-flight (or finished) POST /talk request itself.
+private struct SpeculativeTalk {
+    let id: String
+    let text: String
+    var tokens: [String] = []
+    var done = false
+    let task: Task<TalkReply, Error>
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @Published var goalText = ""
@@ -22,6 +34,12 @@ final class AppState: ObservableObject {
     private var voiceSettings = VoiceSettings()
     private var betaSettings = BetaSettings()
     private var pendingConfirmId: String?
+    private var pendingQuestionId: String?
+    /// Conversation of the last run; a request within `followUpWindow` of it
+    /// continues the conversation, so "now do the same for…" has context.
+    private var sessionId: String?
+    private var lastRunEnded: Date?
+    private let followUpWindow: TimeInterval = 600
 
     let world = WorldModel()
     let client = OrchestratorClient()
@@ -30,19 +48,106 @@ final class AppState: ObservableObject {
     let tts = TTSBridge()
     lazy var voice = VoicePipeline(audio: audio, stt: stt, tts: tts)
     let wakeWord = WakeWordDetector()
+    /// On-device "Hey Aether …" (beta.wake_word_engine: speech).
+    lazy var speechWake: SpeechWakeListener = {
+        let listener = SpeechWakeListener(stt: stt)
+        listener.isBusy = { [weak self] in
+            guard let self else { return true }
+            return self.isPTTHeld || self.isTalkHeld || self.tts.isSpeaking || self.client.isRunning
+                || self.dictation.state != .idle || self.quickSkills.recordingSkillId != nil
+        }
+        listener.onCommand = { [weak self] command in
+            guard let self else { return }
+            self.world.transcript = command
+            self.world.currentStep = "Heard: \(command)"
+            self.refreshHUD()
+            self.routeSpokenText(command)
+        }
+        return listener
+    }()
     lazy var ambient = AmbientListeningController(audio: audio, wake: wakeWord)
     let hud = HUDPanel()
     let commandBar = CommandBarPanel()
     let confirmation = ConfirmationPanel()
+    let questionPanel = QuestionPanel()
+    let overlay = OverlayController()
+    private let talkHotkey = ModifierHoldController()
+    @Published var isTalkHeld = false
+    private var talkPointer: CGPoint?
+    private var talkSessionId: String?
+    // Streamed talk answers: spoken clause by clause as talk_token events arrive.
+    private var streamingTalkId: String?
+    private var talkSplitter = ClauseSplitter()
+    private var talkPartial = ""
+    private var talkStreamed = false
+    private var talkDoneSeen = false
+    private var speechChain: Task<Void, Never>?
+    private var fillerTask: Task<Void, Never>?
+    /// Said when an answer takes a moment to start (synthesized ahead of time).
+    static let fillers = ["One moment.", "Let me look.", "Okay, checking."]
+    /// Release-of-keys instant, consumed once by the first spoken ANSWER clause
+    /// (never a filler) to report `first_audio_ms`; cleared if the round ends
+    /// without ever speaking an answer.
+    private var pendingTalkReleaseAt: Date?
+    /// Bumped on every fresh talk (beginTalk, askTalk/adoptSpeculation start, STOP)
+    /// so a reply for a superseded round is dropped instead of shown or spoken.
+    private var talkGeneration = 0
+    /// Bumped whenever queued speech should go silent (STOP, a new talk or PTT
+    /// round starting) so every chained clause — not just the newest — checks
+    /// before it speaks.
+    private var speechGeneration = 0
+    // Talk mode speculation: start the model on a settled partial transcript,
+    // before the user releases the talk chord.
+    private var talkRecognizer: PartialRecognizer?
+    private var speculationPolicy = SpeculationPolicy()
+    private var speculationTicker: Task<Void, Never>?
+    private var speculation: SpeculativeTalk?
+    // An agent run's streamed reply (token events), per step.
+    private var streamStep = -1
+    private var streamText = ""
+    private var activeGuideId: String?
     let nativeEffector = NativeEffectorServer(port: AetherConfig.nativeEffectorPort)
     lazy var stopController = StopController { [weak self] in
         self?.handleStop()
     }
     private let pttHotkey = PTTHotkeyController()
     private let commandBarHotkey = CommandBarHotkeyController()
+    /// ⌃⌘A opens the chat window.
+    private let chatHotkey = CommandBarHotkeyController(modifiers: [.control, .command], keyCode: 0)
+    lazy var chat: ChatStore = {
+        let store = ChatStore(client: client)
+        store.app = self
+        return store
+    }()
+    private let chatWindow = ChatWindowController()
+    /// ⌃⌥D dictates into the focused field; ⌃⌥T rewrites the selection.
+    private let dictationHotkey = CommandBarHotkeyController(modifiers: [.control, .option],
+                                                             keyCode: 2)
+    private let transformHotkey = CommandBarHotkeyController(modifiers: [.control, .option],
+                                                             keyCode: 17)
+    lazy var dictation = DictationController(audio: audio, client: client)
+    /// Quick skills on ⌃⌥1–9 (prompt + capture + destination).
+    lazy var quickSkills = QuickSkillsController(client: client, audio: audio)
+    /// Screen memory status, pause and delete (menu bar), when it is turned on.
+    lazy var screenMemory = ScreenMemoryController(client: client)
+    /// Polite proactive hints (hints.enabled), shown top-right with their reason.
+    lazy var hints = HintController(client: client)
+    /// Meeting notes, started from the menu bar after a consent prompt.
+    lazy var meetings = MeetingRecorder(client: client)
+    /// The next calendar meeting, shown in the menu bar when Calendar is connected.
+    lazy var nextMeeting = NextMeetingController(client: client)
+    private let transformPanel = TransformPanel()
+    private let chipsPanel = ChipsPanel()
+    private let chipsHotkey = CommandBarHotkeyController(modifiers: [.control, .option], keyCode: 8)
     let updateChecker = SparkleUpdateController()
     let sidecar = SidecarSupervisor()
     lazy var realtimeSession = RealtimeVoiceSession()
+    private lazy var realtimePlayer = PCMStreamPlayer()
+    private lazy var realtimeMic = RealtimeMicStreamer()
+    /// Realtime voice replaces the transcribe → run → speak pipeline for push-to-talk.
+    private var realtimeActive: Bool {
+        voiceSettings.usesRealtimeMode && realtimeSession.isConnected
+    }
     lazy var screenStream = ScreenStreamManager()
 
     init() {
@@ -57,8 +162,35 @@ final class AppState: ObservableObject {
         pttHotkey.onEnd = { [weak self] in
             Task { @MainActor in await self?.endPTT() }
         }
+        talkHotkey.onBegin = { [weak self] point in
+            Task { @MainActor in self?.beginTalk(at: point) }
+        }
+        talkHotkey.onEnd = { [weak self] in
+            Task { @MainActor in await self?.endTalk() }
+        }
+        talkHotkey.onCancel = { [weak self] in
+            Task { @MainActor in self?.cancelTalk() }
+        }
         commandBarHotkey.onToggle = { [weak self] in
             Task { @MainActor in self?.toggleCommandBar() }
+        }
+        chatHotkey.onToggle = { [weak self] in
+            Task { @MainActor in self?.openChat() }
+        }
+        dictationHotkey.onToggle = { [weak self] in
+            Task { @MainActor in
+                guard let self, !self.isPTTHeld else { return }
+                await self.dictation.toggle()
+            }
+        }
+        chipsHotkey.onToggle = { [weak self] in
+            Task { @MainActor in await self?.showChips() }
+        }
+        transformHotkey.onToggle = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                await self.transformPanel.begin(client: self.client) { self.showStatus($0) }
+            }
         }
         ambient.onWake = { [weak self] in
             Task { @MainActor in await self?.handleWakeWord() }
@@ -76,14 +208,39 @@ final class AppState: ObservableObject {
         // is already approved to execute.
         Task { [weak self] in
             await self?.client.subscribeEvents { event in
-                if case let .runRequest(goal) = event, self?.client.isRunning == false {
-                    self?.submitGoal(goal)
-                }
+                Task { @MainActor in self?.handleBackgroundEvent(event) }
             }
         }
+        nativeEffector.start()  // loopback capture endpoint for the sidecar
+        stopController.isActive = { [weak self] in
+            guard let self else { return false }
+            return self.client.isRunning || self.activeGuideId != nil || self.streamingTalkId != nil
+                || self.tts.isSpeaking || self.overlay.isShowing || self.pendingConfirmId != nil
+        }
+        stopController.onTripleControl = { [weak self] in self?.toggleAlwaysListening() }
         stopController.start()
         pttHotkey.start()
+        talkHotkey.start()
         commandBarHotkey.start()
+        chatHotkey.start()
+        dictationHotkey.start()
+        transformHotkey.start()
+        chipsHotkey.start()
+        dictation.onStatus = { [weak self] status in self?.showStatus(status) }
+        quickSkills.onStatus = { [weak self] status in self?.showStatus(status) }
+        quickSkills.speak = { [weak self] text in await self?.speakWithBargeIn(text) }
+        Task { await quickSkills.reload() }
+        screenMemory.onStatus = { [weak self] status in self?.showStatus(status) }
+        screenMemory.start()
+        hints.isBusy = { [weak self] in
+            guard let self else { return true }
+            return self.client.isRunning || self.isPTTHeld || self.isTalkHeld || self.tts.isSpeaking
+                || self.pendingConfirmId != nil || self.overlay.isShowing
+                || self.dictation.state != .idle || self.activeGuideId != nil
+        }
+        hints.start()
+        meetings.onStatus = { [weak self] status in self?.showStatus(status) }
+        nextMeeting.start()
         audio.refreshMicPermission()
         stt.refreshAuthorization()
         Task {
@@ -101,7 +258,9 @@ final class AppState: ObservableObject {
                     guard let self else { return Data() }
                     return try await self.client.synthesizeStream(text: text)
                 }
+                await tts.prewarm(Self.fillers)
                 if settings.usesRealtimeMode {
+                    wireRealtime()
                     await realtimeSession.connect()
                 }
             }
@@ -115,14 +274,17 @@ final class AppState: ObservableObject {
     }
 
     private func applyBetaSettings(_ beta: BetaSettings) {
-        if beta.nativeEffectors {
-            if !nativeEffector.isRunning {
-                nativeEffector.start()
-            }
-        } else {
-            nativeEffector.stop()
+        // The loopback server always runs (screen capture); click/type through
+        // it stays behind the beta flag.
+        nativeEffector.allowInvoke = beta.nativeEffectors
+        if !nativeEffector.isRunning {
+            nativeEffector.start()
         }
-        if beta.ambientListening || beta.wakeWord {
+        if beta.wakeWord && beta.wakeWordEngine == "speech" {
+            // On-device recognizer only: no energy gate, audio stays on the Mac.
+            ambientActive = true
+            speechWake.start()
+        } else if beta.ambientListening || beta.wakeWord {
             ambientActive = true
             ambient.start(threshold: voiceSettings.vadEnergyThreshold)
             wakeWord.engine = beta.wakeWordEngine == "porcupine" ? .porcupine : .energy
@@ -176,19 +338,69 @@ final class AppState: ObservableObject {
         hud.setClickThrough(!client.isRunning && !audio.isRecording && pendingConfirmId == nil)
     }
 
-    func submitGoal(_ goal: String) {
+    /// Triple-tap Control: listen for "Hey Aether …" until tapped again. The on-device
+    /// recognizer is used, so audio stays on this Mac; the HUD shows it is listening.
+    func toggleAlwaysListening() {
+        if ambientActive {
+            speechWake.stop()
+            ambient.stop()
+            ambientActive = false
+            showStatus("Stopped listening")
+            return
+        }
+        stt.refreshAuthorization()
+        guard stt.speechAuthorized else {
+            showStatus("Allow Speech Recognition in System Settings to use always-on listening")
+            return
+        }
+        ambientActive = true
+        speechWake.start()
+        showStatus("Listening for “Hey Aether …” · triple-tap Control to stop")
+    }
+
+    /// A short status line in the HUD (dictation, transform).
+    private func showStatus(_ text: String) {
+        world.currentStep = text
+        refreshHUD()
+    }
+
+    /// Open the chat window, optionally on one conversation.
+    func openChat(session: String? = nil) {
+        chatWindow.show(store: chat)
+        if let session { Task { await chat.open(session) } }
+    }
+
+    /// Run a request. The chat window passes its conversation and an observer
+    /// that receives every run event; other callers continue the last
+    /// conversation when it ended recently.
+    func submitGoal(_ goal: String, chatSession: String? = nil,
+                    observer: ((SidecarEvent) -> Void)? = nil) {
         let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if GuideIntent.isGuideRequest(trimmed), activeGuideId == nil {
+            startGuide(trimmed)
+            return
+        }
         world.reset()
         world.goal = trimmed
         world.transcript = trimmed
         world.status = "working"
         refreshHUD()
 
-        client.run(goal: trimmed) { [weak self] event in
+        var options = RunOptions()
+        if observer != nil {
+            options.sessionId = chatSession
+        } else if let sid = sessionId, let ended = lastRunEnded,
+                  Date().timeIntervalSince(ended) < followUpWindow {
+            options.sessionId = sid
+        }
+        client.run(goal: trimmed, options: options) { [weak self] event in
             guard let self else { return }
+            observer?(event)
             switch event {
             case .runStart(_, let g):
+                self.streamStep = -1
+                self.streamText = ""
                 self.world.goal = g
                 self.world.transcript = g
                 self.world.status = "working"
@@ -197,12 +409,18 @@ final class AppState: ObservableObject {
             case .say(let text):
                 Task { await self.speakWithBargeIn(text) }
             case .done(let result, let snap):
+                self.lastRunEnded = Date()
+                self.questionPanel.hide()
+                self.pendingQuestionId = nil
                 self.lastResult = result
                 self.world.apply(world: snap)
                 self.world.status = "idle"
                 self.world.currentStep = result
                 Task { await self.speakWithBargeIn(result) }
             case .error(let msg):
+                self.lastRunEnded = Date()
+                self.questionPanel.hide()
+                self.pendingQuestionId = nil
                 self.lastResult = msg
                 self.world.status = "idle"
                 self.world.currentStep = msg
@@ -211,8 +429,15 @@ final class AppState: ObservableObject {
                 self.world.currentStep = "Stopped"
             case .ping:
                 break
-            case .confirmRequest(let requestId, let description):
-                self.showConfirmation(requestId: requestId, description: description)
+            case let .confirmRequest(requestId, description, grant):
+                if self.pendingConfirmId != requestId {
+                    self.showConfirmation(requestId: requestId, description: description,
+                                          grant: grant)
+                }
+            case let .draftRequest(requestId, description, fields):
+                if self.pendingConfirmId != requestId {
+                    self.showDraft(requestId: requestId, description: description, fields: fields)
+                }
             case .fleet(let payload):
                 if let sid = payload["session_id"] as? String,
                    let state = payload["state"] as? String {
@@ -220,20 +445,67 @@ final class AppState: ObservableObject {
                 }
             case .runRequest:
                 break  // proactive auto-run is handled by the persistent /events stream
+            case .question(let requestId, let question, let options):
+                if self.pendingQuestionId != requestId {
+                    self.showQuestion(requestId: requestId, question: question, options: options)
+                }
+            case .session(let sid):
+                self.sessionId = sid
+            case .pointer(let targets):
+                self.overlay.show(targets: targets)
+            case .guideStep, .guideDone, .talkToken, .talkDone:
+                self.handleBackgroundEvent(event)
+            case let .token(step, text):
+                // The model's reply as it streams, shown until the next action.
+                if step != self.streamStep {
+                    self.streamStep = step
+                    self.streamText = ""
+                }
+                self.streamText += text
+                self.world.currentStep = self.streamText
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            case .step(let payload):
+                if (payload["type"] as? String) == "tool_call",
+                   let desc = payload["description"] as? String {
+                    self.world.currentStep = desc
+                }
             }
             self.refreshHUD()
         }
     }
 
-    private func showConfirmation(requestId: String, description: String) {
+    private func showDraft(requestId: String, description: String, fields: [DraftField]) {
+        pendingConfirmId = requestId
+        world.currentStep = "Check the draft before it goes out"
+        refreshHUD()
+        confirmation.showDraft(
+            description: description, fields: fields,
+            onSend: { [weak self] edits in
+                guard let self else { return }
+                Task { await self.client.submitConfirmation(requestId: requestId, approved: true,
+                                                            edits: edits) }
+                self.pendingConfirmId = nil
+                self.refreshHUD()
+            },
+            onDecline: { [weak self] in
+                guard let self else { return }
+                Task { await self.client.submitConfirmation(requestId: requestId, approved: false) }
+                self.pendingConfirmId = nil
+                self.refreshHUD()
+            })
+    }
+
+    private func showConfirmation(requestId: String, description: String, grant: String = "") {
         pendingConfirmId = requestId
         world.currentStep = "Confirm: \(description)"
         refreshHUD()
         confirmation.show(
             description: description,
-            onApprove: { [weak self] in
+            grant: grant,
+            onApprove: { [weak self] remember in
                 guard let self else { return }
-                Task { await self.client.submitConfirmation(requestId: requestId, approved: true) }
+                Task { await self.client.submitConfirmation(requestId: requestId, approved: true,
+                                                            remember: remember) }
                 self.pendingConfirmId = nil
                 self.refreshHUD()
             },
@@ -247,8 +519,134 @@ final class AppState: ObservableObject {
         Task { await speakConfirmationPrompt(description) }
     }
 
+    /// Events from the persistent /events stream (proactive runs, guide mode).
+    func handleBackgroundEvent(_ event: SidecarEvent) {
+        switch event {
+        case let .draftRequest(requestId, description, fields):
+            guard pendingConfirmId != requestId else { return }
+            showDraft(requestId: requestId, description: description, fields: fields)
+        case let .confirmRequest(requestId, description, grant):
+            // Runs started elsewhere (realtime voice, triggers) ask here too; a run's own
+            // stream may deliver the same request, so show it once.
+            guard pendingConfirmId != requestId else { return }
+            showConfirmation(requestId: requestId, description: description, grant: grant)
+        case let .question(requestId, question, options):
+            guard pendingQuestionId != requestId else { return }
+            showQuestion(requestId: requestId, question: question, options: options)
+        case let .talkToken(id, text):
+            if id == streamingTalkId {
+                talkPartial += text
+                world.currentStep = talkPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+                refreshHUD()
+                for clause in talkSplitter.feed(text) { speakInOrder(clause) }
+            } else {
+                // Not (yet) adopted: buffer it, don't speak it.
+                appendSpeculationToken(id: id, text)
+            }
+        case let .talkDone(id, _):
+            if id == streamingTalkId {
+                if let rest = talkSplitter.flush() { speakInOrder(rest) }
+                talkDoneSeen = true
+            } else {
+                markSpeculationDone(id: id)
+            }
+        case .runRequest(let goal):
+            if !client.isRunning { submitGoal(goal) }
+        case let .guideStep(id, index, total, say, target):
+            activeGuideId = id
+            world.status = "guiding"
+            world.currentStep = "Step \(index + 1) of \(total): \(say)"
+            if let target {
+                overlay.show(targets: [target], hold: 300)
+            } else {
+                overlay.clear()
+            }
+            refreshHUD()
+            Task { await speakWithBargeIn(say) }
+        case let .guideDone(id, status):
+            guard id == activeGuideId else { return }
+            activeGuideId = nil
+            overlay.clear()
+            world.status = "idle"
+            world.currentStep = status == "done" ? "All done." : "Guide stopped."
+            refreshHUD()
+            if status == "done" { Task { await speakWithBargeIn("All done.") } }
+        default:
+            break
+        }
+    }
+
+    func startGuide(_ request: String) {
+        world.reset()
+        world.goal = request
+        world.status = "working"
+        world.currentStep = "Working out the steps…"
+        refreshHUD()
+        Task {
+            do {
+                activeGuideId = try await client.startGuide(goal: request)
+            } catch {
+                world.status = "idle"
+                world.currentStep = error.localizedDescription
+                lastResult = error.localizedDescription
+                refreshHUD()
+            }
+        }
+    }
+
+    private func showQuestion(requestId: String, question: String, options: [String]) {
+        pendingQuestionId = requestId
+        world.currentStep = "Question: \(question)"
+        refreshHUD()
+        questionPanel.show(question: question, options: options) { [weak self] answer in
+            self?.answerQuestion(answer)
+        }
+    }
+
+    /// Send the answer (typed, picked, or spoken with push-to-talk); nil skips.
+    func answerQuestion(_ answer: String?) {
+        guard let requestId = pendingQuestionId else { return }
+        pendingQuestionId = nil
+        questionPanel.hide()
+        Task { await client.submitAnswer(requestId: requestId, answer: answer) }
+        refreshHUD()
+    }
+
+    /// Forget the current conversation; the next request starts a new one.
+    func newConversation() {
+        sessionId = nil
+        lastRunEnded = nil
+    }
+
     private func speakConfirmationPrompt(_ description: String) async {
         await tts.speak("Confirm: \(description). Say yes or no.")
+    }
+
+    /// Queue speech behind whatever is already being said (streamed talk clauses).
+    /// A filler is queued the same way but doesn't count as the answer.
+    private func speakInOrder(_ text: String, isAnswer: Bool = true) {
+        // The first answer clause of the round (never a filler) consumes the
+        // pending release instant, so first_audio_ms measures release → the
+        // answer actually starting, not a filler that may have played first.
+        let releasedAt: Date? = (isAnswer && !talkStreamed) ? pendingTalkReleaseAt : nil
+        if releasedAt != nil { pendingTalkReleaseAt = nil }
+        if isAnswer {
+            talkStreamed = true
+            fillerTask?.cancel()
+        }
+        let generation = speechGeneration
+        let previous = speechChain
+        speechChain = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled, generation == self.speechGeneration else { return }
+            if let releasedAt {
+                self.tts.onPlaybackStart = { [weak self] in
+                    let ms = Date().timeIntervalSince(releasedAt) * 1000
+                    Task { await self?.client.reportVoiceMetrics(firstAudioMs: ms) }
+                }
+            }
+            await self.speakWithBargeIn(text)
+        }
     }
 
     func speakWithBargeIn(_ text: String) async {
@@ -298,6 +696,30 @@ final class AppState: ObservableObject {
         voice.stopAll()
         confirmation.hide()
         pendingConfirmId = nil
+        questionPanel.hide()
+        pendingQuestionId = nil
+        lastRunEnded = Date()
+        overlay.clear()
+        talkGeneration += 1
+        speechGeneration += 1
+        speechChain?.cancel()
+        speechChain = nil
+        fillerTask?.cancel()
+        pendingTalkReleaseAt = nil
+        realtimeMic.stop()
+        realtimePlayer.stop()
+        dictation.cancel()
+        transformPanel.hide()
+        chipsPanel.hide()
+        hints.dismiss()
+        streamingTalkId = nil
+        stopSpeculationRecognizer()
+        cancelSpeculation()
+        if isTalkHeld { cancelTalk() }
+        if let guideId = activeGuideId {
+            activeGuideId = nil
+            Task { await client.controlGuide(id: guideId, action: "stop") }
+        }
         world.status = "stopped"
         world.currentStep = "Stopped"
         refreshHUD()
@@ -307,8 +729,49 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func wireRealtime() {
+        realtimeSession.onAudioDelta = { [weak self] audio, itemId in
+            self?.realtimePlayer.append(pcm16: audio, itemId: itemId)
+        }
+        realtimeSession.onTextDelta = { [weak self] delta in
+            guard let self else { return }
+            self.world.currentStep = self.realtimeSession.lastTranscript.isEmpty
+                ? delta : self.realtimeSession.lastTranscript
+            self.refreshHUD()
+        }
+        realtimeSession.onReplyDone = { [weak self] text in
+            guard let self, !text.isEmpty else { return }
+            self.lastResult = text
+        }
+        realtimeMic.onChunk = { [weak self] chunk in
+            guard let self, self.isPTTHeld else { return }
+            Task { await self.realtimeSession.sendAudio(pcm16: chunk) }
+        }
+    }
+
     func beginPTT() {
-        guard !isPTTHeld else { return }
+        guard !isPTTHeld, dictation.state == .idle, quickSkills.recordingSkillId == nil
+        else { return }
+        speechGeneration += 1
+        if realtimeActive {
+            isPTTHeld = true
+            if realtimePlayer.isPlaying {
+                // Talking over the reply: stop it where the user stopped hearing it.
+                let heard = realtimePlayer.heardMs
+                let item = realtimePlayer.itemId
+                realtimePlayer.stop()
+                Task { await realtimeSession.interrupt(itemId: item, audioEndMs: heard) }
+            }
+            Task { await realtimeSession.clearInput() }
+            do {
+                try realtimeMic.start()
+                world.currentStep = "Listening…"
+            } catch {
+                world.currentStep = error.localizedDescription
+            }
+            refreshHUD()
+            return
+        }
         isPTTHeld = true
         voice.stopAll()
         try? audio.startRecording()
@@ -317,6 +780,14 @@ final class AppState: ObservableObject {
 
     func endPTT() async {
         guard isPTTHeld else { return }
+        if realtimeActive {
+            isPTTHeld = false
+            realtimeMic.stop()
+            world.currentStep = "Thinking…"
+            refreshHUD()
+            await realtimeSession.commitAudio()
+            return
+        }
         isPTTHeld = false
         let wav = audio.stopRecording()
         refreshHUD()
@@ -326,13 +797,7 @@ final class AppState: ObservableObject {
         let sttStart = Date()
         var text = ""
         do {
-            if voiceSettings.prefersGroqSTT, client.healthOK {
-                text = try await client.transcribe(wavData: wav)
-            } else if stt.speechAuthorized {
-                text = try await stt.transcribe(wavData: wav)
-            } else if client.healthOK {
-                text = try await client.transcribe(wavData: wav)
-            }
+            text = try await transcribe(wav)
         } catch {
             lastResult = error.localizedDescription
             refreshHUD()
@@ -345,8 +810,27 @@ final class AppState: ObservableObject {
 
         world.transcript = text
         wakeWord.processPartialTranscript(text)
+        routeSpokenText(text)
+    }
+
+    /// What to do with something the user said: answer a pending confirmation or
+    /// question, steer a guide, stop, or run it as a request.
+    private func routeSpokenText(_ text: String) {
         if pendingConfirmId != nil {
             handleVoiceConfirmation(text)
+            return
+        }
+        if pendingQuestionId != nil {
+            answerQuestion(text)
+            return
+        }
+        if let guideId = activeGuideId {
+            if let action = GuideIntent.control(for: text) {
+                Task { await client.controlGuide(id: guideId, action: action) }
+            } else {
+                world.currentStep = "Say next, back, repeat, skip, stop, or do it for me."
+                refreshHUD()
+            }
             return
         }
         if text.lowercased().contains("stop") {
@@ -354,6 +838,271 @@ final class AppState: ObservableObject {
             return
         }
         submitGoal(text)
+    }
+
+    private func transcribe(_ wav: Data) async throws -> String {
+        if voiceSettings.prefersGroqSTT, client.healthOK {
+            return try await client.transcribe(wavData: wav)
+        } else if stt.speechAuthorized {
+            return try await stt.transcribe(wavData: wav)
+        } else if client.healthOK {
+            return try await client.transcribe(wavData: wav)
+        }
+        return ""
+    }
+
+    // MARK: - Talk mode (hold ⌃⌥, ask about what the mouse points at)
+
+    func beginTalk(at point: CGPoint) {
+        guard !isPTTHeld, !isTalkHeld, dictation.state == .idle, quickSkills.recordingSkillId == nil
+        else { return }
+        isTalkHeld = true
+        talkGeneration += 1
+        speechGeneration += 1
+        talkPointer = point
+        voice.stopAll()
+        overlay.clear()
+        try? audio.startRecording()
+        world.currentStep = "Listening… release to ask"
+        refreshHUD()
+        beginSpeculation()
+    }
+
+    func cancelTalk() {
+        guard isTalkHeld else { return }
+        isTalkHeld = false
+        stopSpeculationRecognizer()
+        cancelSpeculation()
+        _ = audio.stopRecording()
+        world.currentStep = ""
+        refreshHUD()
+    }
+
+    func endTalk() async {
+        guard isTalkHeld else { return }
+        isTalkHeld = false
+        stopSpeculationRecognizer()
+        let wav = audio.stopRecording()
+        guard !wav.isEmpty else { cancelSpeculation(); refreshHUD(); return }
+        // First audio: from releasing the keys to the first sound of the ANSWER
+        // (consumed once in speakInOrder — never by a filler).
+        pendingTalkReleaseAt = Date()
+        talkStreamed = false
+        fillerTask?.cancel()
+        fillerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard let self, !Task.isCancelled, !self.talkStreamed, !self.tts.isSpeaking,
+                  let filler = Self.fillers.randomElement() else { return }
+            self.speakInOrder(filler, isAnswer: false)
+        }
+        defer { fillerTask?.cancel() }
+        world.currentStep = "Looking…"
+        refreshHUD()
+        do {
+            let question = try await transcribe(wav).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !question.isEmpty else {
+                fillerTask?.cancel()
+                pendingTalkReleaseAt = nil
+                cancelSpeculation()
+                world.currentStep = ""
+                refreshHUD()
+                return
+            }
+            world.transcript = question
+            if question.lowercased() == "stop" {
+                fillerTask?.cancel()
+                pendingTalkReleaseAt = nil
+                cancelSpeculation()
+                handleStop()
+                return
+            }
+            if let spec = speculation, SpeculationPolicy.matches(spec.text, question) {
+                speculation = nil
+                try await adoptSpeculation(spec)
+            } else {
+                cancelSpeculation()
+                try await askTalk(question, at: talkPointer)
+            }
+        } catch is CancellationError {
+            // The talk (speculative or not) was cancelled server-side; nothing to show.
+            pendingTalkReleaseAt = nil
+        } catch {
+            pendingTalkReleaseAt = nil
+            cancelSpeculation()
+            lastResult = error.localizedDescription
+            world.currentStep = error.localizedDescription
+            refreshHUD()
+        }
+    }
+
+    /// Ask about what is on screen (talk mode, or a chip): the answer streams, is
+    /// spoken clause by clause, and points at things.
+    func askTalk(_ question: String, at point: CGPoint?) async throws {
+        talkGeneration += 1
+        let generation = talkGeneration
+        let talkId = String(UUID().uuidString.lowercased().prefix(12))
+        streamingTalkId = talkId
+        talkSplitter = ClauseSplitter()
+        talkPartial = ""
+        talkStreamed = false
+        talkDoneSeen = false
+        let reply = try await client.talk(question: question, at: point,
+                                          sessionId: talkSessionId, talkId: talkId)
+        await finishTalk(reply, generation: generation)
+    }
+
+    /// Adopt a speculative talk whose buffered text matches what was actually
+    /// said: replay its buffered tokens as clauses immediately (instead of
+    /// waiting on a fresh request), then the same tail as `askTalk`.
+    private func adoptSpeculation(_ spec: SpeculativeTalk) async throws {
+        talkGeneration += 1
+        let generation = talkGeneration
+        streamingTalkId = spec.id
+        talkSplitter = ClauseSplitter()
+        talkPartial = spec.tokens.joined()
+        talkStreamed = false
+        talkDoneSeen = spec.done
+        for token in spec.tokens {
+            for clause in talkSplitter.feed(token) { speakInOrder(clause) }
+        }
+        let reply = try await spec.task.value
+        await finishTalk(reply, generation: generation)
+    }
+
+    /// The tail shared by `askTalk` and `adoptSpeculation`: show the overlay and
+    /// speak whatever wasn't already streamed — unless a newer talk superseded
+    /// this one while the reply was in flight.
+    private func finishTalk(_ reply: TalkReply, generation: Int) async {
+        guard generation == talkGeneration else {
+            pendingTalkReleaseAt = nil
+            return
+        }
+        talkSessionId = reply.sessionId
+        lastResult = reply.answer
+        world.currentStep = reply.answer
+        overlay.show(targets: reply.targets)
+        refreshHUD()
+        // The streamed events and the reply travel separately: give the last
+        // events a moment, then speak whatever did not arrive as a stream.
+        for _ in 0 ..< 8 where !talkDoneSeen {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        streamingTalkId = nil
+        if !talkStreamed {
+            speakInOrder(reply.answer)
+        } else if !talkDoneSeen, let rest = talkSplitter.flush() {
+            speakInOrder(rest)
+        }
+    }
+
+    // MARK: - Talk mode speculation
+
+    /// Starts a fresh on-device partial recognizer and stability ticker for this
+    /// talk hold, when the setting and speech permission allow it. Any prior
+    /// speculation is cleared — a new hold is a new question.
+    private func beginSpeculation() {
+        speculationPolicy = SpeculationPolicy()
+        speculation = nil
+        guard voiceSettings.speculativeTalk, stt.speechAuthorized else { return }
+        let recognizer = stt.makePartialRecognizer()
+        talkRecognizer = recognizer
+        let contextual = [NSWorkspace.shared.frontmostApplication?.localizedName].compactMap { $0 }
+        Task { @MainActor in
+            _ = await recognizer.start(contextualStrings: contextual) { [weak self] partial in
+                self?.speculationPolicy.observe(partial, at: ProcessInfo.processInfo.systemUptime)
+            }
+        }
+        speculationTicker?.cancel()
+        speculationTicker = Task { @MainActor [weak self] in
+            while true {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard let self, !Task.isCancelled, self.isTalkHeld else { return }
+                if let text = self.speculationPolicy.fire(at: ProcessInfo.processInfo.systemUptime) {
+                    self.speculate(text)
+                }
+            }
+        }
+    }
+
+    /// Fires (or re-fires) the model on a settled partial: cancels any earlier
+    /// speculation for this hold, then starts a new speculative POST /talk.
+    private func speculate(_ text: String) {
+        cancelSpeculation()
+        let id = String(UUID().uuidString.lowercased().prefix(12))
+        let point = talkPointer
+        let session = talkSessionId
+        let task = Task { @MainActor in
+            try await client.talk(question: text, at: point, sessionId: session,
+                                  talkId: id, speculative: true)
+        }
+        speculation = SpeculativeTalk(id: id, text: text, task: task)
+    }
+
+    private func appendSpeculationToken(id: String, _ text: String) {
+        guard var spec = speculation, spec.id == id else { return }
+        spec.tokens.append(text)
+        speculation = spec
+    }
+
+    private func markSpeculationDone(id: String) {
+        guard var spec = speculation, spec.id == id else { return }
+        spec.done = true
+        speculation = spec
+    }
+
+    /// Cancels the current speculation, if any: tells the sidecar (best effort)
+    /// and cancels the local task so nobody awaits a stale reply.
+    private func cancelSpeculation() {
+        guard let spec = speculation else { return }
+        speculation = nil
+        spec.task.cancel()
+        Task { await client.cancelTalk(id: spec.id) }
+    }
+
+    private func stopSpeculationRecognizer() {
+        speculationTicker?.cancel()
+        speculationTicker = nil
+        talkRecognizer?.stop()
+        talkRecognizer = nil
+    }
+
+    // MARK: - Suggestion chips (⌃⌥C)
+
+    func showChips() async {
+        let point = NSEvent.mouseLocation                       // for placing the panel
+        let pointer = ModifierHoldController.mouseTopLeft()     // for the sidecar
+        let selection = TextInsertion.secureInputActive() ? "" : await TextInsertion.selectedText()
+        showStatus("Thinking of suggestions…")
+        do {
+            let chips = try await client.fetchChips(at: pointer, selection: selection)
+            showStatus("")
+            guard !chips.isEmpty else {
+                showStatus("No suggestions here.")
+                return
+            }
+            chipsPanel.show(chips, near: point) { [weak self] chip in
+                Task { @MainActor in await self?.runChip(chip, at: pointer) }
+            }
+        } catch {
+            showStatus(error.localizedDescription)
+        }
+    }
+
+    private func runChip(_ chip: Chip, at pointer: CGPoint) async {
+        switch chip.kind {
+        case "transform":
+            await transformPanel.begin(client: client, instruction: chip.prompt) { [weak self] in
+                self?.showStatus($0)
+            }
+        case "execute":
+            submitGoal(chip.prompt)
+        default:        // understand, ideate
+            do {
+                try await askTalk(chip.prompt, at: pointer)
+            } catch {
+                showStatus(error.localizedDescription)
+            }
+        }
     }
 
     private func handleWakeWord() async {
@@ -403,6 +1152,27 @@ struct MainWindowView: View {
                 .onSubmit { app.submitGoal(app.goalText) }
 
             Toggle("Barge-in (interrupt speech)", isOn: $app.bargeInEnabled)
+
+            HStack {
+                Button("Open Chat (⌃⌘A)") { app.openChat() }
+                Spacer()
+            }
+            DisclosureGroup("About you & things to try") {
+                AboutYouView(client: app.client)
+            }
+            .font(.caption)
+            DisclosureGroup("Quick skills (⌃⌥1–9)") {
+                QuickSkillsView(controller: app.quickSkills, client: app.client)
+            }
+            .font(.caption)
+            DisclosureGroup("Activity log") {
+                AuditView(client: app.client)
+            }
+            .font(.caption)
+            DisclosureGroup("Integrations") {
+                IntegrationsView(client: app.client)
+            }
+            .font(.caption)
 
             if let update = app.updateChecker.updateAvailable {
                 HStack {

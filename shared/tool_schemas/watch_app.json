@@ -1,0 +1,29 @@
+{
+  "name": "watch_app",
+  "description": "Watch a background app for changes. With then_goal, set a PROACTIVE trigger: when the app changes (optionally matching `when` text) Aether suggests (or auto-runs) that goal. E.g. watch Xcode when='Build Succeeded' then_goal='run the tests'.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "app": {
+        "type": "string"
+      },
+      "when": {
+        "type": "string",
+        "description": "Substring the change must contain"
+      },
+      "then_goal": {
+        "type": "string",
+        "description": "Goal to suggest/run on match"
+      },
+      "auto": {
+        "type": "boolean",
+        "description": "Auto-run vs suggest (default suggest)"
+      }
+    },
+    "required": [
+      "app"
+    ]
+  },
+  "permission": "screen",
+  "impact": "read"
+}

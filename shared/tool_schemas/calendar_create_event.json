@@ -1,0 +1,34 @@
+{
+  "name": "calendar_create_event",
+  "description": "Add a calendar event. ALWAYS confirmed with an editable draft \u2014 no invitations are sent (EventKit can't invite anyone). start/end are ISO 8601 local time.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      },
+      "start": {
+        "type": "string"
+      },
+      "end": {
+        "type": "string"
+      },
+      "location": {
+        "type": "string"
+      },
+      "notes": {
+        "type": "string"
+      },
+      "calendar": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "start",
+      "end"
+    ]
+  },
+  "permission": "calendar",
+  "impact": "reversible"
+}

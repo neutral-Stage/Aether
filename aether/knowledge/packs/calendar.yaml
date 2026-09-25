@@ -22,3 +22,4 @@ gotchas:
   - "Sending invites affects other people — treat as destructive"
   - "Multiple calendars; verify correct calendar selected"
   - "Time zone changes affect displayed times"
+  - "If Calendar is connected under Integrations, prefer calendar_events / calendar_create_event over UI automation"

@@ -27,21 +27,34 @@ class ClaudeCodeSession(SubprocessSession):
         self.mcp_config = mcp_config
         self.claude_session_id: str | None = None  # for --resume recovery
 
-    def start(self) -> None:
+    @staticmethod
+    def command(binary: str = "claude", permission_mode: str = "", allowed_tools: list[str]
+                | None = None, mcp_config: str | None = None) -> list[str]:
+        """The CLI invocation. The prompt goes in on stdin, so the process can be
+        started before the task is known (fleet warm pool)."""
         cmd = [
-            self.binary, "-p",
+            binary, "-p",
             "--output-format", "stream-json",
             "--input-format", "stream-json",
             "--verbose",
         ]
         # bypassPermissions only inside an isolated worktree — enforced by manager
-        if self.permission_mode:
-            cmd += ["--permission-mode", self.permission_mode]
-        if self.allowed_tools:
-            cmd += ["--allowedTools", ",".join(self.allowed_tools)]
-        if self.mcp_config:
-            cmd += ["--mcp-config", self.mcp_config]
-        self._spawn(cmd, stdin_pipe=True)
+        if permission_mode:
+            cmd += ["--permission-mode", permission_mode]
+        if allowed_tools:
+            cmd += ["--allowedTools", ",".join(allowed_tools)]
+        if mcp_config:
+            cmd += ["--mcp-config", mcp_config]
+        return cmd
+
+    def start(self) -> None:
+        self._spawn(self.command(self.binary, self.permission_mode, self.allowed_tools,
+                                 self.mcp_config), stdin_pipe=True)
+        self._write_user_message(self.prompt)
+
+    def adopt(self, proc) -> None:  # noqa: ANN001 — subprocess.Popen
+        """Use an already-started process from the warm pool."""
+        self._attach(proc)
         self._write_user_message(self.prompt)
 
     def send(self, text: str) -> bool:
