@@ -178,13 +178,23 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
 - [x] Off by default; text only, no images kept; secrets redacted before storing.
 - [x] Fails closed: an unreadable app, bundle ID or window title records nothing. Password
   managers, Aether itself, a focused password field, private windows and sign-in, banking
-  and code pages (by title) are skipped; password fields are dropped from window text.
+  and verification-code pages (by title) are skipped; password fields are dropped from window text.
 - [x] A pause is written to disk and survives a sidecar restart. Deletes, pauses and resumes
   are audited. `DELETE /screen-memory?minutes=0` is refused rather than read as "all".
 - [x] The database is mode 0600. Retention prunes old captures hourly.
 - [x] Recall results are wrapped as untrusted data and pass the same injection scan as every
   tool result, so poisoned page text taints the run. The tools are not exposed over
   Aether's MCP server by default.
+
+### Proactive hints (`aether/hints/`, `sidecar/hints_api.py`)
+
+- [x] Off by default. The sidecar reads the front window itself through screen memory's
+  privacy rules, redacts it, and marks it untrusted before any model call.
+- [x] The model is asked only when the user is idle, not typing, the screen changed, and
+  the gap, hourly and daily limits allow it.
+- [x] Answers must match a strict schema; hints with links, commands or text addressed to
+  an assistant are dropped, as are low-confidence, muted or cooling-down kinds. Hints are
+  only displayed, never acted on, and each one shown is audited.
 
 ### STOP (FR-26)
 

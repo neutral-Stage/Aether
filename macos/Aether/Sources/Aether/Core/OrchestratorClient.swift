@@ -454,6 +454,30 @@ final class OrchestratorClient: ObservableObject {
                 obj["file"] as? String)
     }
 
+    // MARK: proactive hints
+
+    func hintsEnabled() async -> Bool {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("hints/status")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return false
+        }
+        return obj["enabled"] as? Bool ?? false
+    }
+
+    /// A hint to show now, or nil (the sidecar throttles and filters).
+    func checkHint(idle: Double, typing: Bool) async -> ScreenHint? {
+        guard let obj = try? await postJSON("hints/check", ["idle_s": idle, "typing": typing],
+                                            timeout: 45),
+              let hint = obj["hint"] as? [String: Any] else {
+            return nil
+        }
+        return ScreenHint.parse(hint)
+    }
+
+    func muteHints(category: String) async {
+        _ = try? await postJSON("hints/mute", ["category": category, "muted": true])
+    }
+
     // MARK: cost
 
     /// One line such as "Tasks usually cost about $0.02 · stops at $2.00"; nil when unreachable.

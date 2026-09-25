@@ -108,6 +108,7 @@ from .dictation_api import router as _dictation_router  # noqa: E402
 from .quick_skills_api import router as _quick_skills_router  # noqa: E402
 from .chips_api import router as _chips_router  # noqa: E402
 from .screen_memory_api import router as _screen_memory_router  # noqa: E402
+from .hints_api import router as _hints_router  # noqa: E402
 from . import screen_memory_api  # noqa: E402
 from . import questions  # noqa: E402
 from aether.core import session_grants  # noqa: E402
@@ -126,6 +127,7 @@ app.include_router(_dictation_router)
 app.include_router(_quick_skills_router)
 app.include_router(_chips_router)
 app.include_router(_screen_memory_router)
+app.include_router(_hints_router)
 
 
 @app.on_event("startup")

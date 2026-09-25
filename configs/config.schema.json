@@ -50,6 +50,18 @@
         "protect_self": { "type": "boolean" }
       }
     },
+    "hints": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "min_confidence": { "type": "number", "minimum": 0.5, "maximum": 1 },
+        "idle_s": { "type": "number", "minimum": 2 },
+        "gap_s": { "type": "number", "minimum": 10 },
+        "category_cooldown_min": { "type": "number", "minimum": 0 },
+        "daily_cap": { "type": "integer", "minimum": 0 },
+        "max_queries_per_hour": { "type": "integer", "minimum": 1 }
+      }
+    },
     "screen_memory": {
       "type": "object",
       "properties": {

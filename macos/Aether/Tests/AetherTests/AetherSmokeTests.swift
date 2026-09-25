@@ -454,3 +454,15 @@ final class RedactionNoteTests: XCTestCase {
         XCTAssertEqual(t.messages.last?.redacted, 3)
     }
 }
+
+final class ScreenHintTests: XCTestCase {
+    func testParse() {
+        let hint = ScreenHint.parse(["hint": "Press ⌘⇧T to reopen the tab.", "reason": "You just closed one.",
+                                     "category": "shortcut", "confidence": 0.9])
+        XCTAssertEqual(hint?.symbol, "keyboard")
+        XCTAssertEqual(hint?.kindName, "shortcut")
+        XCTAssertEqual(ScreenHint.parse(["hint": "x", "reason": "y", "category": "next_step"])?.kindName,
+                       "next-step")
+        XCTAssertNil(ScreenHint.parse(["hint": "x", "category": "fix"]))   // no reason, not shown
+    }
+}

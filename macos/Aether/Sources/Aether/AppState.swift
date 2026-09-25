@@ -100,6 +100,8 @@ final class AppState: ObservableObject {
     lazy var quickSkills = QuickSkillsController(client: client, audio: audio)
     /// Screen memory status, pause and delete (menu bar), when it is turned on.
     lazy var screenMemory = ScreenMemoryController(client: client)
+    /// Polite proactive hints (hints.enabled), shown top-right with their reason.
+    lazy var hints = HintController(client: client)
     private let transformPanel = TransformPanel()
     private let chipsPanel = ChipsPanel()
     private let chipsHotkey = CommandBarHotkeyController(modifiers: [.control, .option], keyCode: 8)
@@ -196,6 +198,13 @@ final class AppState: ObservableObject {
         Task { await quickSkills.reload() }
         screenMemory.onStatus = { [weak self] status in self?.showStatus(status) }
         screenMemory.start()
+        hints.isBusy = { [weak self] in
+            guard let self else { return true }
+            return self.client.isRunning || self.isPTTHeld || self.isTalkHeld || self.tts.isSpeaking
+                || self.pendingConfirmId != nil || self.overlay.isShowing
+                || self.dictation.state != .idle || self.activeGuideId != nil
+        }
+        hints.start()
         audio.refreshMicPermission()
         stt.refreshAuthorization()
         Task {
@@ -644,6 +653,7 @@ final class AppState: ObservableObject {
         dictation.cancel()
         transformPanel.hide()
         chipsPanel.hide()
+        hints.dismiss()
         streamingTalkId = nil
         if isTalkHeld { cancelTalk() }
         if let guideId = activeGuideId {

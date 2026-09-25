@@ -102,6 +102,19 @@ screen_memory:
   exclude_window_globs: []      # e.g. "*medical*"
   only_bundle_ids: []           # when set, record only these apps
 
+# Polite proactive hints: now and then, one short tip about what is on screen,
+# always with its reason. Off by default. Asked only when you are idle, not
+# typing, and the screen changed; uses screen memory's privacy rules (password
+# managers, private windows, sign-in pages and excluded apps are never read).
+hints:
+  enabled: false
+  min_confidence: 0.75          # hints the model is less sure about are dropped
+  idle_s: 6                     # seconds without input before asking
+  gap_s: 20                     # at least this long between questions to the model
+  category_cooldown_min: 15     # after a hint, its kind stays quiet this long
+  daily_cap: 12                 # most hints shown per day
+  max_queries_per_hour: 30      # most questions to the model per hour
+
 # Signed append-only audit log (§6.7 FR-29)
 audit:
   enabled: true
