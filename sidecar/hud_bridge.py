@@ -71,7 +71,11 @@ def patch_agent_for_sidecar(agent, hud: StreamingHUD, emit_queue: asyncio.Queue,
     async def confirm_hook(description: str) -> bool:
         return await confirmation.request_confirmation(description)
 
+    async def draft_hook(description: str, draft: list[dict]) -> tuple[bool, dict[str, str]]:
+        return await confirmation.request_draft_confirmation(description, draft)
+
     agent.confirm_async = confirm_hook
+    agent.confirm_draft_async = draft_hook
 
     async def ask_hook(question: str, options: list[str]) -> str | None:
         return await questions.request_answer(question, options, run_id=run_id,

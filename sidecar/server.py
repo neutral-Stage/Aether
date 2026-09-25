@@ -210,6 +210,8 @@ class TTSRequest(BaseModel):
 class ConfirmRequest(BaseModel):
     request_id: str
     approved: bool
+    # The user's edits to an outgoing draft (field → new value).
+    edits: dict[str, str] | None = None
 
 
 class AnswerRequest(BaseModel):
@@ -1268,7 +1270,7 @@ async def confirm_action(
     body: ConfirmRequest,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    ok = confirmation.resolve_confirmation(body.request_id, body.approved)
+    ok = confirmation.resolve_confirmation(body.request_id, body.approved, body.edits)
     if not ok:
         raise HTTPException(404, "Unknown or expired confirmation request")
     return {"status": "ok", "approved": body.approved}

@@ -10,6 +10,8 @@ enum SidecarEvent {
     case stopped
     case ping
     case confirmRequest(requestId: String, description: String)
+    /// An outgoing message to approve, with fields the user can edit first.
+    case draftRequest(requestId: String, description: String, fields: [DraftField])
     case fleet([String: Any])
     case runRequest(goal: String)   // proactive trigger auto-run (Phase 11)
     case question(requestId: String, question: String, options: [String])  // ask_user
@@ -54,8 +56,14 @@ enum SidecarEvent {
         case "ping":
             out.append(.ping)
         case "confirm_request":
-            out.append(.confirmRequest(requestId: obj["request_id"] as? String ?? "",
-                                       description: obj["description"] as? String ?? "Proceed?"))
+            let rid = obj["request_id"] as? String ?? ""
+            let text = obj["description"] as? String ?? "Proceed?"
+            let fields = (obj["draft"] as? [[String: Any]] ?? []).compactMap(DraftField.parse)
+            if fields.isEmpty {
+                out.append(.confirmRequest(requestId: rid, description: text))
+            } else {
+                out.append(.draftRequest(requestId: rid, description: text, fields: fields))
+            }
         case "question":
             // The agent's own copy of the event has no request id and cannot be
             // answered; the sidecar's copy does.
@@ -286,12 +294,14 @@ final class OrchestratorClient: ObservableObject {
         }
     }
 
-    func submitConfirmation(requestId: String, approved: Bool) async {
+    func submitConfirmation(requestId: String, approved: Bool,
+                            edits: [String: String]? = nil) async {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("confirm")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = ["request_id": requestId, "approved": approved]
+        var body: [String: Any] = ["request_id": requestId, "approved": approved]
+        if let edits, !edits.isEmpty { body["edits"] = edits }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
         _ = try? await URLSession.shared.data(for: request)

@@ -26,6 +26,7 @@ from .world_model import VerificationExpectation, WorldModel
 from .focus import FocusTracker
 from .policy import Policy, PolicyConfig, normalize_file_roots
 from .planner import plan_goal, replan
+from . import drafts
 from . import stop as stop_ctl
 from .audit_log import AuditLog
 from ..knowledge import loader as knowledge
@@ -161,6 +162,9 @@ class Agent:
     ):
         self.cfg = config
         self.confirm_async: Callable[[str], Awaitable[bool]] | None = None
+        # Outgoing messages: (description, draft fields) -> (approved, the user's edits).
+        self.confirm_draft_async: Callable[[str, list[dict]],
+                                           Awaitable[tuple[bool, dict[str, str]]]] | None = None
         # ask_user hook: (question, options) -> answer, or None on timeout/skip.
         # The sidecar sets it (question event + POST /answer); CLI uses stdin.
         self.ask_async: Callable[[str, list[str]], Awaitable[str | None]] | None = None
@@ -396,6 +400,7 @@ class Agent:
                     ro2 = False
                 else:
                     self._ro2_grants.add(key)
+        edited: list[str] = []          # draft fields the user changed before approving
         if spec and (self.policy.requires_confirm(spec, args, focus) or ro2):
             # Surface the EXACT operation for destructive / rule-of-two actions
             # so injected screen text can't disguise the ask.
@@ -409,11 +414,20 @@ class Agent:
                                     "Approve this EXACT action?\n" + confirm_text)
             else:
                 confirm_text = desc
-            ok = await self._confirm(confirm_text)
+            draft = drafts.draft_fields(name, args) if self.confirm_draft_async else None
+            if draft is not None and self.confirm_draft_async is not None:
+                ok, edits = await self.confirm_draft_async(confirm_text, draft)
+                if ok:
+                    args, edited = drafts.apply_edits(args, draft, edits)
+            else:
+                ok = await self._confirm(confirm_text)
             self.audit.record("confirmation", run_id=rid, tool=name, confirmed=ok,
-                              summary=confirm_text[:200], extra={"rule_of_two": ro2})
+                              summary=confirm_text[:200],
+                              extra={"rule_of_two": ro2, "edited": edited})
             if not ok:
                 return CallOutcome("User declined this action.", error=True)
+            if edited:
+                desc = f"{desc} (edited by the user: {', '.join(edited)})"
 
         # Update focus AFTER the gate (this call was judged against the PREVIOUS
         # state) and BEFORE dispatch, so the next call is gated against where
@@ -440,6 +454,10 @@ class Agent:
         else:
             observation = await asyncio.to_thread(self.registry.dispatch, name, args, self.ctx)
         tool_err = observation.startswith("ERROR")
+        if edited and not tool_err:
+            observation = (f"(The user edited {', '.join(edited)} before approving; what was "
+                           f"sent is: " + "; ".join(f"{k}={str(args.get(k))[:200]!r}"
+                                                     for k in edited) + ")\n" + observation)
         self.metrics.record_tool(name, (time.time() - tool_start) * 1000, error=tool_err)
         first_line = observation.splitlines()[0][:120] if observation else ""
         self.audit.record("action", run_id=rid, tool=name, tool_args=args,

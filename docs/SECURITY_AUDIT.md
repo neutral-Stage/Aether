@@ -134,6 +134,16 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
 - [x] Under untrusted content every `my_*` call needs a confirmation of the exact
   arguments (Rule of Two); tested live on macOS in `tests/security/test_toolsmith_live.py`.
 
+### Outgoing messages (editable drafts)
+
+- [x] A confirmed action that sends something to other people (an MCP tool whose name says
+  send, post, reply, message, email, invite, schedule, create event/issue/task…, and
+  `mail_compose`) shows its recipients, subject, body and times as an editable draft.
+- [x] Only the fields shown can be changed; other arguments (attachments, ids) stay as the
+  model set them. The audit log records which fields the user edited, and the model is
+  told what was actually sent.
+- [x] Voice "yes" approves the draft unedited; "no" declines.
+
 ### STOP (FR-26)
 
 - [x] Global event checked before tool dispatch

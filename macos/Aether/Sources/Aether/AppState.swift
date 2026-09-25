@@ -358,6 +358,10 @@ final class AppState: ObservableObject {
                 if self.pendingConfirmId != requestId {
                     self.showConfirmation(requestId: requestId, description: description)
                 }
+            case let .draftRequest(requestId, description, fields):
+                if self.pendingConfirmId != requestId {
+                    self.showDraft(requestId: requestId, description: description, fields: fields)
+                }
             case .fleet(let payload):
                 if let sid = payload["session_id"] as? String,
                    let state = payload["state"] as? String {
@@ -394,6 +398,27 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func showDraft(requestId: String, description: String, fields: [DraftField]) {
+        pendingConfirmId = requestId
+        world.currentStep = "Check the draft before it goes out"
+        refreshHUD()
+        confirmation.showDraft(
+            description: description, fields: fields,
+            onSend: { [weak self] edits in
+                guard let self else { return }
+                Task { await self.client.submitConfirmation(requestId: requestId, approved: true,
+                                                            edits: edits) }
+                self.pendingConfirmId = nil
+                self.refreshHUD()
+            },
+            onDecline: { [weak self] in
+                guard let self else { return }
+                Task { await self.client.submitConfirmation(requestId: requestId, approved: false) }
+                self.pendingConfirmId = nil
+                self.refreshHUD()
+            })
+    }
+
     private func showConfirmation(requestId: String, description: String) {
         pendingConfirmId = requestId
         world.currentStep = "Confirm: \(description)"
@@ -419,6 +444,9 @@ final class AppState: ObservableObject {
     /// Events from the persistent /events stream (proactive runs, guide mode).
     func handleBackgroundEvent(_ event: SidecarEvent) {
         switch event {
+        case let .draftRequest(requestId, description, fields):
+            guard pendingConfirmId != requestId else { return }
+            showDraft(requestId: requestId, description: description, fields: fields)
         case let .confirmRequest(requestId, description):
             // Runs started elsewhere (realtime voice, triggers) ask here too; a run's own
             // stream may deliver the same request, so show it once.
