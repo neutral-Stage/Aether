@@ -9,10 +9,13 @@ import time
 try:
     from Quartz import (
         CGEventCreateMouseEvent, CGEventCreateKeyboardEvent, CGEventPost,
+        CGEventCreateScrollWheelEvent,
         CGEventKeyboardSetUnicodeString, CGEventSetFlags, CGEventSetIntegerValueField,
         kCGHIDEventTap, kCGEventLeftMouseDown, kCGEventLeftMouseUp,
+        kCGEventLeftMouseDragged,
         kCGEventRightMouseDown, kCGEventRightMouseUp, kCGEventMouseMoved,
         kCGMouseButtonLeft, kCGMouseButtonRight, kCGMouseEventClickState,
+        kCGScrollEventUnitLine,
     )
     _OK = True
 except Exception:  # pragma: no cover
@@ -149,6 +152,79 @@ def double_click(x: float, y: float) -> None:
     click(x, y, count=2)
 
 
+def hover(x: float, y: float) -> None:
+    """Move the pointer without clicking (tooltips, hover menus)."""
+    if not _OK:
+        raise RuntimeError("Quartz unavailable (run on macOS).")
+    move(x, y)
+
+
+def scroll(dx: int = 0, dy: int = 0, x: float | None = None, y: float | None = None) -> None:
+    """Scroll by lines. dy > 0 scrolls up (content moves down), dy < 0 down;
+    dx > 0 scrolls left. With x/y, the pointer moves there first so the
+    scroll lands on the view under that point."""
+    if not _OK:
+        raise RuntimeError("Quartz unavailable (run on macOS).")
+    if x is not None and y is not None:
+        move(x, y)
+        time.sleep(0.02)
+    # Post in chunks of <=10 lines; big single deltas are clamped by some apps.
+    remaining_y, remaining_x = int(dy), int(dx)
+    while remaining_y or remaining_x:
+        step_y = max(-10, min(10, remaining_y))
+        step_x = max(-10, min(10, remaining_x))
+        _post(CGEventCreateScrollWheelEvent(None, kCGScrollEventUnitLine, 2, step_y, step_x))
+        remaining_y -= step_y
+        remaining_x -= step_x
+        time.sleep(0.01)
+
+
+def drag(x0: float, y0: float, x1: float, y1: float,
+         duration: float = 0.4, steps: int = 12) -> None:
+    """Press at (x0, y0), move through intermediate points, release at (x1, y1)."""
+    if not _OK:
+        raise RuntimeError("Quartz unavailable (run on macOS).")
+    steps = max(2, int(steps))
+    move(x0, y0)
+    time.sleep(0.03)
+    _post(CGEventCreateMouseEvent(None, kCGEventLeftMouseDown, (x0, y0), kCGMouseButtonLeft))
+    for i in range(1, steps + 1):
+        t = i / steps
+        px, py = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+        _post(CGEventCreateMouseEvent(None, kCGEventLeftMouseDragged, (px, py),
+                                      kCGMouseButtonLeft))
+        time.sleep(max(duration, 0.0) / steps)
+    _post(CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, (x1, y1), kCGMouseButtonLeft))
+
+
+def key_down(key: str, modifiers: list[str] | None = None) -> None:
+    _key_event(key, modifiers, down=True)
+
+
+def key_up(key: str, modifiers: list[str] | None = None) -> None:
+    _key_event(key, modifiers, down=False)
+
+
+def _key_event(key: str, modifiers: list[str] | None, *, down: bool) -> None:
+    if not _OK:
+        raise RuntimeError("Quartz unavailable (run on macOS).")
+    ev = CGEventCreateKeyboardEvent(None, keycode_for(key), down)
+    flags = _modifier_flags(modifiers)
+    if flags:
+        CGEventSetFlags(ev, flags)
+    _post(ev)
+
+
+def _modifier_flags(modifiers: list[str] | None) -> int:
+    flags = 0
+    for m in (modifiers or []):
+        flag = _MOD_FLAGS.get(str(m).strip().lower())
+        if flag is None:
+            raise ValueError(f"Unknown modifier: {m!r} (use cmd, shift, option, control, fn)")
+        flags |= flag
+    return flags
+
+
 def type_text(text: str, per_char_delay: float = 0.005) -> None:
     """Type arbitrary unicode text via keyboard events."""
     if not _OK:
@@ -171,12 +247,7 @@ def press_key(key: str, modifiers: list[str] | None = None) -> None:
     if not _OK:
         raise RuntimeError("Quartz unavailable (run on macOS).")
     code = keycode_for(key)
-    flags = 0
-    for m in (modifiers or []):
-        flag = _MOD_FLAGS.get(str(m).strip().lower())
-        if flag is None:
-            raise ValueError(f"Unknown modifier: {m!r} (use cmd, shift, option, control, fn)")
-        flags |= flag
+    flags = _modifier_flags(modifiers)
     down = CGEventCreateKeyboardEvent(None, code, True)
     up = CGEventCreateKeyboardEvent(None, code, False)
     if flags:

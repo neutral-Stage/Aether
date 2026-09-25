@@ -1,159 +1,151 @@
-"""Anthropic computer-use API as a last-resort vision effector (Phase 5).
+"""Anthropic computer use as a last-resort vision effector.
 
-One call per step: screenshot → model proposes ONE action → we execute it via
-CGEvent. The agent loop provides iteration/verification, so this stays a
+One call per step: screenshot → the model proposes ONE action → we execute it
+via CGEvent. The agent loop provides iteration/verification, so this stays a
 single-action tool rather than an autonomous sub-loop. Gated by
 ``beta.computer_use_api`` (off by default) — it sends screenshots to Anthropic.
+
+Also offers ``locate(label)``: ask the model where a UI element is and return
+its screen point WITHOUT executing anything (a high-accuracy grounder used to
+refine pointer targets).
+
+Tool version: ``computer_20251124`` with beta ``computer-use-2025-11-24`` on
+Claude Sonnet 5 (Claude Opus 5.5 accepts only the newer computer toolset, so
+this module pins Sonnet 5).
 """
 from __future__ import annotations
 
 import base64
 import logging
-import re
-import subprocess
-import tempfile
-from typing import Any
-
-import httpx
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-API_URL = "https://api.anthropic.com/v1/messages"
-BETA_HEADER = "computer-use-2025-01-24"
 DEFAULT_MODEL = "claude-sonnet-5"
-MAX_IMG_WIDTH = 1280
+TOOL_TYPE = "computer_20251124"
+BETA = "computer-use-2025-11-24"
+# Sonnet 5 handles up to 2576 px; 1366 px is the recommended cost/accuracy balance.
+MAX_IMG_EDGE = 1366
 
 
-def _resize_and_dims(path: str) -> tuple[str, int, int]:
-    """Downscale screenshot to <=MAX_IMG_WIDTH via sips; return (path, w, h)."""
-    out = subprocess.run(  # noqa: S603
-        ["sips", "-g", "pixelWidth", "-g", "pixelHeight", path],
-        capture_output=True, text=True, timeout=10, check=True,
-    ).stdout
-    w = int(re.search(r"pixelWidth: (\d+)", out).group(1))
-    h = int(re.search(r"pixelHeight: (\d+)", out).group(1))
-    if w > MAX_IMG_WIDTH:
-        subprocess.run(  # noqa: S603
-            ["sips", "--resampleWidth", str(MAX_IMG_WIDTH), path],
-            capture_output=True, timeout=10, check=True,
-        )
-        h = round(h * MAX_IMG_WIDTH / w)
-        w = MAX_IMG_WIDTH
-    return path, w, h
+def _screenshot():  # noqa: ANN202 — returns screen.Capture
+    """Capture the working display at computer-use resolution."""
+    from ..perception import screen
+
+    return screen.capture(max_edge=MAX_IMG_EDGE)
 
 
-def _display_points() -> tuple[float, float]:
-    """Main display size in points (CGEvent coordinate space)."""
-    try:
-        import Quartz
-        b = Quartz.CGDisplayBounds(Quartz.CGMainDisplayID())
-        return float(b.size.width), float(b.size.height)
-    except Exception:
-        return (1440.0, 900.0)
+def _call(api_key: str, model: str, cap, text: str, max_tokens: int = 1024):  # noqa: ANN001, ANN202
+    import anthropic
 
-
-def _capture_main_display() -> str:
-    """Screenshot the MAIN display only, so image pixels map to CGMainDisplayID
-    bounds. The shared capture_to_file() stitches all displays on multi-monitor
-    setups, which would break the pixel→point scaling below.
-    """
-    fd, path = tempfile.mkstemp(suffix=".png", prefix="aether-cu-")
-    import os
-    os.close(fd)
-    # -D 1 = main display. ponytail: assumes main is index 1 (true on typical
-    # setups); per-display targeting is the upgrade path if it ever isn't.
-    subprocess.run(  # noqa: S603
-        ["screencapture", "-x", "-D", "1", path],
-        capture_output=True, timeout=15, check=True,
+    img_b64 = base64.b64encode(Path(cap.path).read_bytes()).decode()
+    client = anthropic.Anthropic(api_key=api_key, timeout=60.0)
+    resp = client.beta.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        betas=[BETA],
+        tools=[{
+            "type": TOOL_TYPE,
+            "name": "computer",
+            "display_width_px": cap.pixel_width,
+            "display_height_px": cap.pixel_height,
+        }],
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text},
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": "image/png", "data": img_b64}},
+            ],
+        }],
     )
-    return path
+    try:
+        from ..core.metrics import MetricsCollector
+
+        usage = getattr(resp, "usage", None)
+        MetricsCollector.get().record_llm_usage(
+            "anthropic", getattr(usage, "input_tokens", None),
+            getattr(usage, "output_tokens", None), model=model)
+    except Exception:  # noqa: BLE001
+        pass
+    tool_use = next((b for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
+    said = " ".join(getattr(b, "text", "") for b in resp.content
+                    if getattr(b, "type", None) == "text").strip()
+    return (dict(tool_use.input or {}) if tool_use is not None else None), said
+
+
+def locate(label: str, api_key: str, model: str = DEFAULT_MODEL,
+           cap=None) -> tuple[float, float] | None:  # noqa: ANN001
+    """Screen point of a described UI element, or None. Never acts."""
+    cap = cap or _screenshot()
+    inp, _ = _call(api_key, model, cap,
+                   f"Locate the '{label}' element on screen and move the mouse to it. "
+                   "Do not click. If it is not visible, do not call the tool.")
+    if not inp or "coordinate" not in inp:
+        return None
+    cx, cy = inp["coordinate"]
+    return cap.to_points(float(cx), float(cy))
 
 
 def computer_use_step(instruction: str, api_key: str,
                       model: str = DEFAULT_MODEL) -> str:
     """Screenshot → one model-proposed action → execute. Returns description."""
+    from . import executor
     from . import input as kbd
 
-    path = _capture_main_display()
-    path, img_w, img_h = _resize_and_dims(path)
-    img_b64 = base64.b64encode(open(path, "rb").read()).decode()
-
-    resp = httpx.post(
-        API_URL,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "anthropic-beta": BETA_HEADER,
-        },
-        json={
-            "model": model,
-            "max_tokens": 1024,
-            "tools": [{
-                "type": "computer_20250124",
-                "name": "computer",
-                "display_width_px": img_w,
-                "display_height_px": img_h,
-            }],
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text":
-                        f"{instruction}\n\nPropose exactly ONE next action."},
-                    {"type": "image", "source": {
-                        "type": "base64", "media_type": "image/png",
-                        "data": img_b64}},
-                ],
-            }],
-        },
-        timeout=60.0,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-
-    usage = data.get("usage") or {}
-    try:
-        from ..core.metrics import MetricsCollector
-        MetricsCollector.get().record_llm_usage(
-            "anthropic", usage.get("input_tokens"), usage.get("output_tokens"),
-            model=model)
-    except Exception:  # noqa: BLE001
-        pass
-
-    action_block = next(
-        (b for b in data.get("content", []) if b.get("type") == "tool_use"), None)
-    text = " ".join(b.get("text", "") for b in data.get("content", [])
-                    if b.get("type") == "text").strip()
-    if action_block is None:
+    cap = _screenshot()
+    inp, text = _call(api_key, model, cap,
+                      f"{instruction}\n\nPropose exactly ONE next action.")
+    if inp is None:
         return f"Computer-use model proposed no action. It said: {text[:400]}"
 
-    inp: dict[str, Any] = action_block.get("input", {})
-    action = inp.get("action", "")
-    # Model coordinates are in resized-image space → scale to display points.
-    disp_w, disp_h = _display_points()
-    sx, sy = disp_w / img_w, disp_h / img_h
+    action = str(inp.get("action", ""))
 
-    def _pt() -> tuple[float, float]:
-        cx, cy = inp.get("coordinate", (0, 0))
-        return float(cx) * sx, float(cy) * sy
+    def pt(key: str = "coordinate") -> tuple[float, float]:
+        cx, cy = inp.get(key) or (0, 0)
+        return cap.to_points(float(cx), float(cy))
 
-    from . import executor
     with executor.HID_LOCK:
-        if action in ("left_click", "right_click", "double_click"):
-            x, y = _pt()
-            kbd.click(x, y,
-                      button="right" if action == "right_click" else "left",
-                      count=2 if action == "double_click" else 1)
+        if action in ("left_click", "right_click", "double_click", "triple_click",
+                      "middle_click"):
+            x, y = pt()
+            count = {"double_click": 2, "triple_click": 3}.get(action, 1)
+            kbd.click(x, y, button="right" if action == "right_click" else "left",
+                      count=count)
             did = f"{action} at ({int(x)},{int(y)})"
+        elif action == "mouse_move":
+            x, y = pt()
+            kbd.move(x, y)
+            did = f"moved the mouse to ({int(x)},{int(y)})"
+        elif action == "left_click_drag":
+            x0, y0 = pt("start_coordinate")
+            x1, y1 = pt()
+            kbd.drag(x0, y0, x1, y1)
+            did = f"dragged ({int(x0)},{int(y0)}) → ({int(x1)},{int(y1)})"
+        elif action == "scroll":
+            x, y = pt()
+            amount = int(inp.get("scroll_amount") or 3)
+            direction = str(inp.get("scroll_direction") or "down")
+            dy = {"down": -amount, "up": amount}.get(direction, 0)
+            dx = {"left": amount, "right": -amount}.get(direction, 0)
+            kbd.scroll(dx=dx, dy=dy, x=x, y=y)
+            did = f"scrolled {direction} {amount} at ({int(x)},{int(y)})"
         elif action == "type":
-            kbd.type_text(inp.get("text", ""))
-            did = f"typed {len(inp.get('text', ''))} chars"
-        elif action == "key":
-            key = str(inp.get("text", "")).split("+")[-1]
-            mods = str(inp.get("text", "")).split("+")[:-1]
-            kbd.press_key(key, modifiers=mods or None)
+            kbd.type_text(str(inp.get("text", "")))
+            did = f"typed {len(str(inp.get('text', '')))} chars"
+        elif action in ("key", "hold_key"):
+            combo = [p for p in str(inp.get("text", "")).split("+") if p]
+            if not combo:
+                return "Computer-use proposed an empty key press."
+            kbd.press_key(combo[-1], modifiers=combo[:-1] or None)
             did = f"pressed {inp.get('text', '')}"
-        elif action == "screenshot":
-            did = "requested another screenshot (call analyze_screen)"
+        elif action == "wait":
+            import time
+
+            time.sleep(min(float(inp.get("duration") or 1.0), 5.0))
+            did = "waited"
+        elif action in ("screenshot", "zoom", "cursor_position"):
+            did = f"requested {action} (call analyze_screen or get_screen_context)"
         else:
             return (f"Computer-use proposed unsupported action '{action}' "
                     f"({inp}). It said: {text[:300]}")
