@@ -50,6 +50,17 @@
         "protect_self": { "type": "boolean" }
       }
     },
+    "toolsmith": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "timeout_s": { "type": "integer", "minimum": 1, "maximum": 300 },
+        "max_repairs": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "restrict_reads_with_network": { "type": "boolean" },
+        "extra_read_roots": { "type": "array", "items": { "type": "string" } },
+        "allow_unsandboxed": { "type": "boolean" }
+      }
+    },
     "mcp_server": {
       "type": "object",
       "properties": {

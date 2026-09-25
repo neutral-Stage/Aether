@@ -68,6 +68,9 @@ class Registry:
     def register(self, spec: ToolSpec) -> None:
         self._tools[spec.name] = spec
 
+    def unregister(self, name: str) -> bool:
+        return self._tools.pop(name, None) is not None
+
     def register_dynamic(
         self,
         *,
@@ -159,10 +162,10 @@ class Registry:
             return f"wait for agent [{args.get('session_id', '')[:12]}]"
         if name.startswith("mcp_"):
             return name.replace("_", " ", 1)
-        from . import desktop_tools, targeting_tools
+        from . import desktop_tools, targeting_tools, toolsmith_tools
 
         return (desktop_tools.describe(name, args) or targeting_tools.describe(name, args)
-                or name)
+                or toolsmith_tools.describe(name, args) or name)
 
     def dispatch(self, name: str, args: dict, ctx: AgentContext) -> str:
         stop_ctl.check()
@@ -931,9 +934,9 @@ def build_default_registry() -> Registry:
     ]
     for s in specs:
         reg.register(s)
-    from . import desktop_tools, targeting_tools
+    from . import desktop_tools, targeting_tools, toolsmith_tools
 
-    for s in (*desktop_tools.specs(), *targeting_tools.specs()):
+    for s in (*desktop_tools.specs(), *targeting_tools.specs(), toolsmith_tools.make_tool_spec()):
         reg.register(s)
     from ..core.config import load_config
 

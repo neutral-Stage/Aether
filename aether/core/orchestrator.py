@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import time
@@ -86,6 +87,8 @@ class CallOutcome:
     error: bool = False
 
 
+# UI tools whose effect is not visible in the accessibility tree.
+_NO_SCREEN_CHECK = frozenset({"clipboard_set", "set_volume", "hover"})
 MAX_BATCH = 5
 # Reversible UI actions that may be chained without a model turn in between.
 BATCHABLE_TOOLS = frozenset({
@@ -186,6 +189,13 @@ class Agent:
         from ..plugins.loader import load_plugins
 
         load_plugins(self.registry, ROOT, config=config.raw)
+        # Self-written tools (aether/toolsmith): register the installed my_* tools.
+        from ..toolsmith.settings import Settings as ToolsmithSettings
+        from ..tools import toolsmith_tools
+
+        self.toolsmith = ToolsmithSettings.from_raw(config.raw)
+        toolsmith_tools.sync_registry(self.registry, self.toolsmith)
+        self._tool_repairs: dict[str, int] = {}
         mem_cfg = config.get("memory") or {}
         embed_provider = str(mem_cfg.get("embedding_provider", "hash"))
         if config.memory_enabled:
@@ -272,6 +282,10 @@ class Agent:
         approved https://ok.com/page grant https://ok.com/?d=SECRET."""
         if name in self._NEVER_GRANT:
             return None
+        if name.startswith("my_"):
+            # self-written tools take arbitrary arguments: grant only the exact call
+            blob = json.dumps(args, sort_keys=True, default=str)
+            return (name, hashlib.sha1(blob.encode()).hexdigest()[:12])
         blob = "|".join(
             f"{k}={' '.join(str(args[k]).split())}"
             for k in ("command", "source", "text", "url", "to", "subject",
@@ -280,6 +294,18 @@ class Agent:
         if name == "click":
             blob += "|label=" + (getattr(focus, "label", "") or "")
         return (name, hashlib.sha1(blob.encode()).hexdigest()[:12])
+
+    async def _confirm(self, text: str) -> bool:
+        if self.confirm_async is not None:
+            return bool(await self.confirm_async(text))
+        return bool(await asyncio.to_thread(self.policy.confirm, text))
+
+    def _schemas(self) -> list[dict]:
+        """Tool schemas offered to the model (make_tool only when the toolsmith is on)."""
+        schemas = self.registry.schemas()
+        if not self.toolsmith.enabled:
+            schemas = [s for s in schemas if s.get("name") != "make_tool"]
+        return schemas
 
     def _emit(self, event: dict) -> None:
         if self.emit is None:
@@ -333,6 +359,8 @@ class Agent:
             return await self._ask_user(args, rid=rid)
         if name == "point_at":
             return await self._point_at(args, step=step)
+        if name == "make_tool":
+            return await self._make_tool(args, step=step, rid=rid)
 
         shell_text = self.policy.shell_payload(name, args) if spec else None
         if shell_text is not None and not self.policy.allows_shell_path(shell_text):
@@ -371,10 +399,7 @@ class Agent:
                                     "Approve this EXACT action?\n" + confirm_text)
             else:
                 confirm_text = desc
-            if self.confirm_async is not None:
-                ok = await self.confirm_async(confirm_text)
-            else:
-                ok = await asyncio.to_thread(self.policy.confirm, confirm_text)
+            ok = await self._confirm(confirm_text)
             self.audit.record("confirmation", run_id=rid, tool=name, confirmed=ok,
                               summary=confirm_text[:200], extra={"rule_of_two": ro2})
             if not ok:
@@ -388,14 +413,22 @@ class Agent:
         if name == "finish":
             return CallOutcome(str(args.get("message", "Done.")), finished=True)
 
-        # Verify-after-act: snapshot before mutating tools
-        if spec and spec.impact != "read":
-            self.world.begin_action_verification(self._verification_for_tool(name, args))
+        # Verify-after-act: snapshot before actions that should change the screen.
+        # Shell, file, network, agent and self-written tools leave the UI alone, so
+        # an unchanged screen after them is not a failure.
+        expectation = self._verification_for_tool(name, args)
+        if spec and spec.impact != "read" and (
+                expectation is not None
+                or (spec.permission == "input" and name not in _NO_SCREEN_CHECK)):
+            self.world.begin_action_verification(expectation)
 
         self._emit({"type": "tool_call", "step": step, "tool": name, "description": desc})
         tool_start = time.time()
         self.ctx.pending_images = []
-        observation = await asyncio.to_thread(self.registry.dispatch, name, args, self.ctx)
+        if name.startswith("my_") and self.toolsmith.enabled:
+            observation = await self._run_my_tool(name, args, step=step, rid=rid)
+        else:
+            observation = await asyncio.to_thread(self.registry.dispatch, name, args, self.ctx)
         tool_err = observation.startswith("ERROR")
         self.metrics.record_tool(name, (time.time() - tool_start) * 1000, error=tool_err)
         first_line = observation.splitlines()[0][:120] if observation else ""
@@ -512,6 +545,150 @@ class Agent:
         # The answer is the user's own words: trusted, but still redacted like
         # everything else that reaches the model.
         return CallOutcome(f"The user answered: {self.policy.redact_text(answer)}")
+
+    # ---- self-written tools (aether/toolsmith) ------------------------------------------
+
+    def _toolsmith_client(self):  # noqa: ANN202
+        return self.router.pick_client_with_failover(RouteTier.CLOUD_FRONTIER)
+
+    def _record_usage(self, resp) -> None:  # noqa: ANN001
+        record_usage_for_response(self.metrics, resp)
+
+    async def _make_tool(self, args: dict, *, step: int, rid: str) -> CallOutcome:
+        """Propose → the user approves the exact capabilities → write → check →
+        independent review → install → register. Nothing runs before approval."""
+        from ..toolsmith import executor, generate, store
+        from ..tools import toolsmith_tools
+
+        ts = self.toolsmith
+        if not ts.enabled:
+            return CallOutcome("ERROR: self-written tools are turned off "
+                               "(toolsmith.enabled in config.yaml).", error=True)
+        runnable, why = executor.can_run(ts)
+        if not runnable:
+            return CallOutcome(f"ERROR: tools cannot be made here: {why}. Do the task "
+                               "another way.", error=True)
+        manifest = toolsmith_tools.manifest_from_args(args)
+        if not manifest.network:
+            manifest.read_dirs = []        # only enforced for tools with internet access
+        errors = manifest.validate(ts.approved_roots)
+        if not manifest.how:
+            errors.append("'how' is required: say how the tool should work")
+        if manifest.network and not ts.network_cap:
+            errors.append("internet access is off for Aether (capabilities.network)")
+        if errors:
+            return CallOutcome("ERROR: the tool proposal needs changes:\n- "
+                               + "\n- ".join(errors), error=True)
+        existing = store.load(manifest.name)
+        confirm_text = toolsmith_tools.approval_text(manifest, replacing=existing is not None)
+        if self._context_is_untrusted():
+            via = getattr(self.world, "untrusted_source", "") or "context"
+            confirm_text = (f"⚠️ This run read untrusted content (via {via}). Only approve "
+                            "a tool you asked for.\n" + confirm_text)
+        self._hud_update(step=f"Asking to create {manifest.name}")
+        ok = await self._confirm(confirm_text)
+        self.audit.record("confirmation", run_id=rid, tool="make_tool", confirmed=ok,
+                          summary=confirm_text[:200], extra={"tool_name": manifest.name})
+        if not ok:
+            return CallOutcome("The user declined this tool. Do the task another way.",
+                               error=True)
+        self._hud_update(step=f"Writing {manifest.name}…")
+        self._emit({"type": "tool_call", "step": step, "tool": "make_tool",
+                    "description": f"write {manifest.name}"})
+        built = await asyncio.to_thread(
+            generate.build, self._toolsmith_client(), manifest, manifest.how,
+            abort_event=stop_ctl.abort_event(), on_response=self._record_usage)
+        if stop_ctl.is_set():
+            raise stop_ctl.StopRequested()
+        if not built.ok:
+            why_not = "; ".join(built.problems)[:600] or "no usable code"
+            self.audit.record("tool_rejected", run_id=rid, tool=manifest.name,
+                              summary=why_not[:300])
+            self._emit({"type": "tool_result", "step": step, "tool": "make_tool", "ok": False,
+                        "summary": f"{manifest.name} not installed"})
+            return CallOutcome(f"ERROR: {manifest.name} was not installed: {why_not}. Do the "
+                               "task another way.", error=True)
+        tool = await asyncio.to_thread(store.install, manifest, built.code)
+        m = tool.manifest
+        self.audit.record("tool_installed", run_id=rid, tool=m.name,
+                          summary=f"v{m.version}: {m.capability_text()}"[:300],
+                          extra={"version": m.version, "sha256": m.code_sha256,
+                                 "network": m.network, "write_dirs": m.write_dirs,
+                                 "read_dirs": m.read_dirs})
+        self.registry.register(toolsmith_tools.spec_for(tool, ts))
+        self._emit({"type": "tool_result", "step": step, "tool": "make_tool", "ok": True,
+                    "summary": f"installed {m.name} v{m.version}"})
+        return CallOutcome(f"Installed {m.signature()} (version {m.version}). It is one of "
+                           "your tools now: call it to do the task.")
+
+    async def _run_my_tool(self, name: str, args: dict, *, step: int, rid: str) -> str:
+        """Run a self-written tool; on a bug, repair it (same manifest) and retry,
+        at most toolsmith.max_repairs times per tool per run."""
+        from ..toolsmith import executor, generate, store
+        from ..toolsmith.manifest import ToolManifest
+
+        ts = self.toolsmith
+        tool = store.load(name)
+        if tool is None:
+            return f"ERROR: {name} is not installed any more."
+        while True:
+            result = await asyncio.to_thread(executor.run_tool, tool.manifest, tool.code(),
+                                             args, ts, should_stop=stop_ctl.is_set)
+            self.audit.record("tool_run", run_id=rid, tool=name,
+                              summary=f"v{tool.manifest.version} {result.kind} "
+                                      f"{result.duration_ms} ms",
+                              extra={"version": tool.manifest.version, "kind": result.kind,
+                                     "sandboxed": result.sandboxed})
+            if result.kind == "stopped":
+                raise stop_ctl.StopRequested()
+            action = generate.diagnose(result)
+            if action == "ok":
+                return result.text(name)
+            used = self._tool_repairs.get(name, 0)
+            if action != "repair":
+                return self._tool_failure_text(name, result, action, used)
+            if used >= ts.max_repairs:
+                return self._tool_failure_text(name, result, "give_up", used)
+            if self._context_is_untrusted():
+                return self._tool_failure_text(name, result, "tainted", used)
+            self._tool_repairs[name] = used + 1
+            self._hud_update(step=f"Repairing {name}…")
+            self._emit({"type": "tool_call", "step": step, "tool": name,
+                        "description": f"repair {name} ({result.kind})"})
+            built = await asyncio.to_thread(
+                generate.build, self._toolsmith_client(), tool.manifest, tool.manifest.how,
+                previous_code=tool.code(), failure=generate.failure_report(result, args),
+                abort_event=stop_ctl.abort_event(), on_response=self._record_usage)
+            if stop_ctl.is_set():
+                raise stop_ctl.StopRequested()
+            if not built.ok:
+                self.audit.record("tool_repair_rejected", run_id=rid, tool=name,
+                                  summary="; ".join(built.problems)[:300])
+                return self._tool_failure_text(name, result, "give_up", used + 1)
+            # A repair changes the code, never what the tool may do.
+            same = ToolManifest.from_dict(tool.manifest.to_dict())
+            tool = await asyncio.to_thread(store.install, same, built.code)
+            self.audit.record("tool_repaired", run_id=rid, tool=name,
+                              summary=f"v{tool.manifest.version} after {result.kind}",
+                              extra={"version": tool.manifest.version,
+                                     "sha256": tool.manifest.code_sha256})
+
+    @staticmethod
+    def _tool_failure_text(name: str, result, action: str, repairs: int) -> str:  # noqa: ANN001
+        base = f"ERROR: {name} failed ({result.kind}): {result.output[:600]}"
+        if action == "args":
+            return base + "\nCheck the arguments and call it again."
+        if action == "ask":
+            return (base + "\nIts sandbox blocked something it tried to do. If the task "
+                    "really needs that access, propose a new version with make_tool that "
+                    "declares it (the user will be asked); otherwise do the task another way.")
+        if action == "tainted":
+            return (base + "\nIt was not repaired automatically because this run read "
+                    "untrusted content. Do the task another way.")
+        if action == "give_up":
+            return (base + f"\nIt was repaired {repairs} time(s) and still fails. Do the task "
+                    "another way.")
+        return base
 
     async def _try_fast_route(self, goal: str, rid: str) -> str | None:
         """Run an unambiguous one-step request without the model (fast_router.py).
@@ -779,7 +956,7 @@ class Agent:
                 client.step,
                 system,
                 messages,
-                self.registry.schemas(),
+                self._schemas(),
                 abort_event=abort,
             )
         except stop_ctl.StopRequested:
@@ -797,7 +974,7 @@ class Agent:
                     client.step,
                     system,
                     messages,
-                    self.registry.schemas(),
+                    self._schemas(),
                     abort_event=abort,
                 )
             else:
@@ -849,6 +1026,7 @@ class Agent:
         # these a focus surface (and a granted confirmation) leaked into the
         # next goal — neither reset nor seed was called anywhere before now.
         self._ro2_grants.clear()
+        self._tool_repairs.clear()
         self.focus.reset()
         self.policy.set_run_goal(goal)
         self._hud_update(goal=goal, status="working", step="Starting…")

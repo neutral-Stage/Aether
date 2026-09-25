@@ -19,3 +19,4 @@ None so far.
 | `aether/effectors/sandbox.py`: macOS Seatbelt profile per command, roots passed as `-D` parameters | OpenAI Codex CLI | Apache-2.0 |
 | `aether/effectors/sandbox.py`: `(allow default)` then deny writes outside the roots | Bazel's macOS sandbox | Apache-2.0 |
 | `aether/perception/grounding.py`: measure the model's coordinate convention instead of assuming it | UI-TARS Desktop | Apache-2.0 |
+| `aether/toolsmith/`: propose → approve → generate → review → install → validate → repair lifecycle for tools the assistant writes itself (redesigned: the review fails closed and the tools run in a sandbox) | Samuel (screen-voice-agent) | MIT |

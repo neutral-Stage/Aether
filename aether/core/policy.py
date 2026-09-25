@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import re
 import shlex
@@ -340,6 +341,10 @@ def _money_target(name: str, args: dict, focus: "FocusState") -> str:
     return ""
 
 
+# Self-written tools (aether/toolsmith) are registered as my_<name>.
+SELF_TOOL_PREFIX = "my_"
+
+
 def normalize_file_roots(roots: list[str] | None) -> list[str]:
     """Expand ``~`` and narrow legacy ``/Users`` default to the current home."""
     home = str(Path.home())
@@ -415,6 +420,10 @@ class Policy:
         # (browser_*), which would skip it.
         if self.is_money_action(name, args, focus):
             return "destructive"
+
+        if name.startswith(SELF_TOOL_PREFIX):
+            # Self-written code: never "read", whatever its registration says.
+            return "destructive" if spec.impact == "destructive" else "reversible"
 
         if name == "run_shell":
             return ("destructive" if _shell_impact_destructive(args.get("command", ""))
@@ -681,6 +690,9 @@ class Policy:
             return f"press menu command: {str(args.get('path', ''))[:200]}"
         if name == "clipboard_set":
             return f"put on the clipboard:\n  {str(args.get('text', ''))[:300]}"
+        if name.startswith(SELF_TOOL_PREFIX):
+            shown = json.dumps(args, ensure_ascii=False, default=str)[:400]
+            return f"run your self-written tool {name} with:\n  {shown}"
         shown = ", ".join(f"{k}={str(v)[:60]}" for k, v in args.items())
         return f"{name}({shown})"
 
@@ -749,7 +761,7 @@ class Policy:
         if (spec.name == "type_text" and focus.surface == ""
                 and looks_like_command_line(str(args.get("text", "") or ""))):
             return True
-        if spec.name in self._CODE_EXEC_TOOLS:
+        if spec.name in self._CODE_EXEC_TOOLS or spec.name.startswith(SELF_TOOL_PREFIX):
             # Arbitrary code execution under untrusted content ALWAYS confirms —
             # enumerating every obfuscation (base64, ${IFS}, novel interpreters)
             # is unwinnable, so flip to "a human approves any shell/AppleScript

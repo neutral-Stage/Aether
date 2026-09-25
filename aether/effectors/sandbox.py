@@ -80,6 +80,8 @@ _GIT_CODE_PATHS = (r"/\.git/hooks(/|$)", r"/\.git/config$")
 _DEVICES_LITERAL = ("/dev/null", "/dev/zero", "/dev/tty", "/dev/stdout", "/dev/stderr",
                     "/dev/dtracehelper", "/dev/random", "/dev/urandom")
 _DEVICES_REGEX = (r"^/dev/fd/", r"^/dev/ttys[0-9]+$", r"^/dev/ptmx$")
+# Directory entries and root symlinks that path resolution reads.
+_ROOT_LINKS = ("/", "/private", "/var", "/tmp", "/etc", "/Users")
 
 
 def available() -> bool:
@@ -120,6 +122,13 @@ class Profile:
     # starts apps outside the sandbox) and signals to unsandboxed processes
     # (killing Aether or its STOP listener).
     confine_ipc: bool = True
+    # None: read anything except protected_read. A tuple: file contents are
+    # readable only under these roots (self-written tools with internet access).
+    read_roots: tuple[str, ...] | None = None
+    # No fork(); with exec_roots, programs can start only from those folders
+    # (the sandboxed interpreter itself), so spawning anything else fails too.
+    no_fork: bool = False
+    exec_roots: tuple[str, ...] | None = None
 
     def render(self) -> tuple[str, dict[str, str]]:
         """The SBPL text and its -D parameters."""
@@ -143,6 +152,12 @@ class Profile:
         lines.append("(deny file-write*")
         lines += [f"    (regex {_sb_regex(r)})" for r in _GIT_CODE_PATHS]
         lines.append(")")
+        if self.read_roots is not None:
+            lines += ["(deny file-read-data)", "(allow file-read-data"]
+            lines += [f'    (literal "{d}")' for d in (*_DEVICES_LITERAL, *_ROOT_LINKS)]
+            lines += [f"    (regex {_sb_regex(r)})" for r in _DEVICES_REGEX]
+            lines += [f"    (subpath {param('R', r)})" for r in self.read_roots]
+            lines.append(")")
         if self.protected_read:
             lines.append("(deny file-read-data")
             lines += [f"    (subpath {param('PR', p)})" for p in self.protected_read]
@@ -153,6 +168,12 @@ class Profile:
                 lines.append(")")
         if not self.network:
             lines.append("(deny network*)")
+        if self.no_fork:
+            lines.append("(deny process-fork)")
+        if self.exec_roots is not None:
+            lines += ["(deny process-exec)", "(allow process-exec"]
+            lines += [f"    (subpath {param('X', r)})" for r in self.exec_roots]
+            lines.append(")")
         if self.confine_ipc:
             lines += ["(deny appleevent-send)", "(deny lsopen)",
                       "(deny signal)", "(allow signal (target same-sandbox))"]
@@ -168,8 +189,10 @@ class Profile:
 
     def describe(self) -> str:
         net = "on" if self.network else "off"
+        reads = ("credentials unreadable" if self.read_roots is None else
+                 f"reads only {len(self.read_roots)} folder(s)")
         return (f"sandbox '{self.name}': writes only in {len(self.write_roots)} folder(s), "
-                f"credentials unreadable, network {net}")
+                f"{reads}, network {net}")
 
 
 # ---- configuration --------------------------------------------------------------

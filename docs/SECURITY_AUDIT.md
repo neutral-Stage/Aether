@@ -111,6 +111,29 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
 3. **Sidecar startup:** ✅ Python prefers Keychain → `AETHER_AUDIT_KEY` → file fallback (`GET /health` reports `audit.key_source`).
 4. **Migration:** On first launch with Keychain available, move file key to Keychain and delete `data/.audit_hmac_key`.
 
+### Self-written tools (`aether/toolsmith/`)
+
+- [x] Nothing runs before the user approves a plain-language list of what the tool may
+  access (internet or not, which folders it writes, and for internet tools which
+  folders it reads). A run that read untrusted content says so in the approval.
+- [x] Static check: standard-library allowlist, no dynamic code, reflection, dunder
+  access or process functions reached through any object.
+- [x] Independent review call that sees only the manifest and the code (never the
+  conversation) and fails closed; a rejected tool is not regenerated.
+- [x] Every run is a separate `python -I -S -B` process under a Seatbelt profile built
+  from the manifest: writes only in a fresh scratch folder and the approved folders; no
+  network unless approved; no fork, and exec only of the Python interpreter; no Apple
+  Events, LaunchServices or signals; credentials and Aether's data folder unreadable;
+  internet tools read only their declared folders. CPU, file-size and open-file limits.
+- [x] No sandbox (not macOS, or `sandbox.enabled: false`) means the tool does not run.
+- [x] Results are framed with a per-run nonce the tool never sees, and flow through the
+  same injection scan as every other tool result.
+- [x] Automatic repairs (at most 2 per tool per run) keep the approved manifest, go
+  through the same check and review, and never happen in a run that read untrusted
+  content. Every install, run, repair, removal and rollback is in the audit log.
+- [x] Under untrusted content every `my_*` call needs a confirmation of the exact
+  arguments (Rule of Two); tested live on macOS in `tests/security/test_toolsmith_live.py`.
+
 ### STOP (FR-26)
 
 - [x] Global event checked before tool dispatch
@@ -194,6 +217,12 @@ Categories: prompt injection, red-team, MCP SSRF/policy, skill replay, sidecar h
     items (macOS prompts for items not shared with it), and `run_applescript`
     is not sandboxed at all (it is gated as code execution instead). The
     profile is tested on real macOS in CI (`tests/security/test_sandbox_live.py`).
+11. **A self-written tool without internet access can read your files.** It can
+    read anything outside the credential stores and Aether's data folder and return it
+    as its result, which goes to the model like any other tool result. It cannot send
+    it anywhere itself. The review and the approval are the check on intent; the
+    sandbox limits what it can change. Tools with internet access read only their
+    declared folders.
 
 ---
 

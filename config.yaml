@@ -76,6 +76,18 @@ sandbox:
   extra_deny_read: []
   protect_self: true           # Aether's config, data dir, .env and audit key
 
+# Self-written tools: when no tool fits, Aether proposes one (make_tool), you
+# approve exactly what it may access, a separate review checks the code, and
+# every run is a separate Python process in the macOS sandbox. Installed tools
+# live in <data dir>/tools/ as my_<name>.
+toolsmith:
+  enabled: true
+  timeout_s: 60                    # per run (max 300)
+  max_repairs: 2                   # automatic fixes per tool per run (0-2); never widen access
+  restrict_reads_with_network: true   # a tool with internet access reads only its declared folders
+  extra_read_roots: []             # more folders such tools may read (e.g. a custom Python install)
+  allow_unsandboxed: false         # tests only: run tools without the macOS sandbox
+
 # Signed append-only audit log (§6.7 FR-29)
 audit:
   enabled: true

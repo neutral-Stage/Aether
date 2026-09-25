@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 65,
+  "tool_count": 66,
   "tools": [
     {
       "name": "get_screen_context",
@@ -221,6 +221,10 @@
     {
       "name": "click_mark",
       "file": "click_mark.json"
+    },
+    {
+      "name": "make_tool",
+      "file": "make_tool.json"
     },
     {
       "name": "delegate_to_coder",

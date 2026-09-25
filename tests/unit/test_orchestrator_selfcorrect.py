@@ -130,3 +130,20 @@ def test_validator_rejects_orphaned_tool_use() -> None:
     ]
     with pytest.raises(AssertionError):
         _assert_valid_conversation(bad)
+
+
+@pytest.mark.unit
+def test_screen_check_only_for_ui_actions(agent, monkeypatch) -> None:
+    """An unchanged screen after a shell command or a file write is not a failure;
+    after a click it is."""
+    monkeypatch.setattr(agent.registry, "dispatch", lambda name, args, ctx: f"did {name}")
+    monkeypatch.setattr(agent, "_confirm", lambda text: asyncio.sleep(0, True))
+
+    def call(name: str, args: dict):  # noqa: ANN202
+        return asyncio.run(agent._execute_call(name, args, step=1, rid="t"))  # noqa: SLF001
+
+    shell = call("run_shell", {"command": "echo hi"})
+    assert shell.content == "did run_shell" and shell.correction is None
+    assert call("write_file", {"path": "~/aether-verify.txt", "content": "x"}).content == "did write_file"
+    assert call("clipboard_set", {"text": "x"}).correction is None
+    assert "VERIFY FAILED after click" in call("click", {"x": 5, "y": 5}).correction
