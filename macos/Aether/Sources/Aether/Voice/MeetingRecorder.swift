@@ -192,35 +192,34 @@ final class AppAudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 }
 
-/// The user's microphone ("me"), on its own engine so push-to-talk keeps working.
+/// The user's microphone ("me"), fed from the shared mic hub so push-to-talk,
+/// dictation and the rest keep working while a meeting is being recorded.
 final class MicTap {
     let buffer = MeetingSampleBuffer()
-    private let engine = AVAudioEngine()
-    private var running = false
+    private let hub: MicHub
+    private let converter = MicConverter()
+    private var subscription: MicSubscription?
+
+    init(hub: MicHub = .shared) {
+        self.hub = hub
+    }
 
     func start() throws {
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
+        let format = hub.currentFormat
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw MeetingCaptureError.noMicrophone
         }
-        let rate = format.sampleRate
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] pcm, _ in
-            guard let self, let channels = pcm.floatChannelData else { return }
-            let mono = Array(UnsafeBufferPointer(start: channels[0], count: Int(pcm.frameLength)))
-            self.buffer.append(MeetingAudio.resample(mono, from: rate,
-                                                     to: Double(MeetingAudio.sampleRate)))
+        subscription = try hub.subscribe { [weak self] pcm in
+            guard let self else { return }
+            let mono = self.converter.convert(pcm)
+            guard !mono.isEmpty else { return }
+            self.buffer.append(mono)
         }
-        engine.prepare()
-        try engine.start()
-        running = true
     }
 
     func stop() {
-        guard running else { return }
-        running = false
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        subscription?.cancel()
+        subscription = nil
     }
 }
 

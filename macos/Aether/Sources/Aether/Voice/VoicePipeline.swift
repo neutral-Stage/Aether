@@ -11,10 +11,14 @@ final class VoicePipeline: ObservableObject {
     private let audio: AudioEngine
     private let stt: STTBridge
     private let tts: TTSBridge
+    /// Its own recognition session, independent of `STTBridge`'s default one
+    /// (the wake listener), so the two no longer cancel each other.
+    private lazy var partialRecognizer = stt.makePartialRecognizer()
 
     private var monitorTask: Task<Void, Never>?
     private var onBargeIn: (() -> Void)?
     private var energyThreshold: Float = 0.02
+    private static let monitorOwner = "barge-in"
 
     init(audio: AudioEngine, stt: STTBridge, tts: TTSBridge) {
         self.audio = audio
@@ -53,14 +57,15 @@ final class VoicePipeline: ObservableObject {
     func stopAll() {
         stopBargeInMonitor()
         tts.stop()
-        audio.stopContinuousMonitoring()
+        audio.stopContinuousMonitoring(owner: Self.monitorOwner)
         isListeningDuringTTS = false
     }
 
     private func startBargeInMonitor() {
         stopBargeInMonitor()
         do {
-            try audio.startContinuousMonitoring(threshold: energyThreshold) { [weak self] energy in
+            try audio.startContinuousMonitoring(owner: Self.monitorOwner,
+                                                threshold: energyThreshold) { [weak self] energy in
                 guard let self else { return }
                 Task { @MainActor in
                     self.handleMicEnergy(energy)
@@ -71,7 +76,7 @@ final class VoicePipeline: ObservableObject {
         }
 
         monitorTask = Task { @MainActor in
-            await stt.startPartialRecognition { [weak self] partial in
+            await partialRecognizer.start { [weak self] partial in
                 Task { @MainActor in
                     guard let self else { return }
                     self.partialTranscript = partial
@@ -86,8 +91,8 @@ final class VoicePipeline: ObservableObject {
     private func stopBargeInMonitor() {
         monitorTask?.cancel()
         monitorTask = nil
-        stt.stopPartialRecognition()
-        audio.stopContinuousMonitoring()
+        partialRecognizer.stop()
+        audio.stopContinuousMonitoring(owner: Self.monitorOwner)
     }
 
     private func handleMicEnergy(_ energy: Float) {

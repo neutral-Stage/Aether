@@ -92,6 +92,12 @@ It saves a result table under `~/Library/Application Support/Aether/validation/`
 - Mid-task, press ⌃⇧S (or the HUD's STOP). It should halt immediately.
 - `curl -s http://127.0.0.1:8765/audit/verify` (with the bearer token if set)
   should report `ok: true`.
+- Hold ⌃Space, say something, and release. The macOS menu-bar mic indicator (the
+  orange dot) should turn off within a moment of releasing — if it stays on,
+  something is still holding the microphone open.
+- ⌃⌥D into a text field and dictate a full sentence. The pasted transcript should
+  read back correctly, not garbled, sped up or slowed down — that would mean the
+  recording isn't actually at 16 kHz.
 
 ## Coding agents (optional)
 

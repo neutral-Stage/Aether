@@ -42,6 +42,7 @@ final class AppState: ObservableObject {
         listener.isBusy = { [weak self] in
             guard let self else { return true }
             return self.isPTTHeld || self.isTalkHeld || self.tts.isSpeaking || self.client.isRunning
+                || self.dictation.state != .idle || self.quickSkills.recordingSkillId != nil
         }
         listener.onCommand = { [weak self] command in
             guard let self else { return }
@@ -796,7 +797,8 @@ final class AppState: ObservableObject {
     // MARK: - Talk mode (hold ⌃⌥, ask about what the mouse points at)
 
     func beginTalk(at point: CGPoint) {
-        guard !isPTTHeld, !isTalkHeld, dictation.state == .idle else { return }
+        guard !isPTTHeld, !isTalkHeld, dictation.state == .idle, quickSkills.recordingSkillId == nil
+        else { return }
         isTalkHeld = true
         talkPointer = point
         voice.stopAll()

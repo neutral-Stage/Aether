@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import XCTest
 @testable import Aether
 
@@ -516,5 +517,171 @@ final class MeetingAudioTests: XCTestCase {
         XCTAssertEqual(local.whereText, "on this Mac")
         XCTAssertEqual(MeetingTranscription.parse(["engine": "groq"]).whereText, "with Groq")
         XCTAssertFalse(MeetingTranscription.parse([:]).ready)
+    }
+}
+
+/// A fake `MicInput` so `MicHub`'s subscriber bookkeeping can be tested without a
+/// real `AVAudioEngine` (there is no microphone on the CI/Linux box this runs on).
+private final class FakeMicInput: MicInput {
+    var format: AVAudioFormat
+    private(set) var isRunning = false
+    private(set) var tapInstallCount = 0
+    private(set) var tapRemoveCount = 0
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+    var startError: Error?
+    private var tapBlock: ((AVAudioPCMBuffer, AVAudioTime) -> Void)?
+
+    init(format: AVAudioFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!) {
+        self.format = format
+    }
+
+    func installTap(_ block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) {
+        tapInstallCount += 1
+        tapBlock = block
+    }
+
+    func removeTap() {
+        tapRemoveCount += 1
+        tapBlock = nil
+    }
+
+    func start() throws {
+        if let startError {
+            throw startError
+        }
+        startCount += 1
+        isRunning = true
+    }
+
+    func stop() {
+        stopCount += 1
+        isRunning = false
+    }
+
+    /// Simulate the engine handing a buffer to whichever tap is installed.
+    func deliver(_ buffer: AVAudioPCMBuffer) {
+        tapBlock?(buffer, AVAudioTime(hostTime: 0))
+    }
+}
+
+private func makeTestBuffer(frames: AVAudioFrameCount = 10,
+                            format: AVAudioFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000,
+                                                                  channels: 1)!) -> AVAudioPCMBuffer {
+    let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+    buffer.frameLength = frames
+    return buffer
+}
+
+final class MicHubTests: XCTestCase {
+    func testFirstSubscriberStartsTheInput() throws {
+        let fake = FakeMicInput()
+        let hub = MicHub(input: fake)
+        XCTAssertFalse(fake.isRunning)
+        // Keep the subscription alive: letting it go cancels it (and stops the mic).
+        let sub = try hub.subscribe { _ in }
+        XCTAssertTrue(fake.isRunning)
+        XCTAssertEqual(fake.startCount, 1)
+        XCTAssertEqual(fake.tapInstallCount, 1)
+        sub.cancel()
+    }
+
+    func testDroppingTheLastSubscriptionReleasesTheMic() throws {
+        let fake = FakeMicInput()
+        let hub = MicHub(input: fake)
+        do {
+            _ = try hub.subscribe { _ in }
+        }
+        XCTAssertFalse(fake.isRunning)
+        XCTAssertEqual(fake.stopCount, 1)
+    }
+
+    func testBufferFansOutToEverySubscriber() throws {
+        let fake = FakeMicInput()
+        let hub = MicHub(input: fake)
+        var count1 = 0
+        var count2 = 0
+        let sub1 = try hub.subscribe { _ in count1 += 1 }
+        let sub2 = try hub.subscribe { _ in count2 += 1 }
+        fake.deliver(makeTestBuffer())
+        XCTAssertEqual(count1, 1)
+        XCTAssertEqual(count2, 1)
+        sub1.cancel()
+        sub2.cancel()
+    }
+
+    func testInputStopsOnlyWhenTheLastSubscriptionIsCancelled() throws {
+        let fake = FakeMicInput()
+        let hub = MicHub(input: fake)
+        let sub1 = try hub.subscribe { _ in }
+        let sub2 = try hub.subscribe { _ in }
+        sub1.cancel()
+        XCTAssertTrue(fake.isRunning)
+        XCTAssertEqual(fake.tapRemoveCount, 0, "one subscriber remains; the tap must stay up")
+        sub2.cancel()
+        XCTAssertFalse(fake.isRunning)
+        XCTAssertEqual(fake.tapRemoveCount, 1)
+        XCTAssertEqual(fake.stopCount, 1)
+    }
+
+    func testCancellingTwiceIsHarmless() throws {
+        let fake = FakeMicInput()
+        let hub = MicHub(input: fake)
+        let sub = try hub.subscribe { _ in }
+        sub.cancel()
+        sub.cancel()
+        XCTAssertEqual(fake.stopCount, 1)
+        XCTAssertEqual(fake.tapRemoveCount, 1)
+    }
+
+    func testThrowingStartRollsBackTheSubscription() {
+        let fake = FakeMicInput()
+        fake.startError = NSError(domain: "test", code: 1)
+        let hub = MicHub(input: fake)
+        XCTAssertThrowsError(try hub.subscribe { _ in })
+        XCTAssertEqual(fake.tapInstallCount, 1)
+        XCTAssertEqual(fake.tapRemoveCount, 1, "the tap installed for the failed start must be removed")
+        XCTAssertFalse(fake.isRunning)
+
+        // A later, successful subscribe should still work — nothing was left dangling.
+        fake.startError = nil
+        var delivered = 0
+        let sub = try? hub.subscribe { _ in delivered += 1 }
+        XCTAssertNotNil(sub)
+        XCTAssertTrue(fake.isRunning)
+        fake.deliver(makeTestBuffer())
+        XCTAssertEqual(delivered, 1)
+        sub?.cancel()
+    }
+}
+
+final class MicConverterTests: XCTestCase {
+    private func fill(_ buffer: AVAudioPCMBuffer) {
+        guard let channels = buffer.floatChannelData else { return }
+        for c in 0 ..< Int(buffer.format.channelCount) {
+            for i in 0 ..< Int(buffer.frameLength) {
+                channels[c][i] = sinf(Float(i) * 0.05)
+            }
+        }
+    }
+
+    func testDownsamples48kMonoToRoughly16k() {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000)!
+        buffer.frameLength = 48_000
+        fill(buffer)
+
+        let out = MicConverter().convert(buffer)
+        XCTAssertTrue(abs(out.count - 16_000) <= 200, "expected ~16000 samples, got \(out.count)")
+    }
+
+    func testDownmixesAndDownsamples44_1kStereoToRoughly16k() {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100)!
+        buffer.frameLength = 44_100
+        fill(buffer)
+
+        let out = MicConverter().convert(buffer)
+        XCTAssertTrue(abs(out.count - 16_000) <= 200, "expected ~16000 samples, got \(out.count)")
     }
 }

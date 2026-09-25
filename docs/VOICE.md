@@ -1,5 +1,17 @@
 # Voice pipeline — Phase 7 + Phase 10
 
+## One microphone
+
+`Voice/MicHub.swift` is the only place that opens a microphone-facing `AVAudioEngine`.
+Push-to-talk, talk mode, dictation, spoken quick skills, barge-in, ambient/wake-word
+listening, realtime voice streaming and meeting notes all subscribe to `MicHub.shared`
+instead of running their own engine or tap. The mic starts on the first subscriber and
+is released — the menu-bar mic indicator turns off — as soon as the last one stops
+listening; several features can share it at once (e.g. barge-in and ambient wake
+monitor independently). Anything that needs plain float samples (recording, meeting
+audio) resamples through `MicConverter` to a genuine 16 kHz mono stream, so speech-to-text
+isn't fed audio at the wrong rate.
+
 ## Current state
 
 - **Barge-in:** `VoicePipeline.swift` ducks TTS (~85% volume) and stops playback when mic energy or partial STT exceeds threshold.

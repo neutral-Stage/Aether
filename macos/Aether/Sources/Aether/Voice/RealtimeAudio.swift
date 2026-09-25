@@ -76,40 +76,42 @@ final class PCMStreamPlayer {
 }
 
 /// Microphone → 24 kHz mono PCM16 chunks for the Realtime API. Runs only while
-/// push-to-talk is held; nothing is streamed otherwise.
+/// push-to-talk is held; nothing is streamed otherwise. Subscribes to the shared
+/// mic hub, so it doesn't open its own `AVAudioEngine`.
 @MainActor
 final class RealtimeMicStreamer {
     var onChunk: ((Data) -> Void)?
     private(set) var isRunning = false
 
-    private let engine = AVAudioEngine()
+    private let hub: MicHub
     private let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24_000,
                                        channels: 1, interleaved: true)!
+    private var subscription: MicSubscription?
+
+    init(hub: MicHub = .shared) {
+        self.hub = hub
+    }
 
     func start() throws {
         guard !isRunning else { return }
-        let input = engine.inputNode
-        let inFormat = input.outputFormat(forBus: 0)
-        guard let converter = AVAudioConverter(from: inFormat, to: target) else {
+        guard let converter = AVAudioConverter(from: hub.currentFormat, to: target) else {
             throw NSError(domain: "Aether", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Can't convert microphone audio"])
         }
         let target = self.target
-        input.installTap(onBus: 0, bufferSize: 2400, format: inFormat) { [weak self] buffer, _ in
+        subscription = try hub.subscribe { [weak self] buffer in
             guard let data = RealtimeMicStreamer.convert(buffer, with: converter, to: target) else {
                 return
             }
             Task { @MainActor in self?.onChunk?(data) }
         }
-        engine.prepare()
-        try engine.start()
         isRunning = true
     }
 
     func stop() {
         guard isRunning else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        subscription?.cancel()
+        subscription = nil
         isRunning = false
     }
 
