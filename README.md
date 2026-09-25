@@ -12,6 +12,28 @@ limitations.
 > Use `--careful` to confirm every action. See **`BETA.md`** for beta install and
 > **`docs/SUPPORT.md`** for troubleshooting.
 
+> **Status:** everything below builds and passes its tests in CI (Python, and the
+> Swift app on macOS runners), but none of it has been run on a real Mac yet.
+> Start with **[`docs/FIRST_RUN.md`](docs/FIRST_RUN.md)**, the validation gate, and
+> record results in [`docs/VALIDATION_LOG.md`](docs/VALIDATION_LOG.md).
+
+---
+
+## Feature guides
+
+| Feature | Guide |
+|---|---|
+| First run and validation on your Mac | [`docs/FIRST_RUN.md`](docs/FIRST_RUN.md) |
+| Voice: push-to-talk, talk mode, wake word, dictation, realtime | [`docs/VOICE.md`](docs/VOICE.md) |
+| Quick skills on ⌃⌥1–9 | [`docs/QUICK_SKILLS.md`](docs/QUICK_SKILLS.md) |
+| Tools Aether writes for itself | [`docs/SELF_WRITTEN_TOOLS.md`](docs/SELF_WRITTEN_TOOLS.md) |
+| Coding agents and the warm pool | [`docs/FLEET.md`](docs/FLEET.md) |
+| Screen memory (opt-in) | [`docs/SCREEN_MEMORY.md`](docs/SCREEN_MEMORY.md) |
+| Meeting notes | [`docs/MEETINGS.md`](docs/MEETINGS.md) |
+| Proactive hints (opt-in) | [`docs/HINTS.md`](docs/HINTS.md) |
+| App knowledge packs | [`docs/KNOWLEDGE_PACKS.md`](docs/KNOWLEDGE_PACKS.md) |
+| Benchmark in a macOS VM | [`docs/BENCHMARK_VM.md`](docs/BENCHMARK_VM.md) |
+
 ---
 
 ## GA readiness (Phase 12)
