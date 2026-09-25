@@ -1,0 +1,28 @@
+# Aether — project metadata and tool configuration.
+#
+# Dependencies live in the requirements*.txt files (pip-friendly, used by CI and
+# by the app bundler); `requirements.lock` pins the full universal resolution.
+# Regenerate the lock with `make lock` after changing any requirements file.
+
+[project]
+name = "aether"
+dynamic = ["version"]
+description = "Aether — a voice- and text-driven macOS agent that operates any app."
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 110
+extend-exclude = ["spikes", "macos", "plugins", "docs"]
+
+[tool.ruff.lint]
+# Explicit selection: newer ruff releases widen the default rule set, which made
+# CI fail on an unpinned ruff while local runs passed. Keep this list explicit.
+select = ["E4", "E7", "E9", "F"]
+# Codes referenced by existing `# noqa:` comments that are not selected here.
+external = ["ANN001", "ANN002", "ANN003", "ARG002", "BLE001", "S110", "S602", "S603", "SLF001"]
+
+[tool.ruff.lint.per-file-ignores]
+# Scripts put the repo root on sys.path before importing aether.
+"scripts/*.py" = ["E402"]

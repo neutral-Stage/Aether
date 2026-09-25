@@ -1,0 +1,34 @@
+# Aether runtime dependencies (what the bundled app and sidecar need).
+# Python 3.11+ on macOS (Apple Silicon recommended). Dev/test tools live in
+# requirements-sidecar.txt. Full pinned resolution: requirements.lock.
+
+# --- Core ---
+anthropic>=1.0,<2           # Anthropic provider (failover + computer-use fallback)
+openai>=1.50,<4             # OpenAI-compatible providers (Z.ai GLM default), Whisper, embeddings
+httpx>=0.27,<1              # OpenAI-compatible transport, MCP SSE client
+python-dotenv>=1.0,<2       # load API keys from .env
+PyYAML>=6.0,<7              # config.yaml, knowledge packs
+jsonschema>=4.23,<5         # config validation
+numpy>=1.24,<3              # memory embeddings, audio buffers
+
+# --- macOS native bridges (macOS only) ---
+pyobjc-core>=10.3,<13; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10.3,<13; sys_platform == "darwin"               # NSWorkspace, NSPasteboard
+pyobjc-framework-Quartz>=10.3,<13; sys_platform == "darwin"              # CGEvent input, capture
+pyobjc-framework-ApplicationServices>=10.3,<13; sys_platform == "darwin" # Accessibility (AXUIElement)
+pyobjc-framework-Vision>=10.3,<13; sys_platform == "darwin"              # on-device OCR
+
+# --- CLI HUD + STOP hotkey ---
+rumps>=0.4,<1; sys_platform == "darwin"   # legacy CLI menu-bar HUD
+pynput>=1.7.6,<2                          # global STOP hotkey (CLI path)
+
+# --- Browser automation (optional at runtime: `playwright install chromium`) ---
+playwright>=1.47,<2
+
+# --- Voice (push-to-talk capture; needs PortAudio: `brew install portaudio`) ---
+sounddevice>=0.4.6,<1
+
+# --- Sidecar HTTP server ---
+fastapi>=0.115,<1
+uvicorn[standard]>=0.32,<1
+websockets>=12,<18          # realtime voice bridge

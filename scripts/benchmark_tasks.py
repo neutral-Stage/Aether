@@ -22,7 +22,6 @@ from tests.benchmark.scorer import (  # noqa: E402
     load_tasks,
     run_mock_suite,
     run_repeat_suite,
-    score_trace,
     summarize,
     summarize_repeat,
 )

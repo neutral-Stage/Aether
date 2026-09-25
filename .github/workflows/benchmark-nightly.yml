@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-sidecar.txt
+          pip install -r requirements.lock
 
       - name: Mock benchmark (default)
         run: python scripts/benchmark_tasks.py --mock

@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, "claude/**"]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 jobs:
   python:
@@ -17,17 +18,18 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: requirements.lock
 
-      - name: Install dependencies
+      - name: Install dependencies (exact pins)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-sidecar.txt
+          pip install -r requirements.lock
 
       - name: Compile Python
         run: python -m compileall -q aether sidecar tests aether/plugins plugins
 
       - name: Ruff
-        run: ruff check aether sidecar tests
+        run: ruff check aether sidecar tests scripts
 
       - name: Run pytest
         run: python -m pytest tests/ -q

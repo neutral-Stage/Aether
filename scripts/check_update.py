@@ -27,11 +27,11 @@ def parse_parts(v: str) -> list[int]:
 
 
 def is_newer(remote: str, local: str) -> bool:
-    r, l = parse_parts(remote), parse_parts(local)
-    n = max(len(r), len(l))
+    r, loc = parse_parts(remote), parse_parts(local)
+    n = max(len(r), len(loc))
     for i in range(n):
         rv = r[i] if i < len(r) else 0
-        lv = l[i] if i < len(l) else 0
+        lv = loc[i] if i < len(loc) else 0
         if rv > lv:
             return True
         if rv < lv:
