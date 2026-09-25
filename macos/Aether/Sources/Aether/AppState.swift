@@ -46,6 +46,16 @@ final class AppState: ObservableObject {
     @Published var isTalkHeld = false
     private var talkPointer: CGPoint?
     private var talkSessionId: String?
+    // Streamed talk answers: spoken clause by clause as talk_token events arrive.
+    private var streamingTalkId: String?
+    private var talkSplitter = ClauseSplitter()
+    private var talkPartial = ""
+    private var talkStreamed = false
+    private var talkDoneSeen = false
+    private var speechChain: Task<Void, Never>?
+    // An agent run's streamed reply (token events), per step.
+    private var streamStep = -1
+    private var streamText = ""
     private var activeGuideId: String?
     let nativeEffector = NativeEffectorServer(port: AetherConfig.nativeEffectorPort)
     lazy var stopController = StopController { [weak self] in
@@ -219,6 +229,8 @@ final class AppState: ObservableObject {
             guard let self else { return }
             switch event {
             case .runStart(_, let g):
+                self.streamStep = -1
+                self.streamText = ""
                 self.world.goal = g
                 self.world.transcript = g
                 self.world.status = "working"
@@ -262,8 +274,17 @@ final class AppState: ObservableObject {
                 self.sessionId = sid
             case .pointer(let targets):
                 self.overlay.show(targets: targets)
-            case .guideStep, .guideDone:
+            case .guideStep, .guideDone, .talkToken, .talkDone:
                 self.handleBackgroundEvent(event)
+            case let .token(step, text):
+                // The model's reply as it streams, shown until the next action.
+                if step != self.streamStep {
+                    self.streamStep = step
+                    self.streamText = ""
+                }
+                self.streamText += text
+                self.world.currentStep = self.streamText
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
             case .step(let payload):
                 if (payload["type"] as? String) == "tool_call",
                    let desc = payload["description"] as? String {
@@ -299,6 +320,16 @@ final class AppState: ObservableObject {
     /// Events from the persistent /events stream (proactive runs, guide mode).
     func handleBackgroundEvent(_ event: SidecarEvent) {
         switch event {
+        case let .talkToken(id, text):
+            guard id == streamingTalkId else { return }
+            talkPartial += text
+            world.currentStep = talkPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+            refreshHUD()
+            for clause in talkSplitter.feed(text) { speakInOrder(clause) }
+        case let .talkDone(id, _):
+            guard id == streamingTalkId else { return }
+            if let rest = talkSplitter.flush() { speakInOrder(rest) }
+            talkDoneSeen = true
         case .runRequest(let goal):
             if !client.isRunning { submitGoal(goal) }
         case let .guideStep(id, index, total, say, target):
@@ -371,6 +402,17 @@ final class AppState: ObservableObject {
         await tts.speak("Confirm: \(description). Say yes or no.")
     }
 
+    /// Queue speech behind whatever is already being said (streamed talk clauses).
+    private func speakInOrder(_ text: String) {
+        talkStreamed = true
+        let previous = speechChain
+        speechChain = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled else { return }
+            await self.speakWithBargeIn(text)
+        }
+    }
+
     func speakWithBargeIn(_ text: String) async {
         guard bargeInEnabled else {
             let start = Date()
@@ -422,6 +464,9 @@ final class AppState: ObservableObject {
         pendingQuestionId = nil
         lastRunEnded = Date()
         overlay.clear()
+        speechChain?.cancel()
+        speechChain = nil
+        streamingTalkId = nil
         if isTalkHeld { cancelTalk() }
         if let guideId = activeGuideId {
             activeGuideId = nil
@@ -543,14 +588,30 @@ final class AppState: ObservableObject {
                 handleStop()
                 return
             }
+            let talkId = String(UUID().uuidString.lowercased().prefix(12))
+            streamingTalkId = talkId
+            talkSplitter = ClauseSplitter()
+            talkPartial = ""
+            talkStreamed = false
+            talkDoneSeen = false
             let reply = try await client.talk(question: question, at: talkPointer,
-                                              sessionId: talkSessionId)
+                                              sessionId: talkSessionId, talkId: talkId)
             talkSessionId = reply.sessionId
             lastResult = reply.answer
             world.currentStep = reply.answer
             overlay.show(targets: reply.targets)
             refreshHUD()
-            await speakWithBargeIn(reply.answer)
+            // The streamed events and the reply travel separately: give the last
+            // events a moment, then speak whatever did not arrive as a stream.
+            for _ in 0 ..< 8 where !talkDoneSeen {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            streamingTalkId = nil
+            if !talkStreamed {
+                await speakWithBargeIn(reply.answer)
+            } else if !talkDoneSeen, let rest = talkSplitter.flush() {
+                speakInOrder(rest)
+            }
         } catch {
             lastResult = error.localizedDescription
             world.currentStep = error.localizedDescription

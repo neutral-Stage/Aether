@@ -231,3 +231,44 @@ final class GuideIntentTests: XCTestCase {
         XCTAssertEqual(status, "stopped")
     }
 }
+
+final class StreamingSpeechTests: XCTestCase {
+    func testClausesComeOutAsSoonAsTheyEnd() {
+        var s = ClauseSplitter()
+        XCTAssertEqual(s.feed("Open System Set"), [])
+        XCTAssertEqual(s.feed("tings. Then click"), ["Open System Settings."])
+        XCTAssertEqual(s.feed(" Bluetooth!\nIt is on the left"), ["Then click Bluetooth!"])
+        XCTAssertEqual(s.flush(), "It is on the left")
+        XCTAssertNil(s.flush())
+    }
+
+    func testCommasSplitOnlyLongClausesAndDecimalsStayWhole() {
+        var s = ClauseSplitter()
+        XCTAssertEqual(s.feed("Yes, it is. "), ["Yes, it is."])
+        let long = "The volume slider sits in the Control Centre at the top right, "
+        XCTAssertEqual(s.feed(long + "next to Wi-Fi"),
+                       ["The volume slider sits in the Control Centre at the top right,"])
+        XCTAssertEqual(s.feed(" 2.5 GB free"), [])
+        XCTAssertEqual(s.flush(), "next to Wi-Fi 2.5 GB free")
+    }
+
+    func testTokenEvents() {
+        let tok = SidecarEvent.parse(["type": "talk_token", "talk_id": "t1", "text": "Hi "],
+                                     fallbackGoal: "")
+        guard case let .talkToken(id, text)? = tok.first else { return XCTFail("no talk token") }
+        XCTAssertEqual(id, "t1")
+        XCTAssertEqual(text, "Hi ")
+        let done = SidecarEvent.parse(["type": "talk_done", "talk_id": "t1", "answer": "Hi"],
+                                      fallbackGoal: "")
+        guard case let .talkDone(doneId, answer)? = done.first else { return XCTFail("no done") }
+        XCTAssertEqual(doneId, "t1")
+        XCTAssertEqual(answer, "Hi")
+        let run = SidecarEvent.parse(["type": "token", "step": 3, "text": "Opening"],
+                                     fallbackGoal: "")
+        guard case let .token(step, runText)? = run.first else { return XCTFail("no token") }
+        XCTAssertEqual(step, 3)
+        XCTAssertEqual(runText, "Opening")
+        XCTAssertTrue(SidecarEvent.parse(["type": "talk_token", "text": "x"], fallbackGoal: "")
+            .isEmpty)
+    }
+}

@@ -4,6 +4,7 @@ Kept provider-isolated so the router can swap backends per step.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -11,7 +12,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +77,65 @@ class LLMBackend(Protocol):
     ) -> LLMResponse: ...
 
 
+TokenCallback = Callable[[str], None]
+
+
+def accepts_on_token(step_fn: Any) -> bool:
+    """Does this step() take on_token= (a streaming backend)?"""
+    try:
+        params = inspect.signature(step_fn).parameters
+    except (TypeError, ValueError):
+        return False
+    # Only an explicit parameter counts: a wrapper taking **kwargs may forward to a
+    # step() that doesn't stream.
+    return "on_token" in params
+
+
+def step_with_tokens(client: Any, system: str, messages: list[dict], tools: list[dict], *,
+                     abort_event: threading.Event | None = None,
+                     on_token: TokenCallback | None = None) -> Any:
+    """client.step(), streaming text to ``on_token`` when the backend can.
+
+    Backends that can't stream deliver their text as one chunk at the end.
+    """
+    if on_token is not None and accepts_on_token(client.step):
+        return client.step(system, messages, tools, abort_event=abort_event, on_token=on_token)
+    resp = client.step(system, messages, tools, abort_event=abort_event)
+    if on_token is not None and getattr(resp, "text", ""):
+        on_token(resp.text)
+    return resp
+
+
+class TokenGate:
+    """Pass streamed text through, except a turn that is really a tool call written
+    as text (JSON or a code fence), which some models emit instead of tool_calls."""
+
+    def __init__(self, sink: TokenCallback) -> None:
+        self.sink = sink
+        self._head = ""
+        self._decided: bool | None = None       # True: pass, False: suppress
+
+    def __call__(self, chunk: str) -> None:
+        if not chunk or self._decided is False:
+            return
+        if self._decided is None:
+            self._head += chunk
+            stripped = self._head.lstrip()
+            if len(stripped) < 3:
+                return
+            self._decided = not stripped.startswith(("{", "[", "```", "<tool", "<|"))
+            if self._decided:
+                self.sink(self._head)
+            return
+        self.sink(chunk)
+
+    def flush(self) -> None:
+        """End of turn: release a short held-back head (e.g. "Ok")."""
+        if self._decided is None and self._head.strip():
+            self.sink(self._head)
+        self._decided = self._decided if self._decided is not None else True
+
+
 # Current Claude models reject sampling parameters (temperature/top_p/top_k)
 # with a 400; older ones (Sonnet/Opus 4.6, Haiku 4.5) still accept them. The
 # 1.x SDK removed these keywords from messages.create, so they travel in
@@ -116,8 +176,9 @@ class LLM:
             return {"extra_body": {"temperature": self.temperature}}
         return {}
 
-    def _create(self, abort_event: threading.Event | None, **params: Any):  # noqa: ANN202
-        """One messages.create call on a STOP-cancellable client."""
+    def _create(self, abort_event: threading.Event | None, *,  # noqa: ANN202
+                on_token: TokenCallback | None = None, **params: Any):
+        """One messages call on a STOP-cancellable client (streamed with on_token)."""
         _check_abort(abort_event)
         import anthropic
         from . import stop as stop_ctl
@@ -130,8 +191,19 @@ class LLM:
         try:
             client = anthropic.Anthropic(api_key=self._api_key, http_client=http_client)
             _check_abort(abort_event)
-            return client.messages.create(model=self.model, max_tokens=self.max_tokens,
-                                          **self._sampling(), **params)
+            if on_token is None:
+                return client.messages.create(model=self.model, max_tokens=self.max_tokens,
+                                              **self._sampling(), **params)
+            try:
+                with client.messages.stream(model=self.model, max_tokens=self.max_tokens,
+                                            **self._sampling(), **params) as stream:
+                    for text in stream.text_stream:
+                        on_token(text)
+                    return stream.get_final_message()
+            except Exception as e:  # noqa: BLE001
+                if stop_ctl.is_set() or (abort_event is not None and abort_event.is_set()):
+                    raise stop_ctl.StopRequested() from e
+                raise
         finally:
             stop_ctl.unregister_http_closer(closer)
             try:
@@ -146,9 +218,11 @@ class LLM:
         tools: list[dict],
         *,
         abort_event: threading.Event | None = None,
+        on_token: TokenCallback | None = None,
     ) -> LLMResponse:
         """One model turn. `messages` is the running Anthropic message list."""
-        resp = self._create(abort_event, system=system, tools=tools, messages=messages)
+        resp = self._create(abort_event, on_token=on_token, system=system, tools=tools,
+                            messages=messages)
         text_parts: list[str] = []
         tool_calls: list[dict] = []
         for block in resp.content:
@@ -338,6 +412,45 @@ def prune_images(messages: list[dict], keep: int = 2) -> int:
     return dropped
 
 
+def _stream_chat(client: Any, kwargs: dict[str, Any],
+                 on_token: TokenCallback) -> tuple[str, list[dict], str | None, Any]:
+    """Stream a chat completion: (text, tool calls, finish reason, usage holder)."""
+    try:
+        stream = client.chat.completions.create(**kwargs, stream=True,
+                                                stream_options={"include_usage": True})
+    except Exception as e:  # noqa: BLE001 — some servers reject stream_options
+        if "stream_options" not in str(e):
+            raise
+        stream = client.chat.completions.create(**kwargs, stream=True)
+    text: list[str] = []
+    calls: dict[int, dict[str, str]] = {}
+    finish: str | None = None
+    usage = None
+    for chunk in stream:
+        if getattr(chunk, "usage", None) is not None:
+            usage = chunk
+        for ch in getattr(chunk, "choices", None) or []:
+            delta = ch.delta
+            if getattr(delta, "content", None):
+                text.append(delta.content)
+                if not calls:
+                    on_token(delta.content)
+            for tc in getattr(delta, "tool_calls", None) or []:
+                slot = calls.setdefault(int(getattr(tc, "index", 0) or 0),
+                                        {"id": "", "name": "", "arguments": ""})
+                if getattr(tc, "id", None):
+                    slot["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        slot["name"] = slot["name"] or fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["arguments"] += fn.arguments
+            if getattr(ch, "finish_reason", None):
+                finish = ch.finish_reason
+    return "".join(text), [calls[i] for i in sorted(calls)], finish, usage
+
+
 class OpenAICompatibleClient:
     """OpenAI Chat Completions API (OpenAI, OpenRouter, Groq, Fireworks, Kilo, Kie, Z.ai, …)."""
 
@@ -377,7 +490,10 @@ class OpenAICompatibleClient:
         tools: list[dict],
         *,
         abort_event: threading.Event | None = None,
+        on_token: TokenCallback | None = None,
     ) -> LLMResponse:
+        """One model turn. With ``on_token`` the reply streams: text is passed on as it
+        arrives, and STOP closes the stream."""
         _check_abort(abort_event)
         from openai import OpenAI
         from . import stop as stop_ctl
@@ -403,29 +519,42 @@ class OpenAICompatibleClient:
                 kwargs["tools"] = oai_tools
                 kwargs["tool_choice"] = "auto"
             _check_abort(abort_event)
-            resp = client.chat.completions.create(**kwargs)
+            if on_token is not None:
+                try:
+                    text, calls, finish, usage = _stream_chat(client, kwargs, on_token)
+                except Exception as e:  # noqa: BLE001
+                    if stop_ctl.is_set() or (abort_event is not None and abort_event.is_set()):
+                        raise stop_ctl.StopRequested() from e
+                    raise
+            else:
+                resp = client.chat.completions.create(**kwargs)
+                choice = resp.choices[0]
+                text = choice.message.content or ""
+                calls = [{"id": tc.id, "name": tc.function.name,
+                          "arguments": tc.function.arguments}
+                         for tc in choice.message.tool_calls or []]
+                finish = choice.finish_reason
+                usage = resp
         finally:
             stop_ctl.unregister_http_closer(closer)
             try:
                 http_client.close()
             except Exception:
                 pass
-        choice = resp.choices[0]
-        text = choice.message.content or ""
+        return self._response(text, calls, finish, usage, tools)
+
+    def _response(self, text: str, calls: list[dict], finish: str | None, usage: Any,
+                  tools: list[dict]) -> LLMResponse:
         tool_calls: list[dict] = []
         raw_blocks: list[dict] = []
         if text:
             raw_blocks.append({"type": "text", "text": text})
-        for tc in choice.message.tool_calls or []:
-            args = _args_or_marker(tc.function.arguments)
-            call = {"id": tc.id, "name": tc.function.name, "input": args}
+        for i, tc in enumerate(calls):
+            args = _args_or_marker(tc.get("arguments") or "")
+            call = {"id": tc.get("id") or f"call_{i}", "name": tc.get("name") or "",
+                    "input": args}
             tool_calls.append(call)
-            raw_blocks.append({
-                "type": "tool_use",
-                "id": tc.id,
-                "name": tc.function.name,
-                "input": args,
-            })
+            raw_blocks.append({"type": "tool_use", **call})
         if not tool_calls and text and tools:
             # Some models (GLM included, now and then) write the call as JSON in
             # the reply instead of using tool_calls. Accept it for known tools.
@@ -434,10 +563,10 @@ class OpenAICompatibleClient:
                 if call["name"] in known:
                     tool_calls.append(call)
                     raw_blocks.append({"type": "tool_use", **call})
-        stop = choice.finish_reason or "end_turn"
+        stop = finish or "end_turn"
         if tool_calls and stop in ("tool_calls", "stop"):
             stop = "tool_use"
-        in_tok, out_tok = _usage_from_openai(resp)
+        in_tok, out_tok = _usage_from_openai(usage) if usage is not None else (None, None)
         return LLMResponse(
             model=self.model,
             text=text if not tool_calls else "",
@@ -664,9 +793,11 @@ class VisionLLM:
         tools: list[dict],
         *,
         abort_event: threading.Event | None = None,
+        on_token: TokenCallback | None = None,
     ) -> LLMResponse:
         # Vision tier still uses cloud for reasoning; OCR context is injected upstream
-        return self.cloud.step(system, messages, tools, abort_event=abort_event)
+        return step_with_tokens(self.cloud, system, messages, tools, abort_event=abort_event,
+                                on_token=on_token)
 
     def analyze_screenshot(self, image_path: str, prompt: str | None = None) -> str:
         from ..perception import ocr as ocr_mod

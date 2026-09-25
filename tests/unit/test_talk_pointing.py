@@ -232,7 +232,13 @@ def test_talk_endpoint(sidecar_client, monkeypatch, scene) -> None:  # noqa: ANN
     data = sidecar_client.post("/talk", json={"question": "where is bluetooth", "x": 110,
                                               "y": 110}).json()
     assert data["answer"] == "Here." and data["targets"][0]["label"] == "Bluetooth"
-    assert sent and sent[0]["type"] == "pointer"
+    assert [e["type"] for e in sent] == ["talk_token", "talk_done", "pointer"]
+    assert sent[0]["text"].strip() == "Here." and "[POINT" not in sent[0]["text"]
+    assert sent[0]["talk_id"] == sent[1]["talk_id"] == data["talk_id"]
+    assert data["first_text_ms"] is not None
+    sent.clear()
+    sidecar_client.post("/talk", json={"question": "again", "stream": False, "talk_id": "t1"})
+    assert [e["type"] for e in sent] == ["pointer"]
     assert sidecar_client.post("/talk", json={"question": "  "}).status_code == 400
 
 

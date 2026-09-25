@@ -19,7 +19,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from .config import Config, ROOT
-from .llm import INVALID_ARGS_KEY, LLM, collapse_tool_results, prune_images
+from .llm import (INVALID_ARGS_KEY, LLM, TokenGate, collapse_tool_results, prune_images,
+                  step_with_tokens)
 from .router import Router, RouteTier, RouterConfig
 from .world_model import VerificationExpectation, WorldModel
 from .focus import FocusTracker
@@ -300,6 +301,14 @@ class Agent:
         if self.confirm_async is not None:
             return bool(await self.confirm_async(text))
         return bool(await asyncio.to_thread(self.policy.confirm, text))
+
+    def _token_gate(self, step: int) -> TokenGate | None:
+        """Stream the model's text to the app as `token` events (only when someone
+        listens; JSON-looking turns are held back, see llm.TokenGate)."""
+        if self.emit is None:
+            return None
+        return TokenGate(lambda text: self._emit({"type": "token", "step": step,
+                                                  "text": text}))
 
     def _schemas(self) -> list[dict]:
         """Tool schemas offered to the model (make_tool only when the toolsmith is on)."""
@@ -995,13 +1004,16 @@ class Agent:
 
         client = self.router.pick_client(decision)
         abort = stop_ctl.abort_event()
+        gate = self._token_gate(step)
         try:
             resp = await asyncio.to_thread(
-                client.step,
+                step_with_tokens,
+                client,
                 system,
                 messages,
                 self._schemas(),
                 abort_event=abort,
+                on_token=gate,
             )
         except stop_ctl.StopRequested:
             raise
@@ -1014,15 +1026,22 @@ class Agent:
                     self.world, careful=True, force_tier=RouteTier.CLOUD_FRONTIER,
                 )
                 client = self.router.pick_client(decision)
+                gate = self._token_gate(step)
                 resp = await asyncio.to_thread(
-                    client.step,
+                    step_with_tokens,
+                    client,
                     system,
                     messages,
                     self._schemas(),
                     abort_event=abort,
+                    on_token=gate,
                 )
             else:
                 raise
+        if gate is not None:
+            gate.flush()
+            if not resp.tool_calls:
+                self._emit({"type": "token_end", "step": step})
         record_usage_for_response(self.metrics, resp)
         return resp, decision.tier.value
 

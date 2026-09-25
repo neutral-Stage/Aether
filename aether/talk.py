@@ -215,16 +215,22 @@ class TalkReply:
     session_id: str
     talk_ms: float
     refined: int = 0
+    first_text_ms: float | None = None   # when the first speakable text arrived (streaming)
 
     def as_dict(self) -> dict[str, Any]:
         return {"answer": self.answer, "targets": [t.as_dict() for t in self.targets],
                 "session_id": self.session_id, "talk_ms": round(self.talk_ms, 1),
-                "refined": self.refined}
+                "refined": self.refined,
+                "first_text_ms": None if self.first_text_ms is None
+                else round(self.first_text_ms, 1)}
 
 
-def _step(client: Any, system: str, messages: list[dict]) -> Any:
+def _step(client: Any, system: str, messages: list[dict], *,
+          on_token: Callable[[str], None] | None = None) -> Any:
     """One model call, with its token cost recorded like an agent step."""
-    resp = client.step(system, messages, [])
+    from .core.llm import step_with_tokens
+
+    resp = step_with_tokens(client, system, messages, [], on_token=on_token)
     try:
         from .core.metrics import MetricsCollector
         from .core.orchestrator import record_usage_for_response
@@ -276,14 +282,35 @@ def refine_target(target: Target, scene: Scene, client: Any) -> Target:
 
 def ask(question: str, client: Any, *, cursor: tuple[float, float] | None = None,
         session_id: str | None = None, refine: bool = True, scene: Scene | None = None,
-        redact: Callable[[str], str] | None = None) -> TalkReply:
-    """Answer a spoken question about what is on screen, with pointing targets."""
+        redact: Callable[[str], str] | None = None,
+        on_text: Callable[[str], None] | None = None) -> TalkReply:
+    """Answer a spoken question about what is on screen, with pointing targets.
+
+    With ``on_text`` the answer streams: speakable text (pointing tags removed,
+    partial tags held back) is passed on as it arrives, so speech can start at
+    the first clause.
+    """
     started = time.monotonic()
     scene = scene or build_scene(cursor, redact=redact)
     sess = get_session(session_id)
     messages = sess.messages() + [{"role": "user", "content": [
         *scene.content, {"type": "text", "text": f"The user asks: {question}"}]}]
-    resp = _step(client, talk_prompt(), messages)
+    first: list[float] = []
+    on_token = None
+    parser = pointing.TagStreamParser()
+    if on_text is not None:
+        def say(text: str) -> None:
+            if text:
+                if not first:
+                    first.append((time.monotonic() - started) * 1000)
+                on_text(text)
+
+        def on_token(chunk: str) -> None:
+            say(parser.feed(chunk)[0])
+
+    resp = _step(client, talk_prompt(), messages, on_token=on_token)
+    if on_text is not None:
+        say(parser.close()[0])
     raw = _reply_text(resp)
     tags = pointing.parse_tags(raw)
     answer = pointing.strip_tags(raw)
@@ -301,4 +328,5 @@ def ask(question: str, client: Any, *, cursor: tuple[float, float] | None = None
         targets = out
     sess.history.append((question, answer))
     return TalkReply(answer or "I'm not sure.", targets, raw, sess.id,
-                     (time.monotonic() - started) * 1000, refined)
+                     (time.monotonic() - started) * 1000, refined,
+                     first[0] if first else None)

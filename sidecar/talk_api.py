@@ -7,6 +7,7 @@ points) for the app's overlay. The same targets are broadcast as a
 from __future__ import annotations
 
 import asyncio
+import uuid
 import logging
 from typing import Any
 
@@ -39,6 +40,8 @@ class TalkRequest(BaseModel):
     y: float | None = None
     session_id: str | None = None   # keep follow-ups in one talk conversation
     refine: bool = True
+    stream: bool = True             # broadcast talk_token events while answering
+    talk_id: str | None = None      # echoed in the events, so the app can match them
 
 
 def _client(cfg: Any) -> Any:
@@ -59,17 +62,30 @@ async def talk_endpoint(body: TalkRequest, _auth: None = Depends(require_auth)) 
                                  "(see configs/router.yaml).")
     policy = Policy(PolicyConfig(redact_secrets=True))
     cursor = (body.x, body.y) if body.x is not None and body.y is not None else None
+    talk_id = body.talk_id or uuid.uuid4().hex[:12]
+    loop = asyncio.get_running_loop()
+    broadcast = _broadcast
+
+    def on_text(text: str) -> None:
+        # The answer as it streams (tags removed), so the app can speak early.
+        if broadcast is not None:
+            asyncio.run_coroutine_threadsafe(
+                broadcast({"type": "talk_token", "talk_id": talk_id, "text": text}), loop)
+
     try:
         client = _client(cfg)
         reply = await asyncio.to_thread(talk.ask, question, client, cursor=cursor,
                                         session_id=body.session_id, refine=body.refine,
-                                        redact=policy.redact_text)
+                                        redact=policy.redact_text,
+                                        on_text=on_text if body.stream else None)
     except Exception as e:  # noqa: BLE001
         log.warning("talk failed", exc_info=True)
         raise HTTPException(502, f"Talk failed: {redact_error_message(str(e))}") from e
 
     metrics = MetricsCollector.get()
     metrics.observe("talk_ms", reply.talk_ms)
+    if reply.first_text_ms is not None:
+        metrics.observe("talk_first_text_ms", reply.first_text_ms)
     metrics.inc("talk_requests")
     try:
         audit_cfg = cfg.get("audit") or {}
@@ -79,7 +95,10 @@ async def talk_endpoint(body: TalkRequest, _auth: None = Depends(require_auth)) 
             extra={"targets": len(reply.targets), "refined": reply.refined})
     except Exception:  # noqa: BLE001 — auditing must not fail the answer
         log.debug("talk audit failed", exc_info=True)
-    data = reply.as_dict()
+    data = {**reply.as_dict(), "talk_id": talk_id}
+    if _broadcast is not None and body.stream:
+        await _broadcast({"type": "talk_done", "talk_id": talk_id, "answer": reply.answer,
+                          "session_id": reply.session_id})
     if _broadcast is not None and reply.targets:
         await _broadcast({"type": "pointer", "source": "talk", "targets": data["targets"],
                           "answer": reply.answer})

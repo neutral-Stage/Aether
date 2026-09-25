@@ -18,6 +18,9 @@ enum SidecarEvent {
     case pointer([OverlayTarget])   // show the user where something is
     case guideStep(id: String, index: Int, total: Int, say: String, target: OverlayTarget?)
     case guideDone(id: String, status: String)
+    case token(step: Int, text: String)           // an agent run's reply as it streams
+    case talkToken(id: String, text: String)      // a talk answer as it streams (tags removed)
+    case talkDone(id: String, answer: String)
 
     /// Events carried by one SSE `data:` object from POST /run (unknown types → none).
     static func parse(_ obj: [String: Any], fallbackGoal: String) -> [SidecarEvent] {
@@ -73,6 +76,18 @@ enum SidecarEvent {
             out.append(.guideStep(id: id, index: (obj["index"] as? NSNumber)?.intValue ?? 0,
                                   total: (obj["total"] as? NSNumber)?.intValue ?? 0,
                                   say: say, target: target))
+        case "token":
+            if let text = obj["text"] as? String {
+                out.append(.token(step: obj["step"] as? Int ?? 0, text: text))
+            }
+        case "talk_token":
+            if let id = obj["talk_id"] as? String, let text = obj["text"] as? String {
+                out.append(.talkToken(id: id, text: text))
+            }
+        case "talk_done":
+            if let id = obj["talk_id"] as? String {
+                out.append(.talkDone(id: id, answer: obj["answer"] as? String ?? ""))
+            }
         case "guide_done":
             if let id = obj["guide_id"] as? String {
                 out.append(.guideDone(id: id, status: obj["status"] as? String ?? "done"))
@@ -283,7 +298,8 @@ final class OrchestratorClient: ObservableObject {
     }
 
     /// Talk mode: ask about what is at `point` (global top-left points).
-    func talk(question: String, at point: CGPoint?, sessionId: String?) async throws -> TalkReply {
+    func talk(question: String, at point: CGPoint?, sessionId: String?,
+              talkId: String? = nil) async throws -> TalkReply {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("talk")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -295,6 +311,13 @@ final class OrchestratorClient: ObservableObject {
             body["y"] = point.y
         }
         if let sessionId { body["session_id"] = sessionId }
+        if let talkId {
+            // The answer also streams as talk_token events carrying this id.
+            body["talk_id"] = talkId
+            body["stream"] = true
+        } else {
+            body["stream"] = false
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -712,7 +735,7 @@ final class OrchestratorClient: ObservableObject {
                               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                               let type = obj["type"] as? String else { continue }
                         switch type {
-                        case "guide_step", "guide_done":
+                        case "guide_step", "guide_done", "talk_token", "talk_done":
                             for event in SidecarEvent.parse(obj, fallbackGoal: "") { onEvent(event) }
                         case "run_request":
                             if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
