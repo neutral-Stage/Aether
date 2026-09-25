@@ -3,7 +3,9 @@
 Results of running Aether against a real Mac, following
 [`FIRST_RUN.md`](FIRST_RUN.md). Mock-only test runs do not belong here. Newest first.
 Paste the table that `scripts/live_smoke.py --tasks` saves, plus the machine
-details.
+details. For the unattended benchmark in throwaway VMs
+(`scripts/benchmark_tasks.py --vm`, [BENCHMARK_VM.md](BENCHMARK_VM.md)), paste
+its pass rate against the 60% bar and the failing task ids.
 
 Template:
 

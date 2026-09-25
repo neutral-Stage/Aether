@@ -81,6 +81,10 @@ class TestUrlsMenusMoney:
         assert impact(p, "open_url", url="file:///etc/passwd") == "destructive"
         allow = Policy(PolicyConfig(network_allowlist=["example.com"]))
         assert impact(allow, "open_url", url="https://evil.example.org") == "destructive"
+        pane = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        assert impact(p, "open_url", url=pane) == "reversible"
+        assert impact(allow, "open_url", url=pane) == "reversible"
+        assert impact(p, "open_url", url="shortcuts://run-shortcut?name=x") == "destructive"
 
     @pytest.mark.parametrize(("path", "expected"), [
         ("Finder > Empty Trash…", "destructive"),

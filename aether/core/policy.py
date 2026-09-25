@@ -502,11 +502,17 @@ class Policy:
             return "destructive"
         if name == "open_url":
             url = str(args.get("url", "") or "")
-            host = ""
+            host, scheme = "", ""
             try:
-                host = (urlparse(url).hostname or "").lower()
+                parsed = urlparse(url)
+                host, scheme = (parsed.hostname or "").lower(), parsed.scheme.lower()
             except Exception:  # noqa: BLE001
                 pass
+            # A System Settings pane link only navigates Settings: nothing runs and
+            # nothing leaves the Mac. Other app schemes (shortcuts://run-shortcut…)
+            # can act, so they stay destructive.
+            if scheme == "x-apple.systempreferences":
+                return "reversible"
             if url and _url_is_dangerous(url) and not (host and self._host_in_allowlist(host)):
                 return "destructive"
             if url and not self._network_allowed(url):

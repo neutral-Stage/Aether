@@ -1,0 +1,27 @@
+# Live benchmark VMs (tests/benchmark/vm_runner.py, docs/BENCHMARK_VM.md).
+# Command templates for the lume CLI: {name} is the per-run clone, {golden}
+# the prepared image. Adjust here if your lume version spells them differently.
+
+golden: aether-golden
+boot_timeout: 240            # seconds to wait for the clone's IP and SSH
+
+commands:
+  clone: "lume clone {golden} {name}"
+  run: "lume run {name} --no-display"
+  get: "lume get {name} -f json"
+  stop: "lume stop {name}"
+  delete: "lume delete {name} --force"
+
+ssh:
+  user: lume
+  key: ~/.ssh/aether_bench_ed25519
+
+# The sidecar inside the VM, started at login by the bench LaunchAgent
+# (scripts/vm/com.aether.bench.sidecar.plist) with this token.
+sidecar:
+  url: http://127.0.0.1:8765
+  token: aether-bench
+
+# Run once after each boot, then wait: make sure the sidecar is up.
+after_boot: "launchctl kickstart -k gui/$(id -u)/com.aether.bench.sidecar"
+after_boot_wait: 10
