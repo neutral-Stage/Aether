@@ -13,6 +13,8 @@ struct AetherApp: App {
                         .font(.caption)
                         .lineLimit(2)
                 }
+                Button("Chat (⌃⌘A)") { app.openChat() }
+                RecentChatsMenu(chat: app.chat) { app.openChat(session: $0) }
                 Button("Open Window") { app.showMainWindow = true }
                 Button("Command Bar (⌥Space)") { app.toggleCommandBar() }
                 Button("New Conversation") { app.newConversation() }
@@ -22,6 +24,7 @@ struct AetherApp: App {
                 Button("Quit") { NSApplication.shared.terminate(nil) }
             }
             .padding(8)
+            .task { await app.chat.refreshSessions() }
         }
         .menuBarExtraStyle(.window)
 
@@ -48,6 +51,22 @@ struct AetherApp: App {
         .defaultSize(width: 440, height: 300)
         .commands {
             CommandGroup(replacing: .newItem) {}
+        }
+    }
+}
+
+/// The last few conversations, one click to reopen.
+struct RecentChatsMenu: View {
+    @ObservedObject var chat: ChatStore
+    var open: (String) -> Void
+
+    var body: some View {
+        if !chat.sessions.isEmpty {
+            Text("Recent").font(.caption2).foregroundStyle(.secondary)
+            ForEach(chat.sessions.prefix(5)) { s in
+                Button("  " + s.title) { open(s.id) }
+                    .lineLimit(1)
+            }
         }
     }
 }

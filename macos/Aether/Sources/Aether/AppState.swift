@@ -63,6 +63,14 @@ final class AppState: ObservableObject {
     }
     private let pttHotkey = PTTHotkeyController()
     private let commandBarHotkey = CommandBarHotkeyController()
+    /// ⌃⌘A opens the chat window.
+    private let chatHotkey = CommandBarHotkeyController(modifiers: [.control, .command], keyCode: 0)
+    lazy var chat: ChatStore = {
+        let store = ChatStore(client: client)
+        store.app = self
+        return store
+    }()
+    private let chatWindow = ChatWindowController()
     let updateChecker = SparkleUpdateController()
     let sidecar = SidecarSupervisor()
     lazy var realtimeSession = RealtimeVoiceSession()
@@ -92,6 +100,9 @@ final class AppState: ObservableObject {
         commandBarHotkey.onToggle = { [weak self] in
             Task { @MainActor in self?.toggleCommandBar() }
         }
+        chatHotkey.onToggle = { [weak self] in
+            Task { @MainActor in self?.openChat() }
+        }
         ambient.onWake = { [weak self] in
             Task { @MainActor in await self?.handleWakeWord() }
         }
@@ -116,6 +127,7 @@ final class AppState: ObservableObject {
         pttHotkey.start()
         talkHotkey.start()
         commandBarHotkey.start()
+        chatHotkey.start()
         audio.refreshMicPermission()
         stt.refreshAuthorization()
         Task {
@@ -207,7 +219,17 @@ final class AppState: ObservableObject {
         hud.setClickThrough(!client.isRunning && !audio.isRecording && pendingConfirmId == nil)
     }
 
-    func submitGoal(_ goal: String) {
+    /// Open the chat window, optionally on one conversation.
+    func openChat(session: String? = nil) {
+        chatWindow.show(store: chat)
+        if let session { Task { await chat.open(session) } }
+    }
+
+    /// Run a request. The chat window passes its conversation and an observer
+    /// that receives every run event; other callers continue the last
+    /// conversation when it ended recently.
+    func submitGoal(_ goal: String, chatSession: String? = nil,
+                    observer: ((SidecarEvent) -> Void)? = nil) {
         let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if GuideIntent.isGuideRequest(trimmed), activeGuideId == nil {
@@ -221,12 +243,15 @@ final class AppState: ObservableObject {
         refreshHUD()
 
         var options = RunOptions()
-        if let sid = sessionId, let ended = lastRunEnded,
-           Date().timeIntervalSince(ended) < followUpWindow {
+        if observer != nil {
+            options.sessionId = chatSession
+        } else if let sid = sessionId, let ended = lastRunEnded,
+                  Date().timeIntervalSince(ended) < followUpWindow {
             options.sessionId = sid
         }
         client.run(goal: trimmed, options: options) { [weak self] event in
             guard let self else { return }
+            observer?(event)
             switch event {
             case .runStart(_, let g):
                 self.streamStep = -1

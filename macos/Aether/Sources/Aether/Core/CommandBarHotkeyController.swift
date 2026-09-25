@@ -1,9 +1,17 @@
 import AppKit
 
-/// Global command bar hotkey — ⌥Space (Phase 7, FR-1).
+/// A global key chord: ⌥Space for the command bar (Phase 7, FR-1), ⌃⌘A for the chat window.
 @MainActor
 final class CommandBarHotkeyController {
     var onToggle: (() -> Void)?
+    private let modifiers: NSEvent.ModifierFlags
+    private let keyCode: UInt16
+
+    init(modifiers: NSEvent.ModifierFlags = AetherConfig.commandBarModifiers,
+         keyCode: UInt16 = AetherConfig.commandBarKeyCode) {
+        self.modifiers = modifiers
+        self.keyCode = keyCode
+    }
 
     private var globalKeyDown: Any?
     private var localKeyDown: Any?
@@ -29,11 +37,10 @@ final class CommandBarHotkeyController {
     private func handle(_ event: NSEvent) {
         guard event.type == .keyDown, !event.isARepeat else { return }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags.contains(AetherConfig.commandBarModifiers) else { return }
+        guard flags.contains(modifiers) else { return }
         let stripped = flags.subtracting([.capsLock, .numericPad, .function])
-        let needs = AetherConfig.commandBarModifiers
-        guard stripped == needs || stripped == needs.union(.function) else { return }
-        guard event.keyCode == AetherConfig.commandBarKeyCode else { return }
+        guard stripped == modifiers || stripped == modifiers.union(.function) else { return }
+        guard event.keyCode == keyCode else { return }
         onToggle?()
     }
 }

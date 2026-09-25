@@ -272,3 +272,56 @@ final class StreamingSpeechTests: XCTestCase {
             .isEmpty)
     }
 }
+
+@MainActor
+final class ChatTranscriptTests: XCTestCase {
+    func testARunBecomesAReplyWithSteps() {
+        var t = ChatTranscript()
+        t.send("open my downloads")
+        XCTAssertTrue(t.isWorking)
+        t.apply(.token(step: 1, text: "Opening "))
+        t.apply(.token(step: 1, text: "Finder."))
+        XCTAssertEqual(t.messages[1].narration, "Opening Finder.")
+        t.apply(.step(["type": "tool_call", "step": 1, "tool": "finder_go_to",
+                       "description": "Finder → ~/Downloads"]))
+        t.apply(.step(["type": "screenshot", "step": 1, "tool": "finder_go_to",
+                       "path": "/tmp/s.png"]))
+        t.apply(.step(["type": "tool_result", "step": 1, "tool": "finder_go_to", "ok": true,
+                       "summary": "ok"]))
+        t.apply(.token(step: 2, text: "Done"))
+        XCTAssertEqual(t.messages[1].narration, "Done")
+        t.apply(.confirmRequest(requestId: "r", description: "delete x"))
+        XCTAssertEqual(t.messages[1].waitingOn, "Waiting for your OK: delete x")
+        t.apply(.done(result: "Your Downloads folder is open.", world: nil))
+        let reply = t.messages[1]
+        XCTAssertEqual(reply.status, .done)
+        XCTAssertEqual(reply.text, "Your Downloads folder is open.")
+        XCTAssertEqual(reply.steps.count, 1)
+        XCTAssertEqual(reply.steps[0].state, .done)
+        XCTAssertEqual(reply.steps[0].screenshots, ["/tmp/s.png"])
+        XCTAssertEqual(reply.waitingOn, "")
+        XCTAssertFalse(t.isWorking)
+        t.apply(.done(result: "ignored", world: nil))      // nothing is working any more
+        XCTAssertEqual(t.messages.count, 2)
+    }
+
+    func testFailuresStopsAndHistory() {
+        var t = ChatTranscript()
+        t.send("x")
+        t.apply(.step(["type": "tool_call", "tool": "click", "description": "click OK"]))
+        t.apply(.stopped)
+        XCTAssertEqual(t.messages[1].status, .stopped)
+        XCTAssertEqual(t.messages[1].text, "Stopped.")
+        XCTAssertEqual(t.messages[1].steps[0].state, .failed)
+        XCTAssertEqual(t.messages[1].goal, "x")
+        t.load(turns: [["goal": "a", "result": "b", "actions": ["open Safari"], "status": "idle"],
+                       ["goal": "c", "result": "boom", "actions": [], "status": "error"]])
+        XCTAssertEqual(t.messages.map(\.text), ["a", "b", "c", "boom"])
+        XCTAssertEqual(t.messages[1].steps.first?.description, "open Safari")
+        XCTAssertEqual(t.messages[3].status, .failed)
+        let s = ChatSessionSummary.parse(["id": "s1", "title": "Mail", "updated_at": 10.0,
+                                          "turns": 2])
+        XCTAssertEqual(s?.title, "Mail")
+        XCTAssertNil(ChatSessionSummary.parse(["title": "no id"]))
+    }
+}

@@ -329,6 +329,44 @@ final class OrchestratorClient: ObservableObject {
         return reply
     }
 
+    // MARK: conversations (chat window)
+
+    private func sessionsRequest(_ path: String, method: String = "GET") -> URLRequest {
+        var request = URLRequest(url: AetherConfig.sidecarBaseURL.appendingPathComponent(path))
+        request.httpMethod = method
+        request.timeoutInterval = 15
+        applySidecarAuth(&request)
+        return request
+    }
+
+    func listSessions(limit: Int = 50) async throws -> [ChatSessionSummary] {
+        var comps = URLComponents(url: AetherConfig.sidecarBaseURL.appendingPathComponent("sessions"),
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        var request = URLRequest(url: comps?.url ?? AetherConfig.sidecarBaseURL)
+        request.timeoutInterval = 15
+        applySidecarAuth(&request)
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let rows = obj?["sessions"] as? [[String: Any]] ?? []
+        return rows.compactMap(ChatSessionSummary.parse)
+    }
+
+    /// One conversation's turns (goal, result, actions, status).
+    func fetchSession(_ id: String) async throws -> [[String: Any]] {
+        let (data, response) = try await URLSession.shared.data(for: sessionsRequest("sessions/\(id)"))
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "Aether", code: 404,
+                          userInfo: [NSLocalizedDescriptionKey: "Conversation not found"])
+        }
+        return obj["turns"] as? [[String: Any]] ?? []
+    }
+
+    func deleteSession(_ id: String) async {
+        _ = try? await URLSession.shared.data(for: sessionsRequest("sessions/\(id)", method: "DELETE"))
+    }
+
     /// Guide mode: plan steps for `goal` and start pointing at them. Returns the guide id.
     func startGuide(goal: String) async throws -> String {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("guide")
