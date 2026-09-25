@@ -120,7 +120,9 @@ def test_cannot_open_apps_through_launchservices(layout) -> None:  # noqa: ANN00
 
 
 def test_everyday_profile_blocks_apple_events(tmp_path) -> None:  # noqa: ANN001
-    script = ["/usr/bin/osascript", "-e", 'tell application "System Events" to get name']
+    # `get name` of an application is answered locally; counting processes has to
+    # send an Apple Event to System Events.
+    script = ["/usr/bin/osascript", "-e", 'tell application "System Events" to count processes']
     baseline = subprocess.run(script, capture_output=True, text=True, timeout=20)  # noqa: S603
     if baseline.returncode != 0:
         pytest.skip("Apple Events unavailable here even without the sandbox")
