@@ -99,12 +99,15 @@ from .mcp_server import router as _mcp_router  # noqa: E402
 from .sessions_api import router as _sessions_router  # noqa: E402
 from .talk_api import router as _talk_router  # noqa: E402
 from . import talk_api  # noqa: E402
+from .guide_api import router as _guide_router  # noqa: E402
+from . import guide_api  # noqa: E402
 from . import questions  # noqa: E402
 from . import session_store  # noqa: E402
 
 app.include_router(_fleet_router)
 app.include_router(_sessions_router)
 app.include_router(_talk_router)
+app.include_router(_guide_router)
 app.include_router(_mcp_router)
 app.include_router(_apps_router)
 
@@ -377,6 +380,7 @@ async def _broadcast(event: dict[str, Any]) -> None:
 
 
 talk_api.set_broadcaster(_broadcast)
+guide_api.set_broadcaster(_broadcast)
 
 
 async def _run_agent_task(

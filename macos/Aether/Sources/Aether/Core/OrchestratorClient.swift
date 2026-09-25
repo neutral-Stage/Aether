@@ -16,6 +16,8 @@ enum SidecarEvent {
     case session(String)            // conversation id for follow-ups
     case step([String: Any])        // tool_call / tool_result / screenshot / text / plan
     case pointer([OverlayTarget])   // show the user where something is
+    case guideStep(id: String, index: Int, total: Int, say: String, target: OverlayTarget?)
+    case guideDone(id: String, status: String)
 
     /// Events carried by one SSE `data:` object from POST /run (unknown types → none).
     static func parse(_ obj: [String: Any], fallbackGoal: String) -> [SidecarEvent] {
@@ -65,6 +67,16 @@ enum SidecarEvent {
         case "pointer":
             let targets = (obj["targets"] as? [[String: Any]] ?? []).compactMap(OverlayTarget.init(json:))
             if !targets.isEmpty { out.append(.pointer(targets)) }
+        case "guide_step":
+            guard let id = obj["guide_id"] as? String, let say = obj["say"] as? String else { break }
+            let target = (obj["target"] as? [String: Any]).flatMap(OverlayTarget.init(json:))
+            out.append(.guideStep(id: id, index: (obj["index"] as? NSNumber)?.intValue ?? 0,
+                                  total: (obj["total"] as? NSNumber)?.intValue ?? 0,
+                                  say: say, target: target))
+        case "guide_done":
+            if let id = obj["guide_id"] as? String {
+                out.append(.guideDone(id: id, status: obj["status"] as? String ?? "done"))
+            }
         default:
             break
         }
@@ -96,6 +108,32 @@ struct DoctorReport: Equatable {
                                fix: raw["fix"] as? String ?? "")
         }
         return DoctorReport(verdict: verdict, checks: checks)
+    }
+}
+
+/// "Show me how to …" requests go to guide mode; spoken controls steer it.
+enum GuideIntent {
+    private static let prefixes = ["show me how", "teach me", "walk me through", "guide me",
+                                   "how do i "]
+
+    static func isGuideRequest(_ text: String) -> Bool {
+        var t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        for lead in ["hey aether, ", "hey aether ", "ok aether, ", "please "] where t.hasPrefix(lead) {
+            t = String(t.dropFirst(lead.count))
+        }
+        return prefixes.contains { t.hasPrefix($0) }
+    }
+
+    /// The guide control a spoken phrase asks for, if any.
+    static func control(for text: String) -> String? {
+        let t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        if t.contains("do it for me") || t == "do it" || t.contains("you do it") { return "do_it" }
+        if ["stop", "cancel", "quit", "stop the guide", "never mind"].contains(t) { return "stop" }
+        if ["back", "go back", "previous", "previous step"].contains(t) { return "back" }
+        if ["repeat", "again", "say that again", "repeat that"].contains(t) { return "repeat" }
+        if ["skip", "skip it", "skip this"].contains(t) { return "skip" }
+        if ["next", "done", "next step", "ok", "okay", "got it"].contains(t) { return "next" }
+        return nil
     }
 }
 
@@ -266,6 +304,38 @@ final class OrchestratorClient: ObservableObject {
             throw NSError(domain: "Aether", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
         }
         return reply
+    }
+
+    /// Guide mode: plan steps for `goal` and start pointing at them. Returns the guide id.
+    func startGuide(goal: String) async throws -> String {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("guide")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["goal": goal])
+        applySidecarAuth(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = json["guide_id"] as? String else {
+            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String
+            throw NSError(domain: "Aether", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: msg ?? "Could not start the guide.",
+            ])
+        }
+        return id
+    }
+
+    /// next | back | repeat | skip | stop | do_it
+    func controlGuide(id: String, action: String) async {
+        let url = AetherConfig.sidecarBaseURL.appendingPathComponent("guide").appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["action": action])
+        applySidecarAuth(&request)
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     /// Answer an ask_user question; nil or empty skips it.
@@ -642,6 +712,8 @@ final class OrchestratorClient: ObservableObject {
                               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                               let type = obj["type"] as? String else { continue }
                         switch type {
+                        case "guide_step", "guide_done":
+                            for event in SidecarEvent.parse(obj, fallbackGoal: "") { onEvent(event) }
                         case "run_request":
                             if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
                         case "say":

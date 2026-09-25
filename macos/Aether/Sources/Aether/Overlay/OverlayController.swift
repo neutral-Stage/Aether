@@ -16,7 +16,8 @@ final class OverlayController {
     private var keyMonitors: [Any] = []
     private let accent = NSColor.systemPink
 
-    func show(targets: [OverlayTarget]) {
+    /// `hold` overrides how long the marks stay (guide steps keep them until done).
+    func show(targets: [OverlayTarget], hold: TimeInterval? = nil) {
         let targets = Array(targets.prefix(3))
         guard !targets.isEmpty, let primary = NSScreen.screens.first else { return }
         clear()
@@ -45,7 +46,7 @@ final class OverlayController {
             panel.orderFrontRegardless()
             panels.append(panel)
         }
-        scheduleFade(after: lastDelay + holdSeconds)
+        scheduleFade(after: lastDelay + (hold ?? holdSeconds))
         installEscape()
     }
 

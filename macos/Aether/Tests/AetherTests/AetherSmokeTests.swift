@@ -193,3 +193,41 @@ final class OverlayGeometryTests: XCTestCase {
         XCTAssertFalse(ModifierHoldController.isExactly([.control], want))
     }
 }
+
+final class GuideIntentTests: XCTestCase {
+    func testGuideRequests() {
+        XCTAssertTrue(GuideIntent.isGuideRequest("Show me how to add a printer"))
+        XCTAssertTrue(GuideIntent.isGuideRequest("hey aether, teach me to split the screen"))
+        XCTAssertTrue(GuideIntent.isGuideRequest("How do I turn on dark mode?"))
+        XCTAssertFalse(GuideIntent.isGuideRequest("show me my downloads"))
+        XCTAssertFalse(GuideIntent.isGuideRequest("open Safari"))
+    }
+
+    func testSpokenControls() {
+        XCTAssertEqual(GuideIntent.control(for: "Next."), "next")
+        XCTAssertEqual(GuideIntent.control(for: "go back"), "back")
+        XCTAssertEqual(GuideIntent.control(for: "say that again"), "repeat")
+        XCTAssertEqual(GuideIntent.control(for: "Can you do it for me?"), "do_it")
+        XCTAssertEqual(GuideIntent.control(for: "stop"), "stop")
+        XCTAssertNil(GuideIntent.control(for: "what's the weather"))
+    }
+
+    func testGuideEvents() {
+        let step = SidecarEvent.parse(["type": "guide_step", "guide_id": "g1", "index": 1, "total": 3,
+                                       "say": "Click Add", "target": ["x": 10, "y": 20, "label": "Add"]],
+                                      fallbackGoal: "")
+        guard case let .guideStep(id, index, total, say, target)? = step.first else {
+            return XCTFail("no guide step")
+        }
+        XCTAssertEqual(id, "g1")
+        XCTAssertEqual(index, 1)
+        XCTAssertEqual(total, 3)
+        XCTAssertEqual(say, "Click Add")
+        XCTAssertEqual(target?.label, "Add")
+        let done = SidecarEvent.parse(["type": "guide_done", "guide_id": "g1", "status": "stopped"],
+                                      fallbackGoal: "")
+        guard case let .guideDone(doneId, status)? = done.first else { return XCTFail("no done") }
+        XCTAssertEqual(doneId, "g1")
+        XCTAssertEqual(status, "stopped")
+    }
+}

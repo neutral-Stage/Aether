@@ -46,6 +46,7 @@ final class AppState: ObservableObject {
     @Published var isTalkHeld = false
     private var talkPointer: CGPoint?
     private var talkSessionId: String?
+    private var activeGuideId: String?
     let nativeEffector = NativeEffectorServer(port: AetherConfig.nativeEffectorPort)
     lazy var stopController = StopController { [weak self] in
         self?.handleStop()
@@ -97,9 +98,7 @@ final class AppState: ObservableObject {
         // is already approved to execute.
         Task { [weak self] in
             await self?.client.subscribeEvents { event in
-                if case let .runRequest(goal) = event, self?.client.isRunning == false {
-                    self?.submitGoal(goal)
-                }
+                Task { @MainActor in self?.handleBackgroundEvent(event) }
             }
         }
         nativeEffector.start()  // loopback capture endpoint for the sidecar
@@ -201,6 +200,10 @@ final class AppState: ObservableObject {
     func submitGoal(_ goal: String) {
         let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if GuideIntent.isGuideRequest(trimmed), activeGuideId == nil {
+            startGuide(trimmed)
+            return
+        }
         world.reset()
         world.goal = trimmed
         world.transcript = trimmed
@@ -259,6 +262,8 @@ final class AppState: ObservableObject {
                 self.sessionId = sid
             case .pointer(let targets):
                 self.overlay.show(targets: targets)
+            case .guideStep, .guideDone:
+                self.handleBackgroundEvent(event)
             case .step(let payload):
                 if (payload["type"] as? String) == "tool_call",
                    let desc = payload["description"] as? String {
@@ -289,6 +294,53 @@ final class AppState: ObservableObject {
             }
         )
         Task { await speakConfirmationPrompt(description) }
+    }
+
+    /// Events from the persistent /events stream (proactive runs, guide mode).
+    func handleBackgroundEvent(_ event: SidecarEvent) {
+        switch event {
+        case .runRequest(let goal):
+            if !client.isRunning { submitGoal(goal) }
+        case let .guideStep(id, index, total, say, target):
+            activeGuideId = id
+            world.status = "guiding"
+            world.currentStep = "Step \(index + 1) of \(total): \(say)"
+            if let target {
+                overlay.show(targets: [target], hold: 300)
+            } else {
+                overlay.clear()
+            }
+            refreshHUD()
+            Task { await speakWithBargeIn(say) }
+        case let .guideDone(id, status):
+            guard id == activeGuideId else { return }
+            activeGuideId = nil
+            overlay.clear()
+            world.status = "idle"
+            world.currentStep = status == "done" ? "All done." : "Guide stopped."
+            refreshHUD()
+            if status == "done" { Task { await speakWithBargeIn("All done.") } }
+        default:
+            break
+        }
+    }
+
+    func startGuide(_ request: String) {
+        world.reset()
+        world.goal = request
+        world.status = "working"
+        world.currentStep = "Working out the steps…"
+        refreshHUD()
+        Task {
+            do {
+                activeGuideId = try await client.startGuide(goal: request)
+            } catch {
+                world.status = "idle"
+                world.currentStep = error.localizedDescription
+                lastResult = error.localizedDescription
+                refreshHUD()
+            }
+        }
     }
 
     private func showQuestion(requestId: String, question: String, options: [String]) {
@@ -371,6 +423,10 @@ final class AppState: ObservableObject {
         lastRunEnded = Date()
         overlay.clear()
         if isTalkHeld { cancelTalk() }
+        if let guideId = activeGuideId {
+            activeGuideId = nil
+            Task { await client.controlGuide(id: guideId, action: "stop") }
+        }
         world.status = "stopped"
         world.currentStep = "Stopped"
         refreshHUD()
@@ -418,6 +474,15 @@ final class AppState: ObservableObject {
         }
         if pendingQuestionId != nil {
             answerQuestion(text)
+            return
+        }
+        if let guideId = activeGuideId {
+            if let action = GuideIntent.control(for: text) {
+                Task { await client.controlGuide(id: guideId, action: action) }
+            } else {
+                world.currentStep = "Say next, back, repeat, skip, stop, or do it for me."
+                refreshHUD()
+            }
             return
         }
         if text.lowercased().contains("stop") {

@@ -168,6 +168,23 @@ def element_at(x: float, y: float) -> dict | None:
             "url": url if url.startswith(("http://", "https://", "file://")) else ""}
 
 
+def focused_summary() -> dict:
+    """{role, title, value} of the focused element (value empty for secure fields)."""
+    if not _IMPORT_OK:
+        return {"role": "", "title": "", "value": ""}
+    try:
+        focused = _copy(AX.AXUIElementCreateSystemWide(), "AXFocusedUIElement")
+    except Exception:  # noqa: BLE001
+        focused = None
+    if focused is None:
+        return {"role": "", "title": "", "value": ""}
+    role = _to_str(_copy(focused, A_ROLE))
+    subrole = _to_str(_copy(focused, A_SUBROLE))
+    secure = "Secure" in role or "Secure" in subrole
+    return {"role": role, "title": _label_of_handle(focused),
+            "value": "" if secure else _to_str(_copy(focused, A_VALUE))[:500]}
+
+
 def handle_label(handle: Any) -> str | None:
     """The live label of a retained AXUIElement (None when it can't be read)."""
     if not _IMPORT_OK or handle is None:
