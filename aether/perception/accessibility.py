@@ -318,6 +318,19 @@ def focused_window_frame() -> tuple[float, float, float, float] | None:
         return None
 
 
+def focused_window_title(pid: int) -> str | None:
+    """Title of an app's focused window: '' when untitled, None when unreadable."""
+    if not _IMPORT_OK or pid is None or pid <= 0:
+        return None
+    try:
+        win = _focused_window(AX.AXUIElementCreateApplication(pid))
+        if win is None:
+            return None
+        return _to_str(_copy(win, A_TITLE))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _focused_window(app_el):
     for attr in (A_FOCUSED_WINDOW, A_MAIN_WINDOW):
         win = _copy(app_el, attr)

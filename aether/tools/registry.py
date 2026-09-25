@@ -165,10 +165,11 @@ class Registry:
             return f"wait for agent [{args.get('session_id', '')[:12]}]"
         if name.startswith("mcp_"):
             return name.replace("_", " ", 1)
-        from . import desktop_tools, targeting_tools, toolsmith_tools
+        from . import desktop_tools, screen_memory_tools, targeting_tools, toolsmith_tools
 
         return (desktop_tools.describe(name, args) or targeting_tools.describe(name, args)
-                or toolsmith_tools.describe(name, args) or name)
+                or toolsmith_tools.describe(name, args)
+                or screen_memory_tools.describe(name, args) or name)
 
     def dispatch(self, name: str, args: dict, ctx: AgentContext) -> str:
         stop_ctl.check()
@@ -937,9 +938,10 @@ def build_default_registry() -> Registry:
     ]
     for s in specs:
         reg.register(s)
-    from . import desktop_tools, targeting_tools, toolsmith_tools
+    from . import desktop_tools, screen_memory_tools, targeting_tools, toolsmith_tools
 
-    for s in (*desktop_tools.specs(), *targeting_tools.specs(), toolsmith_tools.make_tool_spec()):
+    for s in (*desktop_tools.specs(), *targeting_tools.specs(), toolsmith_tools.make_tool_spec(),
+              *screen_memory_tools.specs()):
         reg.register(s)
     from ..core.config import load_config
 

@@ -88,6 +88,20 @@ toolsmith:
   extra_read_roots: []             # more folders such tools may read (e.g. a custom Python install)
   allow_unsandboxed: false         # tests only: run tools without the macOS sandbox
 
+# Screen memory: remembers the TEXT of what you look at, on this Mac only, so you
+# can ask "what was that article about X this morning?". Off by default. No
+# images are kept; secrets are redacted; password managers, private browser
+# windows, sign-in and banking pages, password fields, and anything it can't
+# identify are skipped. Pause or delete from the menu bar.
+screen_memory:
+  enabled: false
+  retention_days: 14
+  interval_s: 30                # re-read a window you stay in, keep it only if it changed
+  ocr_fallback: true            # on-device OCR of the front window when it exposes little text
+  exclude_bundle_ids: []        # e.g. com.apple.MobileSMS
+  exclude_window_globs: []      # e.g. "*medical*"
+  only_bundle_ids: []           # when set, record only these apps
+
 # Signed append-only audit log (§6.7 FR-29)
 audit:
   enabled: true

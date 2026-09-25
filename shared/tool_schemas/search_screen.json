@@ -1,0 +1,27 @@
+{
+  "name": "search_screen",
+  "description": "Search what the user has had on screen (screen memory, if they turned it on): words from a page, a message, a document. Use for 'what was that article I was reading', 'find the number from the email earlier'.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      },
+      "since_hours": {
+        "type": "number",
+        "description": "how far back (default 24)"
+      },
+      "app": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  },
+  "permission": "screen",
+  "impact": "read"
+}

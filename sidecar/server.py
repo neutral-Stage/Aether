@@ -107,6 +107,8 @@ from .onboarding_api import router as _onboarding_router  # noqa: E402
 from .dictation_api import router as _dictation_router  # noqa: E402
 from .quick_skills_api import router as _quick_skills_router  # noqa: E402
 from .chips_api import router as _chips_router  # noqa: E402
+from .screen_memory_api import router as _screen_memory_router  # noqa: E402
+from . import screen_memory_api  # noqa: E402
 from . import questions  # noqa: E402
 from . import session_store  # noqa: E402
 
@@ -121,6 +123,7 @@ app.include_router(_onboarding_router)
 app.include_router(_dictation_router)
 app.include_router(_quick_skills_router)
 app.include_router(_chips_router)
+app.include_router(_screen_memory_router)
 
 
 @app.on_event("startup")
@@ -128,6 +131,11 @@ async def _fleet_startup() -> None:
     _register_fleet_sink(asyncio.get_running_loop(), _broadcast)
     _register_apps_sink(asyncio.get_running_loop(), _broadcast)
     _reconcile_persisted_state()
+    try:
+        if screen_memory_api.start_if_enabled():
+            log.info("screen memory is recording (screen_memory.enabled)")
+    except Exception:  # noqa: BLE001 — never block startup
+        log.warning("screen memory did not start", exc_info=True)
 
 
 def _reconcile_persisted_state() -> None:

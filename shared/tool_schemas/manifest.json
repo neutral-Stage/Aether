@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 67,
+  "tool_count": 70,
   "tools": [
     {
       "name": "get_screen_context",
@@ -229,6 +229,18 @@
     {
       "name": "make_tool",
       "file": "make_tool.json"
+    },
+    {
+      "name": "search_screen",
+      "file": "search_screen.json"
+    },
+    {
+      "name": "screen_memory_detail",
+      "file": "screen_memory_detail.json"
+    },
+    {
+      "name": "activity_summary",
+      "file": "activity_summary.json"
     },
     {
       "name": "delegate_to_coder",

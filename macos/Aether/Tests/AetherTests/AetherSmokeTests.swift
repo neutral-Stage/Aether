@@ -361,3 +361,29 @@ final class ChipAndSkillTests: XCTestCase {
         XCTAssertNil(QuickSkill.parse(["name": "no id"]))
     }
 }
+
+final class ScreenMemoryStatusTests: XCTestCase {
+    func testOffUntilTheSidecarSaysOtherwise() {
+        let off = ScreenMemoryStatus.parse(["enabled": false])
+        XCTAssertFalse(off.isRecording)
+        XCTAssertEqual(off.summary, "Screen memory is off")
+        XCTAssertFalse(ScreenMemoryStatus().isRecording)
+    }
+
+    func testRecordingPausedAndStopped() {
+        let obj: [String: Any] = ["enabled": true, "paused": false, "running": true,
+                                  "captures": 12,
+                                  "last": ["app": "Safari", "time": "2026-09-25 10:42"]]
+        var status = ScreenMemoryStatus.parse(obj)
+        XCTAssertTrue(status.isRecording)
+        XCTAssertEqual(status.lastTime, "10:42")
+        XCTAssertEqual(status.summary, "Remembering screen text · 12 saved · last: Safari 10:42")
+        status.paused = true
+        XCTAssertFalse(status.isRecording)
+        XCTAssertEqual(status.summary, "Paused · 12 saved")
+        status.paused = false
+        status.running = false
+        XCTAssertFalse(status.isRecording)
+        XCTAssertTrue(status.summary.hasPrefix("Not running"))
+    }
+}

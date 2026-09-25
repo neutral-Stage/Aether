@@ -1,0 +1,17 @@
+{
+  "name": "screen_memory_detail",
+  "description": "The full text of one screen memory capture (an id from search_screen).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "id"
+    ]
+  },
+  "permission": "screen",
+  "impact": "read"
+}

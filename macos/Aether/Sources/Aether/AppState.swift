@@ -98,6 +98,8 @@ final class AppState: ObservableObject {
     lazy var dictation = DictationController(audio: audio, client: client)
     /// Quick skills on ⌃⌥1–9 (prompt + capture + destination).
     lazy var quickSkills = QuickSkillsController(client: client, audio: audio)
+    /// Screen memory status, pause and delete (menu bar), when it is turned on.
+    lazy var screenMemory = ScreenMemoryController(client: client)
     private let transformPanel = TransformPanel()
     private let chipsPanel = ChipsPanel()
     private let chipsHotkey = CommandBarHotkeyController(modifiers: [.control, .option], keyCode: 8)
@@ -186,6 +188,8 @@ final class AppState: ObservableObject {
         quickSkills.onStatus = { [weak self] status in self?.showStatus(status) }
         quickSkills.speak = { [weak self] text in await self?.speakWithBargeIn(text) }
         Task { await quickSkills.reload() }
+        screenMemory.onStatus = { [weak self] status in self?.showStatus(status) }
+        screenMemory.start()
         audio.refreshMicPermission()
         stt.refreshAuthorization()
         Task {

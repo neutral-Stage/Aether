@@ -451,6 +451,43 @@ final class OrchestratorClient: ObservableObject {
                 obj["file"] as? String)
     }
 
+    // MARK: screen memory
+
+    /// Nil when the sidecar can't be reached.
+    func screenMemoryStatus() async -> ScreenMemoryStatus? {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("screen-memory/status")),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return nil
+        }
+        return ScreenMemoryStatus.parse(obj)
+    }
+
+    func setScreenMemoryPaused(_ paused: Bool) async throws {
+        _ = try await postJSON(paused ? "screen-memory/pause" : "screen-memory/resume", [:])
+    }
+
+    /// Deletes the last `minutes` of screen memory, or all of it when nil. Returns how many.
+    func deleteScreenMemory(minutes: Int?) async throws -> Int {
+        var comps = URLComponents(url: AetherConfig.sidecarBaseURL.appendingPathComponent("screen-memory"),
+                                  resolvingAgainstBaseURL: false)
+        if let minutes {
+            comps?.queryItems = [URLQueryItem(name: "minutes", value: String(minutes))]
+        }
+        guard let url = comps?.url else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 30
+        applySidecarAuth(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+            let detail = obj["detail"] as? String ?? "failed"
+            throw NSError(domain: "Aether", code: 1, userInfo: [NSLocalizedDescriptionKey: detail])
+        }
+        return obj["deleted"] as? Int ?? 0
+    }
+
     // MARK: conversations (chat window)
 
     private func sessionsRequest(_ path: String, method: String = "GET") -> URLRequest {

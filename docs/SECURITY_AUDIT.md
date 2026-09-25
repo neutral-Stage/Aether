@@ -144,6 +144,19 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
   told what was actually sent.
 - [x] Voice "yes" approves the draft unedited; "no" declines.
 
+### Screen memory (`aether/screen_memory/`)
+
+- [x] Off by default; text only, no images kept; secrets redacted before storing.
+- [x] Fails closed: an unreadable app, bundle ID or window title records nothing. Password
+  managers, Aether itself, a focused password field, private windows and sign-in, banking
+  and code pages (by title) are skipped; password fields are dropped from window text.
+- [x] A pause is written to disk and survives a sidecar restart. Deletes, pauses and resumes
+  are audited. `DELETE /screen-memory?minutes=0` is refused rather than read as "all".
+- [x] The database is mode 0600. Retention prunes old captures hourly.
+- [x] Recall results are wrapped as untrusted data and pass the same injection scan as every
+  tool result, so poisoned page text taints the run. The tools are not exposed over
+  Aether's MCP server by default.
+
 ### STOP (FR-26)
 
 - [x] Global event checked before tool dispatch
@@ -233,6 +246,11 @@ Categories: prompt injection, red-team, MCP SSRF/policy, skill replay, sidecar h
     it anywhere itself. The review and the approval are the check on intent; the
     sandbox limits what it can change. Tools with internet access read only their
     declared folders.
+12. **Screen memory recognises private windows by title only.** A browser that does not
+    say "Private", "Incognito" or "InPrivate" in its window title is recorded like any
+    other window, and so is a sensitive page whose title looks ordinary. Redaction catches
+    key-shaped secrets, not personal details. The owner can exclude apps and title globs,
+    or pause.
 
 ---
 

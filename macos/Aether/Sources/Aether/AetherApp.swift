@@ -6,7 +6,7 @@ struct AetherApp: App {
     @StateObject private var app = AppState()
 
     var body: some Scene {
-        MenuBarExtra("Aether", systemImage: "sparkles") {
+        MenuBarExtra {
             VStack(alignment: .leading, spacing: 8) {
                 if app.client.isRunning {
                     Text(app.world.currentStep.isEmpty ? "Working…" : app.world.currentStep)
@@ -16,6 +16,7 @@ struct AetherApp: App {
                 Button("Chat (⌃⌘A)") { app.openChat() }
                 RecentChatsMenu(chat: app.chat) { app.openChat(session: $0) }
                 QuickSkillsMenu(controller: app.quickSkills)
+                ScreenMemoryMenu(controller: app.screenMemory)
                 Button("Open Window") { app.showMainWindow = true }
                 Button("Command Bar (⌥Space)") { app.toggleCommandBar() }
                 Button("New Conversation") { app.newConversation() }
@@ -25,7 +26,12 @@ struct AetherApp: App {
                 Button("Quit") { NSApplication.shared.terminate(nil) }
             }
             .padding(8)
-            .task { await app.chat.refreshSessions() }
+            .task {
+                await app.chat.refreshSessions()
+                await app.screenMemory.refresh()
+            }
+        } label: {
+            MenuBarIcon(screenMemory: app.screenMemory)
         }
         .menuBarExtraStyle(.window)
 
