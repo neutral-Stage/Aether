@@ -15,6 +15,9 @@ from typing import Any, Protocol
 
 log = logging.getLogger(__name__)
 
+# Anthropic fallback model (failover + computer-use); see configs/router.yaml.
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
+
 
 def _check_abort(abort_event: threading.Event | None) -> None:
     if abort_event is not None and abort_event.is_set():
@@ -22,12 +25,21 @@ def _check_abort(abort_event: threading.Event | None) -> None:
         raise StopRequested("STOP requested — LLM call cancelled.")
 
 
-def _http_client_for_llm(abort_event: threading.Event | None):
-    """Create an httpx client registered for STOP cancellation."""
-    import httpx
+def _http_client_for_llm(abort_event: threading.Event | None, *, factory=None):  # noqa: ANN001
+    """Create an HTTP client registered for STOP cancellation.
+
+    ``factory`` builds the client; the default is a plain ``httpx.Client`` (the
+    OpenAI SDK). The Anthropic SDK 1.x is built on ``httpx2`` and rejects
+    ``httpx`` objects, so its callers pass ``anthropic.DefaultHttpxClient``.
+    """
     from . import stop as stop_ctl
 
-    client = httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0))
+    if factory is None:
+        import httpx
+
+        client = httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0))
+    else:
+        client = factory()
 
     def _close() -> None:
         try:
@@ -63,7 +75,32 @@ class LLMBackend(Protocol):
     ) -> LLMResponse: ...
 
 
+# Current Claude models reject sampling parameters (temperature/top_p/top_k)
+# with a 400; older ones (Sonnet/Opus 4.6, Haiku 4.5) still accept them. The
+# 1.x SDK removed these keywords from messages.create, so they travel in
+# extra_body for the models that still honour them.
+_NO_SAMPLING_PREFIXES = (
+    "claude-sonnet-5", "claude-opus-5", "claude-opus-4-7", "claude-opus-4-8",
+    "claude-fable", "claude-mythos",
+)
+
+
+def anthropic_accepts_sampling(model: str) -> bool:
+    return not str(model or "").startswith(_NO_SAMPLING_PREFIXES)
+
+
+def _image_media_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    return "image/png"
+
+
 class LLM:
+    """Anthropic Messages API backend (native tool use)."""
+
     def __init__(self, api_key: str, model: str, max_tokens: int = 1024,
                  temperature: float = 0.0):
         if not api_key:
@@ -72,6 +109,34 @@ class LLM:
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
+
+    def _sampling(self) -> dict[str, Any]:
+        if anthropic_accepts_sampling(self.model):
+            return {"extra_body": {"temperature": self.temperature}}
+        return {}
+
+    def _create(self, abort_event: threading.Event | None, **params: Any):  # noqa: ANN202
+        """One messages.create call on a STOP-cancellable client."""
+        _check_abort(abort_event)
+        import anthropic
+        from . import stop as stop_ctl
+
+        http_client, closer = _http_client_for_llm(
+            abort_event,
+            factory=lambda: anthropic.DefaultHttpxClient(
+                timeout=anthropic.Timeout(120.0, connect=10.0)),
+        )
+        try:
+            client = anthropic.Anthropic(api_key=self._api_key, http_client=http_client)
+            _check_abort(abort_event)
+            return client.messages.create(model=self.model, max_tokens=self.max_tokens,
+                                          **self._sampling(), **params)
+        finally:
+            stop_ctl.unregister_http_closer(closer)
+            try:
+                http_client.close()
+            except Exception:
+                pass
 
     def step(
         self,
@@ -82,28 +147,7 @@ class LLM:
         abort_event: threading.Event | None = None,
     ) -> LLMResponse:
         """One model turn. `messages` is the running Anthropic message list."""
-        _check_abort(abort_event)
-        import anthropic
-        from . import stop as stop_ctl
-
-        http_client, closer = _http_client_for_llm(abort_event)
-        try:
-            client = anthropic.Anthropic(api_key=self._api_key, http_client=http_client)
-            _check_abort(abort_event)
-            resp = client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                system=system,
-                tools=tools,
-                messages=messages,
-            )
-        finally:
-            stop_ctl.unregister_http_closer(closer)
-            try:
-                http_client.close()
-            except Exception:
-                pass
+        resp = self._create(abort_event, system=system, tools=tools, messages=messages)
         text_parts: list[str] = []
         tool_calls: list[dict] = []
         for block in resp.content:
@@ -130,27 +174,18 @@ class LLM:
     def analyze_image(self, image_path: str, prompt: str) -> str:
         """Send a screenshot to Claude vision."""
         import base64
-        from pathlib import Path as P
 
-        media_type = "image/png"
-        p = P(image_path)
-        if p.suffix.lower() in (".jpg", ".jpeg"):
-            media_type = "image/jpeg"
+        p = Path(image_path)
         data = base64.standard_b64encode(p.read_bytes()).decode("ascii")
-        resp = self._client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {
-                        "type": "base64", "media_type": media_type, "data": data,
-                    }},
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-        )
+        resp = self._create(None, messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": _image_media_type(p), "data": data,
+                }},
+                {"type": "text", "text": prompt},
+            ],
+        }])
         parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
         return "\n".join(parts).strip()
 

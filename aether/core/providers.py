@@ -5,7 +5,14 @@ import logging
 import os
 from typing import Any
 
-from .llm import GoogleGeminiClient, LLM, LLMBackend, LocalHTTPClient, OpenAICompatibleClient
+from .llm import (
+    DEFAULT_ANTHROPIC_MODEL,
+    GoogleGeminiClient,
+    LLM,
+    LLMBackend,
+    LocalHTTPClient,
+    OpenAICompatibleClient,
+)
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +93,7 @@ def create_client(
             return None
         return LLM(
             api_key=api_key,
-            model=model or "claude-sonnet-4-6",
+            model=model or DEFAULT_ANTHROPIC_MODEL,
             max_tokens=max_tokens,
             temperature=temperature,
         )
