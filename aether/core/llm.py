@@ -267,6 +267,50 @@ def tool_result_images(block: dict) -> list[dict]:
 
 
 _OMITTED = {"type": "text", "text": "[earlier screenshot omitted]"}
+_COLLAPSED_MARK = "chars of older output collapsed"
+
+
+def _tool_results(messages: list[dict]) -> list[tuple[int, dict]]:
+    """(message index, tool_result block) in conversation order."""
+    out = []
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+            out += [(i, b) for b in msg["content"]
+                    if isinstance(b, dict) and b.get("type") == "tool_result"]
+    return out
+
+
+def collapse_tool_results(messages: list[dict], budget_chars: int, keep_recent: int = 6) -> int:
+    """Shrink the oldest tool results once their text passes ``budget_chars``.
+
+    Long runs accumulate screen dumps and command output; the model needs the
+    recent ones verbatim and only the gist of the old ones. Each collapsed
+    result keeps its first line. The newest ``keep_recent`` results are never
+    touched. Returns how many results were collapsed.
+    """
+    if budget_chars <= 0:
+        return 0
+    results = _tool_results(messages)
+    total = sum(len(tool_result_text(b)) for _, b in results)
+    collapsed = 0
+    for _, block in results[:max(0, len(results) - keep_recent)]:
+        if total <= budget_chars:
+            break
+        text = tool_result_text(block)
+        if _COLLAPSED_MARK in text or len(text) < 400:
+            continue
+        head = text.strip().splitlines()[0][:200] if text.strip() else ""
+        stub = f"{head}\n[{len(text)} {_COLLAPSED_MARK} to save context]"
+        content = block.get("content")
+        if isinstance(content, list):   # keep any image (pruned separately)
+            block["content"] = [{"type": "text", "text": stub},
+                                *[c for c in content if isinstance(c, dict)
+                                  and c.get("type") != "text"]]
+        else:
+            block["content"] = stub
+        total -= len(text) - len(stub)
+        collapsed += 1
+    return collapsed
 
 
 def prune_images(messages: list[dict], keep: int = 2) -> int:
@@ -373,10 +417,7 @@ class OpenAICompatibleClient:
         if text:
             raw_blocks.append({"type": "text", "text": text})
         for tc in choice.message.tool_calls or []:
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
+            args = _args_or_marker(tc.function.arguments)
             call = {"id": tc.id, "name": tc.function.name, "input": args}
             tool_calls.append(call)
             raw_blocks.append({
@@ -385,8 +426,16 @@ class OpenAICompatibleClient:
                 "name": tc.function.name,
                 "input": args,
             })
+        if not tool_calls and text and tools:
+            # Some models (GLM included, now and then) write the call as JSON in
+            # the reply instead of using tool_calls. Accept it for known tools.
+            known = {t.get("name") for t in tools}
+            for call in _parse_tool_calls_from_text(text):
+                if call["name"] in known:
+                    tool_calls.append(call)
+                    raw_blocks.append({"type": "tool_use", **call})
         stop = choice.finish_reason or "end_turn"
-        if tool_calls and stop == "tool_calls":
+        if tool_calls and stop in ("tool_calls", "stop"):
             stop = "tool_use"
         in_tok, out_tok = _usage_from_openai(resp)
         return LLMResponse(
@@ -754,18 +803,55 @@ def _parse_ollama_tool_calls(body: dict) -> list[dict]:
         fn = tc.get("function") if isinstance(tc, dict) else None
         if not isinstance(fn, dict):
             continue
-        args = fn.get("arguments")
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except json.JSONDecodeError:
-                args = {}
         calls.append({
             "id": f"local_{uuid.uuid4().hex[:12]}",
             "name": fn.get("name", ""),
-            "input": dict(args or {}),
+            "input": _args_or_marker(fn.get("arguments")),
         })
     return calls
+
+
+INVALID_ARGS_KEY = "__invalid_arguments__"
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+
+
+def repair_json_args(raw: Any) -> dict | None:
+    """Tool-call arguments as a dict, tolerating common model slips: code
+    fences, prose around the object, trailing commas, double encoding.
+    None when nothing parses (the caller reports it back to the model)."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    text = str(raw).strip()
+    if not text:
+        return {}
+    candidates = [text]
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.S)
+    if fenced:
+        candidates.append(fenced.group(1))
+    lo, hi = text.find("{"), text.rfind("}")
+    if 0 <= lo < hi:
+        candidates.append(text[lo:hi + 1])
+    candidates += [_TRAILING_COMMA_RE.sub(r"\1", c) for c in list(candidates)]
+    for c in candidates:
+        try:
+            obj = json.loads(c)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, str):
+            try:
+                obj = json.loads(obj)
+            except json.JSONDecodeError:
+                continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def _args_or_marker(raw: Any) -> dict:
+    args = repair_json_args(raw)
+    return args if args is not None else {INVALID_ARGS_KEY: str(raw)[:500]}
 
 
 def _json_to_tool_call(raw: str) -> dict | None:

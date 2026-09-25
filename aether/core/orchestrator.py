@@ -11,12 +11,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from .config import Config, ROOT
-from .llm import LLM, prune_images
+from .llm import INVALID_ARGS_KEY, LLM, collapse_tool_results, prune_images
 from .router import Router, RouteTier, RouterConfig
 from .world_model import VerificationExpectation, WorldModel
 from .focus import FocusTracker
@@ -52,31 +53,41 @@ def record_usage_for_response(metrics, resp) -> None:  # noqa: ANN001
         pass
 
 
-BASE_SYSTEM_PROMPT = """You are Aether, an AI agent that operates a real macOS computer \
-on the user's behalf using the provided tools.
+_FALLBACK_SYSTEM_PROMPT = (
+    "You are Aether, an AI agent that operates a real macOS computer on the user's "
+    "behalf using the provided tools. Call get_screen_context before acting, make one "
+    "tool call at a time, and call finish with a short summary when the task is done."
+)
 
-Operating rules:
-- Call `get_screen_context` BEFORE acting, and again after any action that changes \
-the screen, so your targets are current.
-- Click by the most reliable means available, in this order: `click_element` (by \
-name, read live at click time); `click` with `element_index` AND `label`; `click_text` \
-(on-screen text via OCR); `mark_screen` then `click_mark`; `click` with x,y read off a \
-screenshot (space="image") only as the last resort.
-- When the accessibility tree is empty or thin (canvas, Electron, games), use \
-`screenshot` to look, and `analyze_screen` for OCR text with click-ready coordinates.
-- For web tasks prefer `browser_*` tools; for Mail/Safari/Finder prefer tier-1 tools.
-- For complex coding tasks use `delegate_to_coder` (Tier-0 CLI agents).
-- For long or parallel work, `spawn_agent` runs coding agents (claude, codex, \
-opencode, kilo) or terminals in the background: monitor with get_agent_output / \
-wait_for_agent, steer with send_to_agent, and report results when they finish. \
-Spawn multiple agents for independent subtasks.
-- Reuse learned skills from memory when they match the goal.
-- Do ONE tool call at a time and observe the result before the next.
-- If verification fails, try a different approach (vision, AppleScript, browser).
-- Keep going until the task is done, then call `finish` with a short, friendly \
-spoken summary.
-- Be careful: think about whether an action is reversible.
-You are concise."""
+
+# "Said it but didn't do it": a first-person promise of an action, in a reply
+# that made no tool call (Samuel's guard). "Let me know …" is not a promise.
+_PROMISE_RE = re.compile(
+    r"\b(?:I'll|I will|I'm going to|I am going to|let me(?! know)|"
+    r"(?:next|now),? I(?:'ll| will))\s+(?:\w+\s+){0,3}?"
+    r"(?:open|click|type|press|run|search|navigate|go|select|create|send|move|check|look|"
+    r"find|scroll|launch|write|save|close|start|try|use|drag|copy|paste|enter|fill|delete|"
+    r"switch|read|add|set|change|install|download|upload)\b",
+    re.IGNORECASE)
+SAY_DO_NUDGE = ("You described an action but made no tool call, so nothing happened. "
+                "Make the tool call now, or call finish if the task is already done.")
+
+
+def promises_action(text: str | None) -> bool:
+    return bool(text and _PROMISE_RE.search(text))
+
+
+def load_system_prompt() -> str:
+    """The operating rules, from the single source shared/prompts/system.txt."""
+    try:
+        text = (ROOT / "shared" / "prompts" / "system.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        log.warning("shared/prompts/system.txt missing; using the minimal prompt")
+        return _FALLBACK_SYSTEM_PROMPT
+    return text or _FALLBACK_SYSTEM_PROMPT
+
+
+BASE_SYSTEM_PROMPT = load_system_prompt()
 
 
 class Agent:
@@ -203,6 +214,25 @@ class Agent:
         if name == "click":
             blob += "|label=" + (getattr(focus, "label", "") or "")
         return (name, hashlib.sha1(blob.encode()).hexdigest()[:12])
+
+    def _cost_cap(self) -> float:
+        try:
+            return max(0.0, float(self.cfg.get("agent", "cost_cap_usd", default=2.0) or 0.0))
+        except (TypeError, ValueError):
+            return 2.0
+
+    def _budget_note(self, step: int, cost: float, cap: float) -> str | None:
+        """Tell the model when a run is three quarters through its steps or money."""
+        max_steps = self.cfg.max_steps
+        parts = []
+        if max_steps >= 4 and step >= int(max_steps * 0.75):
+            parts.append(f"this is step {step} of at most {max_steps}")
+        if cap and cost >= 0.75 * cap:
+            parts.append(f"about ${cost:.2f} of the ${cap:.2f} budget is spent")
+        if not parts:
+            return None
+        return ("BUDGET: " + " and ".join(parts) + ". Finish the essential part now, then "
+                "call finish saying what is done and what is left.")
 
     def _verification_screenshot(self) -> str | None:
         """A model-sized screenshot after a GUI action when AX can't show the result.
@@ -354,6 +384,7 @@ class Agent:
         *,
         ax_miss: bool = False,
         correction: str | None = None,
+        budget_note: str | None = None,
     ):
         """Route and call the appropriate LLM backend (dual-loop entry)."""
         force_local = self.cfg.local_only and not self.cfg.has_cloud_llm()
@@ -369,6 +400,8 @@ class Agent:
         self._hud_update(step=f"Step {step}: {loop_label}…")
 
         system = self._system_prompt(goal)
+        if budget_note:
+            system += f"\n\n{budget_note}"
         if correction:
             system += f"\n\nSELF-CORRECTION: {correction}"
         if self.world.needs_replan:
@@ -515,6 +548,7 @@ class Agent:
         final = ""
         task_success = False
         pending_correction: str | None = None
+        nudged = False
 
         for step in range(1, self.cfg.max_steps + 1):
             step_start = time.time()
@@ -547,12 +581,23 @@ class Agent:
             )
 
             correction, pending_correction = pending_correction, None
+            cost, cap = self.metrics.run_cost(), self._cost_cap()
+            if cap and cost >= cap:
+                final = (f"Stopped: this task reached its cost limit (${cost:.2f} of "
+                         f"${cap:.2f}). Raise agent.cost_cap_usd to allow longer tasks.")
+                self.world.mark_idle()
+                self._hud_update(status="idle", step=final)
+                await self.say_async(final)
+                break
+            collapse_tool_results(
+                messages, int(self.cfg.get("agent", "context_budget_chars", default=60000) or 0))
             prune_images(messages, keep=2)
             try:
                 resp, route_tier = await self._reason_step(
                     goal, messages, step,
                     ax_miss=ax_miss or correction is not None,
                     correction=correction,
+                    budget_note=self._budget_note(step, cost, cap),
                 )
             except stop_ctl.StopRequested:
                 final = "Stopped by user."
@@ -573,6 +618,14 @@ class Agent:
 
             if resp.text:
                 print(f"💭 {resp.text}")
+
+            if not resp.tool_calls and not nudged and step < self.cfg.max_steps \
+                    and promises_action(resp.text):
+                nudged = True
+                self.metrics.inc("say_do_nudges")
+                messages.append({"role": "assistant", "content": resp.text})
+                messages.append({"role": "user", "content": SAY_DO_NUDGE})
+                continue
 
             if not resp.tool_calls:
                 final = resp.text or "Done."
@@ -612,6 +665,19 @@ class Agent:
                     await self.say_async(desc)
 
                 spec = self.registry.get(name)
+                if INVALID_ARGS_KEY in args:
+                    results.append({"tool_use_id": call["id"], "content": (
+                        f"ERROR: the arguments for {name} were not valid JSON "
+                        f"({str(args[INVALID_ARGS_KEY])[:120]!r}). Call {name} again with a "
+                        "JSON object that matches its schema.")})
+                    continue
+                missing = [k for k in ((spec.json_schema.get("required") or []) if spec else [])
+                           if k not in args]
+                if missing:
+                    results.append({"tool_use_id": call["id"], "content": (
+                        f"ERROR: {name} needs {', '.join(missing)}. Call it again with "
+                        "every required argument.")})
+                    continue
                 if spec and not self.policy.allows_tool(spec):
                     results.append({
                         "tool_use_id": call["id"],
@@ -793,7 +859,8 @@ class Agent:
                 await self.say_async(final)
                 break
         else:
-            final = "Reached the step limit before finishing. Stopping for safety."
+            final = (f"Reached the step limit ({self.cfg.max_steps} steps) before finishing. "
+                     "Stopping for safety.")
             self.world.mark_idle()
             self._hud_update(status="idle", step=final)
             await self.say_async(final)
