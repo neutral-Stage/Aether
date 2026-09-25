@@ -13,8 +13,9 @@ import numpy as np
 
 from .embeddings import HashEmbedder, cosine_similarity, create_embedder
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SKILLS_DB = ROOT / "data" / "skills.db"
+from ..core.paths import ROOT, data_dir, resolve_data_path  # noqa: F401
+
+DEFAULT_SKILLS_DB = data_dir() / "skills.db"  # informational; resolved per instance
 
 _embed = HashEmbedder().embed
 _cosine = cosine_similarity
@@ -54,7 +55,7 @@ class SkillStore:
         embedding_provider: str = "hash",
         openai_api_key: str | None = None,
     ):
-        self.db_path = Path(db_path) if db_path else DEFAULT_SKILLS_DB
+        self.db_path = resolve_data_path(db_path, "skills.db")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._embedder = create_embedder(
             embedding_provider,

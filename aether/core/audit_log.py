@@ -16,9 +16,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PATH = ROOT / "data" / "audit.jsonl"
-_KEY_PATH = ROOT / "data" / ".audit_hmac_key"
+from .paths import ROOT, data_dir, resolve_data_path  # noqa: F401
+
+DEFAULT_PATH = data_dir() / "audit.jsonl"  # informational; resolved per instance
+
+
+def _key_path() -> Path:
+    return data_dir() / ".audit_hmac_key"
 _KEYCHAIN_SERVICE = "com.aether.audit"
 _KEYCHAIN_ACCOUNT = "hmac-key"
 
@@ -60,13 +64,14 @@ def resolve_audit_hmac_key() -> tuple[bytes, str]:
     env = os.getenv("AETHER_AUDIT_KEY")
     if env:
         return env.encode("utf-8"), "env"
-    if _KEY_PATH.exists():
-        return _KEY_PATH.read_bytes(), "file"
-    _KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    key_path = _key_path()
+    if key_path.exists():
+        return key_path.read_bytes(), "file"
+    key_path.parent.mkdir(parents=True, exist_ok=True)
     key = os.urandom(32)
-    _KEY_PATH.write_bytes(key)
+    key_path.write_bytes(key)
     try:
-        _KEY_PATH.chmod(0o600)
+        key_path.chmod(0o600)
     except OSError:
         pass
     return key, "generated"
@@ -85,7 +90,7 @@ class AuditLog:
         enabled: bool = True,
         hmac_key: bytes | None = None,
     ) -> None:
-        self.path = Path(path) if path else DEFAULT_PATH
+        self.path = resolve_data_path(path, "audit.jsonl")
         self.enabled = enabled
         self._lock = threading.Lock()
         self._prev_hash = ""

@@ -14,8 +14,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-_ROOT = Path(__file__).resolve().parents[1]
-_PATH = _ROOT / "data" / "state_events.jsonl"
+from aether.core.paths import data_dir
+
+# Override hook (tests); None → <data_dir>/state_events.jsonl.
+_PATH: Path | None = None
 _lock = threading.Lock()
 
 TERMINAL = frozenset({"idle", "done", "failed", "stopped", "timeout",
@@ -23,7 +25,7 @@ TERMINAL = frozenset({"idle", "done", "failed", "stopped", "timeout",
 
 
 def _store_path() -> Path:
-    return _PATH
+    return _PATH if _PATH is not None else data_dir() / "state_events.jsonl"
 
 
 def append(kind: str, id: str, status: str, **fields: Any) -> None:

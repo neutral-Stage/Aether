@@ -16,8 +16,9 @@ import numpy as np
 
 from .embeddings import HashEmbedder, cosine_similarity, create_embedder
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DB = ROOT / "data" / "memory.db"
+from ..core.paths import ROOT, data_dir, resolve_data_path  # noqa: F401
+
+DEFAULT_DB = data_dir() / "memory.db"  # informational; resolved per instance
 
 # Backward compat — tests and skills import these
 _DIM = HashEmbedder.dimension
@@ -47,7 +48,7 @@ class MemoryStore:
         openai_model: str = "text-embedding-3-small",
         local_model: str = "all-MiniLM-L6-v2",
     ):
-        self.db_path = Path(db_path) if db_path else DEFAULT_DB
+        self.db_path = resolve_data_path(db_path, "memory.db")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._embedder = create_embedder(
             embedding_provider,

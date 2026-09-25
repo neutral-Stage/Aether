@@ -47,6 +47,7 @@ from aether.core import stop as stop_ctl
 from aether.core.orchestrator import Agent
 from aether.core.metrics import MetricsCollector
 from aether.core.audit_log import AuditLog
+from aether.core.paths import data_dir, resolve_data_path
 from aether.voice.stt import STT
 from aether.voice.tts import TTS
 from aether.tools.mcp_client import MCPClient, get_active_mcp_client, set_active_mcp_client
@@ -1182,7 +1183,7 @@ async def crash_report(body: CrashReportRequest) -> dict[str, str]:
     beta = cfg.get("beta") or {}
     if not bool(beta.get("crash_reporting", False)):
         raise HTTPException(503, "Crash reporting is disabled (beta.crash_reporting)")
-    store = ROOT / "data" / "crash_reports.jsonl"
+    store = data_dir() / "crash_reports.jsonl"
     store.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": time.time(),
@@ -1215,7 +1216,7 @@ async def submit_feedback(
         raise HTTPException(400, "message too long (max 2000 characters)")
     category = (body.category or "general")[:64]
     email = (body.email or "")[:254] if body.email else None
-    store = ROOT / str(fb_cfg.get("store_path", "data/feedback.jsonl"))
+    store = resolve_data_path(fb_cfg.get("store_path"), "feedback.jsonl")
     store.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": time.time(),
