@@ -475,6 +475,23 @@ class LocalHTTPClient:
         )
 
 
+def _model_image(image_path: str) -> tuple[str, str]:
+    """A model-sized copy of a screenshot plus its geometry label.
+
+    OCR runs on the full-resolution capture; the model gets a copy capped at
+    the calibrated long edge, labelled with its pixel size and display so the
+    model's coordinates can be mapped back to screen points.
+    """
+    from ..perception import screen
+
+    try:
+        edge = int(screen.grounding_settings().get("max_image_edge") or 0)
+        path = screen.resized_copy(image_path, edge) if edge else image_path
+    except Exception:  # noqa: BLE001 — never block vision on resizing
+        path = image_path
+    return path, screen.image_label(path)
+
+
 class VisionLLM:
     """Vision path: OCR first, optional cloud VLM via the frontier client."""
 
@@ -541,11 +558,10 @@ class VisionLLM:
             try:
                 analyze = getattr(self.cloud, "analyze_image", None)
                 if callable(analyze):
-                    analysis = analyze(
-                        image_path,
-                        prompt or ("Describe visible UI elements, buttons, and text. "
-                                   "Be concise and actionable."),
-                    )
+                    model_path, label = _model_image(image_path)
+                    ask = prompt or ("Describe visible UI elements, buttons, and text. "
+                                     "Be concise and actionable.")
+                    analysis = analyze(model_path, f"{label}\n\n{ask}" if label else ask)
                 else:
                     analysis = ""
                 if analysis:

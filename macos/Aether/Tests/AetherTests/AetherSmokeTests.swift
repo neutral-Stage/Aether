@@ -46,3 +46,23 @@ final class InputControllerTests: XCTestCase {
         XCTAssertTrue(InputController.utf16Chunks("").isEmpty)
     }
 }
+
+final class ScreenCaptureSizingTests: XCTestCase {
+    func testNativeSizeOnRetina() {
+        let size = ScreenCapture.targetPixelSize(pointWidth: 1512, pointHeight: 982, scale: 2, maxEdge: 0)
+        XCTAssertEqual(size.width, 3024)
+        XCTAssertEqual(size.height, 1964)
+    }
+
+    func testLongEdgeCapKeepsAspect() {
+        let size = ScreenCapture.targetPixelSize(pointWidth: 1512, pointHeight: 982, scale: 2, maxEdge: 1600)
+        XCTAssertEqual(size.width, 1600)
+        XCTAssertEqual(size.height, 1039)
+    }
+
+    func testCapIgnoredWhenSmaller() {
+        let size = ScreenCapture.targetPixelSize(pointWidth: 1280, pointHeight: 800, scale: 1, maxEdge: 1600)
+        XCTAssertEqual(size.width, 1280)
+        XCTAssertEqual(size.height, 800)
+    }
+}

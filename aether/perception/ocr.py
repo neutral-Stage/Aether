@@ -27,8 +27,8 @@ class TextRegion:
     w: float
     h: float
 
-    def describe(self, *, pixel_coords: bool = False) -> str:
-        unit = "px" if pixel_coords else "norm"
+    def describe(self, *, pixel_coords: bool = False, unit: str | None = None) -> str:
+        unit = unit or ("px" if pixel_coords else "norm")
         return (f'"{self.text}" conf={self.confidence:.2f} '
                 f'@({int(self.x)},{int(self.y)} {int(self.w)}x{int(self.h)} {unit})')
 
@@ -83,14 +83,41 @@ def recognize_text(image_path: str) -> list[TextRegion]:
     return results_holder
 
 
+def regions_to_points(regions: list[TextRegion], image_path: str) -> list[TextRegion] | None:
+    """Normalized OCR boxes → global screen points, for screenshots Aether took.
+
+    Uses the capture's display geometry, so the result is click-ready on Retina
+    and secondary displays. None when the image has no registered geometry.
+    """
+    from . import screen
+
+    cap = screen.capture_info(image_path)
+    if cap is None or not cap.display.known:
+        return None
+    out = []
+    for r in regions:
+        x0, y0 = cap.normalized_to_points(r.x, r.y)
+        x1, y1 = cap.normalized_to_points(r.x + r.w, r.y + r.h)
+        out.append(TextRegion(text=r.text, confidence=r.confidence,
+                              x=x0, y=y0, w=x1 - x0, h=y1 - y0))
+    return out
+
+
 def _format_regions(
     regions: list[TextRegion],
     w: int,
     h: int,
     limit: int = 40,
+    image_path: str | None = None,
 ) -> str:
     if not regions:
         return "No text detected." if _VISION_OK else "OCR unavailable (install pyobjc-framework-Vision)."
+    points = regions_to_points(regions, image_path) if image_path else None
+    if points is not None:
+        lines = [r.describe(unit="pt") for r in points[:limit]]
+        more = f"\n…({len(regions) - limit} more)" if len(regions) > limit else ""
+        return (f"OCR found {len(regions)} regions (coordinates are screen points; "
+                "click(x, y) at a box's center hits it):\n" + "\n".join(lines) + more)
     if w > 0 and h > 0:
         scaled = scale_regions_to_pixels(regions, w, h)
         lines = [r.describe(pixel_coords=True) for r in scaled[:limit]]
@@ -104,14 +131,14 @@ def recognize_text_formatted(image_path: str, limit: int = 40) -> str:
     """OCR with a compact string for LLM context."""
     regions = recognize_text(image_path)
     w, h = image_dimensions(image_path)
-    return _format_regions(regions, w, h, limit)
+    return _format_regions(regions, w, h, limit, image_path=image_path)
 
 
 def recognize(image_path: str) -> tuple[str, list[TextRegion], tuple[int, int]]:
     """Single OCR pass: returns (formatted_string, raw_regions, (w, h))."""
     regions = recognize_text(image_path)
     w, h = image_dimensions(image_path)
-    return _format_regions(regions, w, h), regions, (w, h)
+    return _format_regions(regions, w, h, image_path=image_path), regions, (w, h)
 
 
 def scale_region_to_pixels(
@@ -182,8 +209,10 @@ def regions_to_dicts(
         w, h = image_dimensions(image_path)
         if w > 0 and h > 0:
             scaled = scale_regions_to_pixels(regions, w, h)
-    return [
-        {
+    points = regions_to_points(regions, image_path) if image_path else None
+    out = []
+    for i, r in enumerate(scaled):
+        d: dict[str, Any] = {
             "text": r.text,
             "confidence": r.confidence,
             "x": r.x,
@@ -192,8 +221,12 @@ def regions_to_dicts(
             "h": r.h,
             "normalized": not (scale_pixels and image_path),
         }
-        for r in scaled
-    ]
+        if points is not None:
+            p = points[i]
+            # Global screen points: pass (screen_x + screen_w/2, …) to click().
+            d.update(screen_x=p.x, screen_y=p.y, screen_w=p.w, screen_h=p.h)
+        out.append(d)
+    return out
 
 
 def classify_screen_content(

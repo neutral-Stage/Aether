@@ -175,6 +175,26 @@ def resolve_app(name: str) -> dict | None:
     return None
 
 
+def focused_window_frame() -> tuple[float, float, float, float] | None:
+    """(x, y, w, h) in global points of the frontmost app's focused window."""
+    if not _IMPORT_OK:
+        return None
+    try:
+        pid = frontmost_app().get("pid", -1)
+        if pid is None or pid <= 0:
+            return None
+        win = _focused_window(AX.AXUIElementCreateApplication(pid))
+        if win is None:
+            return None
+        pos = _value_pair(_copy(win, A_POSITION), "point")
+        size = _value_pair(_copy(win, A_SIZE), "size")
+        if not pos or not size or size[0] <= 0 or size[1] <= 0:
+            return None
+        return (pos[0], pos[1], size[0], size[1])
+    except Exception:
+        return None
+
+
 def _focused_window(app_el):
     for attr in (A_FOCUSED_WINDOW, A_MAIN_WINDOW):
         win = _copy(app_el, attr)

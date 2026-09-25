@@ -81,6 +81,7 @@ final class AppState: ObservableObject {
                 }
             }
         }
+        nativeEffector.start()  // loopback capture endpoint for the sidecar
         stopController.start()
         pttHotkey.start()
         commandBarHotkey.start()
@@ -115,12 +116,11 @@ final class AppState: ObservableObject {
     }
 
     private func applyBetaSettings(_ beta: BetaSettings) {
-        if beta.nativeEffectors {
-            if !nativeEffector.isRunning {
-                nativeEffector.start()
-            }
-        } else {
-            nativeEffector.stop()
+        // The loopback server always runs (screen capture); click/type through
+        // it stays behind the beta flag.
+        nativeEffector.allowInvoke = beta.nativeEffectors
+        if !nativeEffector.isRunning {
+            nativeEffector.start()
         }
         if beta.ambientListening || beta.wakeWord {
             ambientActive = true

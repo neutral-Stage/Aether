@@ -155,6 +155,14 @@ roles:
     vlm_endpoint: null
     vlm_model: null
 
+# Vision grounding (how screenshots are sized for models and how the model's
+# coordinates are read). scripts/calibrate_grounding.py measures this per
+# machine and writes <data_dir>/grounding_calibration.json, which overrides
+# these defaults.
+grounding:
+  max_image_edge: 1600      # long edge (px) of images sent to a model
+  coord_space: auto         # pixels | norm1000 | auto (auto: calibrated or pixels)
+
 # Routing heuristics
 routing:
   # Steps with this many prior failures on the current goal → cloud
