@@ -36,6 +36,22 @@ final class AppState: ObservableObject {
     let tts = TTSBridge()
     lazy var voice = VoicePipeline(audio: audio, stt: stt, tts: tts)
     let wakeWord = WakeWordDetector()
+    /// On-device "Hey Aether …" (beta.wake_word_engine: speech).
+    lazy var speechWake: SpeechWakeListener = {
+        let listener = SpeechWakeListener(stt: stt)
+        listener.isBusy = { [weak self] in
+            guard let self else { return true }
+            return self.isPTTHeld || self.isTalkHeld || self.tts.isSpeaking || self.client.isRunning
+        }
+        listener.onCommand = { [weak self] command in
+            guard let self else { return }
+            self.world.transcript = command
+            self.world.currentStep = "Heard: \(command)"
+            self.refreshHUD()
+            self.routeSpokenText(command)
+        }
+        return listener
+    }()
     lazy var ambient = AmbientListeningController(audio: audio, wake: wakeWord)
     let hud = HUDPanel()
     let commandBar = CommandBarPanel()
@@ -169,7 +185,11 @@ final class AppState: ObservableObject {
         if !nativeEffector.isRunning {
             nativeEffector.start()
         }
-        if beta.ambientListening || beta.wakeWord {
+        if beta.wakeWord && beta.wakeWordEngine == "speech" {
+            // On-device recognizer only: no energy gate, audio stays on the Mac.
+            ambientActive = true
+            speechWake.start()
+        } else if beta.ambientListening || beta.wakeWord {
             ambientActive = true
             ambient.start(threshold: voiceSettings.vadEnergyThreshold)
             wakeWord.engine = beta.wakeWordEngine == "porcupine" ? .porcupine : .energy
@@ -547,6 +567,12 @@ final class AppState: ObservableObject {
 
         world.transcript = text
         wakeWord.processPartialTranscript(text)
+        routeSpokenText(text)
+    }
+
+    /// What to do with something the user said: answer a pending confirmation or
+    /// question, steer a guide, stop, or run it as a request.
+    private func routeSpokenText(_ text: String) {
         if pendingConfirmId != nil {
             handleVoiceConfirmation(text)
             return

@@ -10,7 +10,11 @@
 - **Streaming TTS (Phase 10):** Swift `TTSBridge` tries `/tts/stream` first, falls back to `/tts` on failure.
 - **Realtime voice (Phase 10 beta):** OpenAI Realtime API via `aether/voice/realtime.py` and sidecar `WS /voice/realtime`; Swift `RealtimeVoiceSession.swift`.
 - **Metrics:** Swift reports `stt_ms`, `tts_ms`, `voice_rtt_ms` via `POST /metrics/voice`.
-- **Wake word:** Energy-based placeholder in `WakeWordDetector.swift` + transcript phrase match (`hey aether`). Porcupine hook documented for `beta.wake_word_engine: porcupine`.
+- **Wake word:** set `beta.wake_word: true` and pick `beta.wake_word_engine`:
+  - `speech` (recommended): Apple's recognizer with on-device recognition only, so audio never leaves the Mac. Say "Hey Aether, open my Downloads"; the request runs once the words stop changing for 1.2 s, or say "Hey Aether" and then the request within 6 s. It pauses while Aether speaks, records or works, and restarts its recognition session every 55 s. Needs the Speech Recognition permission and an on-device English model.
+  - `porcupine`: Picovoice keyword spotting (needs an access key).
+  - `energy`: a loudness placeholder with many false wakes; for testing only.
+- **Talk mode latency:** answers stream and are spoken clause by clause. If nothing has been said 0.9 s after you release ⌃⌥, a short filler plays. `first_audio_ms` (release to first sound) is on `/dashboard`.
 - **Ambient mode:** `AmbientListeningController` when `beta.ambient_listening: true` — HUD shows ear indicator.
 
 ## Enabling Realtime voice (beta)

@@ -325,3 +325,17 @@ final class ChatTranscriptTests: XCTestCase {
         XCTAssertNil(ChatSessionSummary.parse(["title": "no id"]))
     }
 }
+
+final class WakeCommandTests: XCTestCase {
+    func testFindsTheCommandAfterTheWakePhrase() {
+        XCTAssertEqual(WakeCommand.command(in: "Hey Aether, open my downloads"), "open my downloads")
+        XCTAssertEqual(WakeCommand.command(in: "hey ether what's on my calendar?"),
+                       "what's on my calendar")
+        XCTAssertEqual(WakeCommand.command(in: "OK Aether"), "")
+        XCTAssertNil(WakeCommand.command(in: "open my downloads"))
+        XCTAssertNil(WakeCommand.command(in: "the aether is thin"))
+        XCTAssertNil(WakeCommand.command(in: "hey either way we should go"))
+        // the last wake phrase wins (the recognizer can repeat itself)
+        XCTAssertEqual(WakeCommand.command(in: "hey aether stop hey aether mute"), "mute")
+    }
+}

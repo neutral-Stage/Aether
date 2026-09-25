@@ -29,13 +29,22 @@ final class STTBridge: ObservableObject {
     }
 
     /// Streaming partials for barge-in / HUD transcript (§6.1).
-    func startPartialRecognition(onPartial: @escaping (String) -> Void) async {
+    /// `contextualStrings` bias recognition toward phrases (the wake word); `onEnd` runs
+    /// when the recognizer stops by itself (error, final result, time limit).
+    func startPartialRecognition(contextualStrings: [String] = [],
+                                 onPartial: @escaping (String) -> Void,
+                                 onEnd: (() -> Void)? = nil) async {
         stopPartialRecognition()
-        guard speechAuthorized, let recognizer, recognizer.isAvailable else { return }
+        guard speechAuthorized, let recognizer, recognizer.isAvailable,
+              recognizer.supportsOnDeviceRecognition else {
+            onEnd?()
+            return
+        }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.requiresOnDeviceRecognition = true
+        request.contextualStrings = contextualStrings
         partialRequest = request
 
         let input = audioEngine.inputNode
@@ -60,7 +69,12 @@ final class STTBridge: ObservableObject {
                 }
             }
             if error != nil || result?.isFinal == true {
-                Task { @MainActor in self.stopPartialRecognition() }
+                Task { @MainActor in
+                    // Only if this is still the current session (not a newer one).
+                    guard self.partialRequest === request else { return }
+                    self.stopPartialRecognition()
+                    onEnd?()
+                }
             }
         }
     }

@@ -98,7 +98,7 @@ beta:
   continuous_screen_stream: false   # ScreenCaptureKit continuous stream (Swift)
   ambient_listening: false          # always-on mic + wake word
   wake_word: false                   # energy placeholder or Porcupine (see wake_word_engine)
-  wake_word_engine: energy           # energy | porcupine
+  wake_word_engine: energy           # energy | porcupine | speech (on-device "Hey Aether …", audio stays on the Mac)
   screen_stream_fps: 0.5            # max frames/sec when continuous stream enabled
   native_effectors: false            # route click/type to Swift HTTP bridge
   realtime_voice: false              # OpenAI Realtime API path (Phase 10)
