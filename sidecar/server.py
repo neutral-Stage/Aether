@@ -4,7 +4,8 @@ Endpoints:
   GET  /health          liveness
   GET  /status          current run + world snapshot
   GET  /metrics         JSON observability snapshot
-  GET  /dashboard       local HTML metrics dashboard
+  GET  /dashboard       local HTML metrics dashboard (with nightly eval history)
+  GET  /eval/history    nightly VM evaluation results
   GET  /tools/schemas   exported tool contracts
   POST /run             start agent (JSON body; optional SSE stream)
   POST /stop            global STOP
@@ -716,31 +717,78 @@ async def metrics(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     return MetricsCollector.get().snapshot()
 
 
+@app.get("/eval/history")
+async def eval_history_endpoint(limit: int = 60,
+                                _auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Nightly VM evaluation results (scripts/nightly_eval.py), oldest first."""
+    from aether.core import eval_history
+
+    entries = eval_history.load(max(1, min(limit, 365)))
+    return {"entries": entries, "trend": eval_history.trend(entries)}
+
+
+def _eval_section() -> str:
+    from aether.core import eval_history
+
+    entries = eval_history.load(30)
+    if not entries:
+        return ("<h2>Nightly evaluation</h2><p class=\"meta\">No runs yet. Install it with "
+                "scripts/vm/install_nightly.sh (see docs/BENCHMARK_VM.md).</p>")
+    t = eval_history.trend(entries)
+    meta = "no completed runs yet"
+    if t.get("runs"):
+        last = t["last"]
+        meta = (f"last: {last.get('passed')}/{last.get('total')} "
+                f"({last.get('pass_rate_pct')}%, bar {last.get('bar_pct')}%) · "
+                f"7-night average {t['avg_last_7_pct']}% · best {t['best_pct']}% · "
+                f"{t['nights_meeting_bar_in_a_row']} night(s) in a row at the bar")
+    rows = "".join(
+        "<tr>" + "".join(f"<td>{_esc(v)}</td>" for v in (
+            e.get("date", ""), e.get("status", ""),
+            f"{e.get('passed')}/{e.get('total')}" if e.get("status") == "ok" else "",
+            f"{e.get('pass_rate_pct')}%" if e.get("status") == "ok" else "",
+            e.get("commit", ""),
+            ", ".join(e.get("failed") or []) or e.get("reason", ""))) + "</tr>"
+        for e in reversed(entries))
+    return (f"<h2>Nightly evaluation</h2><p class=\"meta\">{_esc(meta)}</p>"
+            f"{eval_history.sparkline_svg(entries)}"
+            "<table><tr><th>Night</th><th>Status</th><th>Passed</th><th>Rate</th>"
+            f"<th>Commit</th><th>Failed / note</th></tr>{rows}</table>")
+
+
+def _esc(value: Any) -> str:
+    import html
+
+    return html.escape(str(value if value is not None else ""))
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(_auth: None = Depends(require_auth)) -> str:
     snap = MetricsCollector.get().snapshot()
     counters = snap.get("counters", {})
     histograms = snap.get("histograms", {})
     runs = snap.get("recent_runs", [])
+    # Goals and names can carry text from anywhere (web pages, watched apps):
+    # escape every value that goes into the page.
     rows = "".join(
-        f"<tr><td>{r.get('goal','')}</td><td>{r.get('status')}</td>"
-        f"<td>{r.get('steps')}</td><td>{r.get('tool_calls')}</td>"
-        f"<td>{r.get('duration_ms')}</td></tr>"
+        f"<tr><td>{_esc(r.get('goal', ''))}</td><td>{_esc(r.get('status'))}</td>"
+        f"<td>{_esc(r.get('steps'))}</td><td>{_esc(r.get('tool_calls'))}</td>"
+        f"<td>{_esc(r.get('duration_ms'))}</td></tr>"
         for r in runs
     )
     hist_rows = "".join(
-        f"<tr><td>{name}</td><td>{h.get('count')}</td>"
-        f"<td>{h.get('p50')}</td><td>{h.get('p95')}</td></tr>"
+        f"<tr><td>{_esc(name)}</td><td>{_esc(h.get('count'))}</td>"
+        f"<td>{_esc(h.get('p50'))}</td><td>{_esc(h.get('p95'))}</td></tr>"
         for name, h in histograms.items()
     )
     counter_rows = "".join(
-        f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in sorted(counters.items())
+        f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in sorted(counters.items())
     )
     provider_costs = snap.get("provider_costs", {})
     total_cost = snap.get("total_cost_usd", 0.0)
     cost_rows = "".join(
-        f"<tr><td>{p}</td><td>{c.get('tokens_in')}</td>"
-        f"<td>{c.get('tokens_out')}</td><td>{c.get('calls')}</td>"
+        f"<tr><td>{_esc(p)}</td><td>{_esc(c.get('tokens_in'))}</td>"
+        f"<td>{_esc(c.get('tokens_out'))}</td><td>{_esc(c.get('calls'))}</td>"
         f"<td>${c.get('cost_usd', 0.0):.4f}</td></tr>"
         for p, c in sorted(provider_costs.items())
     )
@@ -750,7 +798,7 @@ async def dashboard(_auth: None = Depends(require_auth)) -> str:
     )
     fleet = snap.get("fleet", {})
     fleet_agent_rows = "".join(
-        f"<tr><td>{a}</td><td>${c:.4f}</td></tr>"
+        f"<tr><td>{_esc(a)}</td><td>${c:.4f}</td></tr>"
         for a, c in sorted((fleet.get("cost_usd_by_agent") or {}).items())
     ) or "<tr><td colspan=2>—</td></tr>"
     fleet_meta = (
@@ -779,6 +827,7 @@ th {{ background: #161b22; }}
 <p class="meta">{fleet_meta}</p>
 <table><tr><th>Agent</th><th>Cost USD</th></tr>{fleet_agent_rows}</table>
 <h2>Recent runs</h2><table><tr><th>Goal</th><th>Status</th><th>Steps</th><th>Tools</th><th>Duration ms</th></tr>{rows}</table>
+{_eval_section()}
 </body></html>"""
 
 

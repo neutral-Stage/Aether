@@ -56,6 +56,26 @@ Every task prints PASS or FAIL with the check it failed on. The command exits
 non-zero below the 60% bar. Record the result table in
 [`VALIDATION_LOG.md`](VALIDATION_LOG.md).
 
+### Every night
+
+Install a launchd agent on the host that runs the whole suite in fresh clones
+each night and marks the pack recipes that passed as tested:
+
+```bash
+scripts/vm/install_nightly.sh                  # 03:17 every night
+scripts/vm/install_nightly.sh --at 01:30 --python /path/to/python
+launchctl kickstart gui/$(id -u)/com.aether.nightly-eval   # run it now
+scripts/vm/install_nightly.sh --uninstall
+```
+
+- Nights on battery power are skipped, and only one evaluation runs at a time.
+- Each night appends a line to `<data dir>/eval/history.jsonl`: the commit,
+  passed and total, the pass rate, and the failed task ids. The full summary
+  goes to `eval/runs/`.
+- The sidecar's `/dashboard` draws the pass rate per night against the 60% bar,
+  and `GET /eval/history` returns the same data as JSON.
+- The log is `~/Library/Logs/Aether/nightly-eval.log`.
+
 ## 3. How a task is judged
 
 | Check | Passes when |
