@@ -1,0 +1,36 @@
+{
+  "name": "scroll",
+  "description": "Scroll the view under an element or point (default: the front window's center). Scroll before deciding something isn't there.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "direction": {
+        "type": "string",
+        "enum": [
+          "up",
+          "down",
+          "left",
+          "right"
+        ]
+      },
+      "amount": {
+        "type": "integer",
+        "description": "lines, default 5"
+      },
+      "element_index": {
+        "type": "integer"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "direction"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

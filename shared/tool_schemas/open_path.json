@@ -1,0 +1,20 @@
+{
+  "name": "open_path",
+  "description": "Open a file or folder in its default app, or in a named app.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "app": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "permission": "files",
+  "impact": "reversible"
+}

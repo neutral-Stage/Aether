@@ -1,0 +1,32 @@
+{
+  "name": "set_window_frame",
+  "description": "Move and/or resize an app's window (screen points).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "app": {
+        "type": "string"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      },
+      "width": {
+        "type": "number"
+      },
+      "height": {
+        "type": "number"
+      },
+      "title_contains": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "app"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

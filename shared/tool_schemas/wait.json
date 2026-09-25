@@ -1,0 +1,23 @@
+{
+  "name": "wait",
+  "description": "Wait for the UI instead of guessing: until text appears on screen (for_text), an app comes to the front (for_app), or a number of seconds. Max 30 s.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "seconds": {
+        "type": "number"
+      },
+      "for_text": {
+        "type": "string"
+      },
+      "for_app": {
+        "type": "string"
+      },
+      "timeout": {
+        "type": "number"
+      }
+    }
+  },
+  "permission": "none",
+  "impact": "read"
+}

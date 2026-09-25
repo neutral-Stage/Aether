@@ -1,0 +1,23 @@
+{
+  "name": "list_dir",
+  "description": "List a folder, newest first, optionally filtered by a glob pattern.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "pattern": {
+        "type": "string"
+      },
+      "show_hidden": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "permission": "files",
+  "impact": "read"
+}

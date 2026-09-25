@@ -151,7 +151,9 @@ class Registry:
             return f"wait for agent [{args.get('session_id', '')[:12]}]"
         if name.startswith("mcp_"):
             return name.replace("_", " ", 1)
-        return name
+        from . import desktop_tools
+
+        return desktop_tools.describe(name, args) or name
 
     def dispatch(self, name: str, args: dict, ctx: AgentContext) -> str:
         stop_ctl.check()
@@ -280,12 +282,21 @@ def _h_type_text(args: dict, _ctx: AgentContext) -> str:
                     f"call get_app_context first.")
         return ax_actions.set_value_handle(
             handle, args["text"], label=f"[{idx}] in {app}")
+    from . import desktop_tools
+
+    text = str(args["text"])
+    if desktop_tools.needs_paste(text):
+        # Long or non-BMP text: paste (exact, fast), then restore the clipboard.
+        from ..effectors import clipboard
+
+        with executor.HID_LOCK:
+            return clipboard.paste_text(text)
     native = _try_native_effector("type_text", args)
     if native:
         return native
     with executor.HID_LOCK:
-        kbd.type_text(args["text"])
-    return f"Typed {len(args['text'])} characters."
+        kbd.type_text(text)
+    return f"Typed {len(text)} characters."
 
 
 def _h_press_key(args: dict, _ctx: AgentContext) -> str:
@@ -876,6 +887,10 @@ def build_default_registry() -> Registry:
         ),
     ]
     for s in specs:
+        reg.register(s)
+    from . import desktop_tools
+
+    for s in desktop_tools.specs():
         reg.register(s)
     from ..core.config import load_config
 

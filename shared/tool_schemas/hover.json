@@ -1,0 +1,23 @@
+{
+  "name": "hover",
+  "description": "Move the pointer over an element without clicking (tooltips, hover menus).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "element_index": {
+        "type": "integer"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      },
+      "seconds": {
+        "type": "number"
+      }
+    }
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

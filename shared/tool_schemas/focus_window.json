@@ -1,0 +1,20 @@
+{
+  "name": "focus_window",
+  "description": "Bring an app (and optionally a window whose title contains text) to the front.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "app": {
+        "type": "string"
+      },
+      "title_contains": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "app"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

@@ -1,0 +1,21 @@
+{
+  "name": "menu_item",
+  "description": "Press a menu command by name, e.g. path='File > Export as PDF\u2026' (works in background apps with app=). Prefer this over hunting for toolbar buttons.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "'Menu > Item > Subitem'"
+      },
+      "app": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

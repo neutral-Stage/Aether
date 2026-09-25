@@ -1,0 +1,10 @@
+{
+  "name": "get_selected_text",
+  "description": "Read the text the user has selected in the focused app.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "permission": "screen",
+  "impact": "read"
+}

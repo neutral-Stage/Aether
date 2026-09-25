@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 37,
+  "tool_count": 54,
   "tools": [
     {
       "name": "get_screen_context",
@@ -109,6 +109,74 @@
     {
       "name": "finish",
       "file": "finish.json"
+    },
+    {
+      "name": "scroll",
+      "file": "scroll.json"
+    },
+    {
+      "name": "drag",
+      "file": "drag.json"
+    },
+    {
+      "name": "hover",
+      "file": "hover.json"
+    },
+    {
+      "name": "wait",
+      "file": "wait.json"
+    },
+    {
+      "name": "read_file",
+      "file": "read_file.json"
+    },
+    {
+      "name": "write_file",
+      "file": "write_file.json"
+    },
+    {
+      "name": "list_dir",
+      "file": "list_dir.json"
+    },
+    {
+      "name": "open_path",
+      "file": "open_path.json"
+    },
+    {
+      "name": "open_url",
+      "file": "open_url.json"
+    },
+    {
+      "name": "clipboard_get",
+      "file": "clipboard_get.json"
+    },
+    {
+      "name": "clipboard_set",
+      "file": "clipboard_set.json"
+    },
+    {
+      "name": "menu_item",
+      "file": "menu_item.json"
+    },
+    {
+      "name": "list_menus",
+      "file": "list_menus.json"
+    },
+    {
+      "name": "focus_window",
+      "file": "focus_window.json"
+    },
+    {
+      "name": "set_window_frame",
+      "file": "set_window_frame.json"
+    },
+    {
+      "name": "get_selected_text",
+      "file": "get_selected_text.json"
+    },
+    {
+      "name": "notify",
+      "file": "notify.json"
     },
     {
       "name": "delegate_to_coder",

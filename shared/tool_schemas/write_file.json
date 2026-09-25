@@ -1,0 +1,29 @@
+{
+  "name": "write_file",
+  "description": "Write a text file. mode: create (new file only), append, or overwrite (replacing an existing file needs confirmation).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "create",
+          "append",
+          "overwrite"
+        ]
+      }
+    },
+    "required": [
+      "path",
+      "content"
+    ]
+  },
+  "permission": "files",
+  "impact": "reversible"
+}
