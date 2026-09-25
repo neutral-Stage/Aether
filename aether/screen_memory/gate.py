@@ -56,9 +56,12 @@ def readable_front(
     text, _source = read_text(state, ocr_fallback=ocr_fallback and fam is None)
     again = probe()
     if (again.bundle_id != state.bundle_id or again.window_title != state.window_title
+            or again.pid != state.pid or again.window_id != state.window_id
             or again.secure_focus):
         return None, "window changed while reading"
-    if fam == "chromium":
+    if fam is not None:
+        # Every browser family is checked again: Chrome-family asks the browser,
+        # the others re-apply their title rules to the window now in front.
         private_again, _how = check(again, allowed)
         if private_again is not False:
             return None, "window changed while reading"

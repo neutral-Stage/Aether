@@ -28,6 +28,9 @@ class WindowState:
     window_title: str | None
     secure_focus: bool = False
     pid: int = -1
+    # The front window's number (CGWindowID), -1 when unknown. Tells apart two
+    # windows with the same title, e.g. a private window opened on the same page.
+    window_id: int = -1
 
 
 @dataclass

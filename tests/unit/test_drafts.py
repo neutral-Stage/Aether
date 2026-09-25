@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from aether.core import drafts
 from aether.tools.registry import ToolSpec
 
@@ -103,3 +105,18 @@ def test_agent_sends_the_edited_draft(minimal_config, monkeypatch) -> None:  # n
     assert [f["key"] for f in shown["draft"]] == ["to", "body"]
     assert sent_args["body"] == "Hi Sam, see you at 1."
     assert "The user edited body" in out.content and out.content.endswith("sent")
+
+
+def test_confirmation_send_failure_leaves_nothing_pending() -> None:
+    from sidecar import confirmation
+
+    async def broken(ev):  # noqa: ANN001, ANN202
+        raise ConnectionError("app went away")
+
+    confirmation.set_broadcaster(broken)
+    try:
+        with pytest.raises(ConnectionError):
+            asyncio.run(confirmation.request_confirmation("delete x"))
+        assert confirmation.pending_count() == 0
+    finally:
+        confirmation.set_broadcaster(None)

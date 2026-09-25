@@ -5,7 +5,10 @@ import Foundation
 @MainActor
 final class RealtimeVoiceSession: NSObject, ObservableObject {
     @Published var isConnected = false
+    /// The reply's transcript so far.
     @Published var lastTranscript = ""
+    /// The user's last spoken turn, as the realtime model heard it.
+    @Published var lastUserTranscript = ""
     @Published var lastError: String?
 
     private var webSocket: URLSessionWebSocketTask?
@@ -139,8 +142,13 @@ final class RealtimeVoiceSession: NSObject, ObservableObject {
         case "response.done":
             onReplyDone?(lastTranscript)
             lastTranscript = ""
-        case "response.output_audio_transcript.delta", "response.audio_transcript.delta",
-             "conversation.item.input_audio_transcription.completed":
+        case "conversation.item.input_audio_transcription.completed":
+            // What the user said, not the reply: kept apart so it never shows
+            // up in (or replaces) the reply's transcript.
+            if let transcript = obj["transcript"] as? String {
+                lastUserTranscript = transcript
+            }
+        case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
             if let delta = obj["delta"] as? String {
                 lastTranscript += delta
                 onTextDelta?(delta)

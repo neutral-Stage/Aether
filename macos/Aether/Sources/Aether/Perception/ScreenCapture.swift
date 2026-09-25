@@ -66,7 +66,10 @@ enum ScreenCapture {
         let ownApps = content.applications.filter { $0.processID == ownPID }
         let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
         let scale = Double(filter.pointPixelScale)
-        let size = targetPixelSize(pointWidth: Double(display.width), pointHeight: Double(display.height),
+        // Point size from CGDisplayBounds, the same frame the result reports, so
+        // the pixel size is always points × scale.
+        let frame = CGDisplayBounds(display.displayID)
+        let size = targetPixelSize(pointWidth: Double(frame.width), pointHeight: Double(frame.height),
                                    scale: scale, maxEdge: maxEdge)
         let config = SCStreamConfiguration()
         config.width = size.width
@@ -79,8 +82,7 @@ enum ScreenCapture {
             .appendingPathComponent("aether-sc-\(UUID().uuidString).png")
         try writePNG(image: image, to: url)
         return CaptureResult(url: url, width: image.width, height: image.height,
-                             displayID: display.displayID, scale: scale,
-                             frame: CGDisplayBounds(display.displayID))
+                             displayID: display.displayID, scale: scale, frame: frame)
     }
 
     /// Capture one PNG frame from the main display to a temp file.

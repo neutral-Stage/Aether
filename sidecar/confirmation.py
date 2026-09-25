@@ -88,13 +88,15 @@ async def _request(description: str, *, run_id: str, tool: str, timeout_sec: flo
         event["draft"] = draft
     if grant:
         event["grant"] = grant
-    await _broadcaster(event)
-
     try:
+        # Inside the try, so a send that fails (or a cancelled run) still
+        # clears the pending entry.
+        await _broadcaster(event)
         return await asyncio.wait_for(future, timeout=timeout_sec)
     except asyncio.TimeoutError:
-        _pending.pop(request_id, None)
         return False, {}, False
+    finally:
+        _pending.pop(request_id, None)
 
 
 def resolve_confirmation(request_id: str, approved: bool,

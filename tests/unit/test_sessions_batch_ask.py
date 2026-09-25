@@ -287,3 +287,12 @@ def test_run_endpoint_threads_sessions(sidecar_client, monkeypatch) -> None:  # 
     assert sidecar_client.delete(f"/sessions/{sid}").status_code == 200
     assert sidecar_client.get(f"/sessions/{sid}").status_code == 404
     assert sidecar_client.post("/answer", json={"request_id": "nope"}).status_code == 404
+
+
+def test_question_send_failure_leaves_nothing_pending() -> None:
+    async def broken(ev: dict) -> None:
+        raise ConnectionError("app went away")
+
+    with pytest.raises(ConnectionError):
+        asyncio.run(questions.request_answer("Which folder?", broadcaster=broken))
+    assert questions.pending_count() == 0

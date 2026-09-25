@@ -33,9 +33,10 @@ async def request_answer(question: str, options: list[str] | None = None, *,
     request_id = uuid.uuid4().hex[:12]
     future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
     _pending[request_id] = future
-    await send({"type": "question", "request_id": request_id, "question": question,
-                "options": list(options or []), "run_id": run_id})
     try:
+        # Inside the try, so a send that fails still clears the pending entry.
+        await send({"type": "question", "request_id": request_id, "question": question,
+                    "options": list(options or []), "run_id": run_id})
         return await asyncio.wait_for(future, timeout=timeout_sec)
     except (asyncio.TimeoutError, asyncio.CancelledError):
         return None

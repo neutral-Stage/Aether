@@ -201,3 +201,45 @@ def test_messaging_timeout_is_set_once(monkeypatch) -> None:  # noqa: ANN001
             read_text=lambda *a, **k: ("x", "ax"),  # noqa: ARG005
             check=lambda *a, **k: (False, "not a browser"))  # noqa: ARG005
     assert calls == [1.0]
+
+
+def test_same_title_but_a_different_window_is_dropped() -> None:
+    """E.g. a private window opened on the same page while the text was read."""
+    calls = {"n": 0}
+
+    def probe():  # noqa: ANN202
+        calls["n"] += 1
+        return WindowState("Safari", "com.apple.Safari", "Example", False, 42,
+                           101 if calls["n"] == 1 else 202)
+
+    state, reason = gate.readable_front(
+        PrivacySettings(allowed_browsers=["com.apple.Safari"]), ocr_fallback=True, probe=probe,
+        read_text=lambda *a, **k: ("some text", "ax"),  # noqa: ARG005
+        check=lambda *a, **k: (False, "title"))  # noqa: ARG005
+    assert state is None and reason == "window changed while reading"
+
+
+def test_allowed_safari_is_re_checked_after_reading() -> None:
+    checks = []
+
+    def check(state, allowed):  # noqa: ANN001, ANN202, ARG001
+        checks.append(state)
+        return (False, "title") if len(checks) == 1 else (True, "title")
+
+    state, reason = gate.readable_front(
+        PrivacySettings(allowed_browsers=["com.apple.Safari"]), ocr_fallback=True,
+        probe=lambda: W(bundle="com.apple.Safari"),
+        read_text=lambda *a, **k: ("some text", "ax"),  # noqa: ARG005
+        check=check)
+    assert state is None and reason == "window changed while reading"
+    assert len(checks) == 2
+
+
+def test_non_browser_is_not_re_checked() -> None:
+    checks = []
+    state, text = gate.readable_front(
+        PrivacySettings(), ocr_fallback=True, probe=lambda: W(),
+        read_text=lambda *a, **k: ("some text", "ax"),  # noqa: ARG005
+        check=lambda *a, **k: checks.append(1) or (False, "not a browser"))  # noqa: ARG005
+    assert state is not None and text == "some text"
+    assert len(checks) == 1

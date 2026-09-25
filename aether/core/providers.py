@@ -43,14 +43,24 @@ def collect_api_keys() -> dict[str, str | None]:
 
 
 def is_loopback_url(url: str) -> bool:
-    """http(s)://localhost, 127.x or [::1]: a server on this Mac."""
+    """http(s)://localhost, 127.x or [::1]: a server on this Mac.
+
+    The host must be ``localhost`` or parse as a loopback IP address, so a
+    name like ``127.0.0.1.example.com`` (which resolves anywhere) doesn't count.
+    """
+    import ipaddress
     from urllib.parse import urlparse
 
     try:
         host = (urlparse(url).hostname or "").lower()
     except ValueError:
         return False
-    return host == "localhost" or host.startswith("127.") or host == "::1"
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def resolve_api_key(role_cfg: dict[str, Any], api_keys: dict[str, str | None]) -> str | None:

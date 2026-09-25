@@ -77,9 +77,30 @@ def probe_front() -> WindowState:
         secure = ("Secure" in str(focused.get("role", ""))
                  or "Secure" in str(focused.get("subrole", "")))
         return WindowState(app["name"], app.get("bundle") or None, title, secure,
-                           int(app["pid"]))
+                           int(app["pid"]), _front_window_id(int(app["pid"])))
     except Exception:  # noqa: BLE001 — unreadable counts as unknown (not recorded)
         return WindowState(None, None, None)
+
+
+def _front_window_id(pid: int) -> int:
+    """Number of ``pid``'s frontmost ordinary window, or -1 when it can't be read.
+
+    Window numbers, owners and layers don't need Screen Recording permission
+    (only window names do).
+    """
+    try:
+        import Quartz
+
+        windows = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+            Quartz.kCGNullWindowID) or []
+        for info in windows:   # front to back
+            if (int(info.get(Quartz.kCGWindowOwnerPID, -1)) == pid
+                    and int(info.get(Quartz.kCGWindowLayer, -1)) == 0):
+                return int(info.get(Quartz.kCGWindowNumber, -1))
+    except Exception:  # noqa: BLE001
+        pass
+    return -1
 
 
 def read_window_text(state: WindowState, *, ocr_fallback: bool = True) -> tuple[str, str]:
