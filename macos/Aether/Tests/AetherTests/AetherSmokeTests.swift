@@ -32,3 +32,17 @@ final class AetherConfigTests: XCTestCase {
         XCTAssertEqual(AuditKeychain.loadKey(), sample)
     }
 }
+
+final class InputControllerTests: XCTestCase {
+    func testUTF16ChunksKeepSurrogatePairsTogether() {
+        let chunks = InputController.utf16Chunks("a😀é")
+        XCTAssertEqual(chunks.count, 3)
+        XCTAssertEqual(chunks[0], [0x61])
+        XCTAssertEqual(chunks[1].count, 2)  // 😀 is a surrogate pair
+        XCTAssertEqual(chunks[2].count, 1)
+    }
+
+    func testUTF16ChunksEmpty() {
+        XCTAssertTrue(InputController.utf16Chunks("").isEmpty)
+    }
+}
