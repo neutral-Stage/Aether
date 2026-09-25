@@ -1,6 +1,6 @@
 {
   "name": "screenshot",
-  "description": "Capture the screen to a PNG file (returns the path).",
+  "description": "Look at the screen: attaches a screenshot of the front window's display. Use when the accessibility tree can't show what you need.",
   "input_schema": {
     "type": "object",
     "properties": {}

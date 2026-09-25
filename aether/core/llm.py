@@ -166,7 +166,7 @@ class LLM:
             model=self.model,
             text="\n".join(text_parts).strip(),
             tool_calls=tool_calls,
-            raw_content=resp.content,
+            raw_content=[_block_dict(b) for b in resp.content],
             stop_reason=resp.stop_reason,
             backend="anthropic",
             input_tokens=in_tok,
@@ -201,14 +201,97 @@ class LLM:
         return assistant_tool_results_turn(results)
 
 
+def _block_dict(block: Any) -> Any:
+    """SDK content block -> plain dict, so history is JSON-safe and prunable."""
+    if isinstance(block, dict):
+        return block
+    dump = getattr(block, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(mode="json", exclude_none=True)
+        except Exception:  # noqa: BLE001 — echo the object back unchanged
+            return block
+    return block
+
+
+def image_block(path: str) -> dict:
+    """A base64 Anthropic image block for a PNG/JPEG on disk."""
+    import base64
+
+    p = Path(path)
+    return {"type": "image", "source": {
+        "type": "base64", "media_type": _image_media_type(p),
+        "data": base64.standard_b64encode(p.read_bytes()).decode("ascii"),
+    }}
+
+
 def assistant_tool_results_turn(results: list[dict]) -> dict:
-    """Anthropic-format tool results turn (shared across backends)."""
-    blocks = [{
-        "type": "tool_result",
-        "tool_use_id": r["tool_use_id"],
-        "content": r["content"],
-    } for r in results]
+    """Anthropic-format tool results turn (shared across backends).
+
+    A result may carry ``images`` (paths). Each image is sent with its
+    geometry label (pixel size, display, cursor) so coordinates the model
+    reads off it can be mapped back to screen points.
+    """
+    blocks = []
+    for r in results:
+        images = [i for i in (r.get("images") or []) if i and Path(i).exists()]
+        if not images:
+            blocks.append({"type": "tool_result", "tool_use_id": r["tool_use_id"],
+                           "content": r["content"]})
+            continue
+        from ..perception import screen
+
+        content: list[dict] = [{"type": "text", "text": str(r["content"])}]
+        for img in images:
+            content.append({"type": "text", "text": screen.image_label(img)})
+            content.append(image_block(img))
+        blocks.append({"type": "tool_result", "tool_use_id": r["tool_use_id"],
+                       "content": content})
     return {"role": "user", "content": blocks}
+
+
+def tool_result_text(block: dict) -> str:
+    """The text of a tool_result block, whether its content is a str or blocks."""
+    content = block.get("content", "")
+    if isinstance(content, list):
+        return "\n".join(str(c.get("text", "")) for c in content
+                         if isinstance(c, dict) and c.get("type") == "text")
+    return str(content)
+
+
+def tool_result_images(block: dict) -> list[dict]:
+    content = block.get("content")
+    if not isinstance(content, list):
+        return []
+    return [c for c in content if isinstance(c, dict) and c.get("type") == "image"]
+
+
+_OMITTED = {"type": "text", "text": "[earlier screenshot omitted]"}
+
+
+def prune_images(messages: list[dict], keep: int = 2) -> int:
+    """Keep only the newest ``keep`` images in tool results; returns how many were dropped.
+
+    Screenshots are ~1-2K tokens each; old ones only cost money and attention.
+    """
+    seen = dropped = 0
+    for msg in reversed(messages):
+        if msg.get("role") != "user" or not isinstance(msg.get("content"), list):
+            continue
+        for block in reversed(msg["content"]):
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            content = block.get("content")
+            if not isinstance(content, list):
+                continue
+            for i in range(len(content) - 1, -1, -1):
+                c = content[i]
+                if isinstance(c, dict) and c.get("type") == "image":
+                    seen += 1
+                    if seen > keep:
+                        content[i] = dict(_OMITTED)
+                        dropped += 1
+    return dropped
 
 
 class OpenAICompatibleClient:
@@ -223,12 +306,17 @@ class OpenAICompatibleClient:
         temperature: float = 0.0,
         backend_name: str = "openai_compatible",
         extra_headers: dict[str, str] | None = None,
+        images: bool = True,
     ):
         if not api_key:
             raise RuntimeError("API key is not set for OpenAI-compatible provider.")
         from openai import OpenAI
 
         self.model = model
+        # False for text-only models (router.yaml `images: false`): screenshots
+        # in tool results are replaced by a note instead of a request the
+        # provider would reject.
+        self.supports_images = images
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.backend = backend_name
@@ -258,7 +346,8 @@ class OpenAICompatibleClient:
                 default_headers=self._extra_headers,
                 http_client=http_client,
             )
-            oai_messages = _anthropic_messages_to_openai(system, messages)
+            oai_messages = _anthropic_messages_to_openai(
+                system, messages, images=self.supports_images)
             oai_tools = _anthropic_tools_to_openai(tools) if tools else None
             kwargs: dict[str, Any] = {
                 "model": self.model,
@@ -415,7 +504,7 @@ class LocalHTTPClient:
                 for block in content:
                     if isinstance(block, dict):
                         if block.get("type") == "tool_result":
-                            text_parts.append(f"[tool result]: {block.get('content', '')}")
+                            text_parts.append(f"[tool result]: {tool_result_text(block)}")
                         elif block.get("type") == "text":
                             text_parts.append(block.get("text", ""))
                     else:
@@ -708,8 +797,10 @@ def _anthropic_tools_to_openai(tools: list[dict]) -> list[dict]:
     return oai_tools
 
 
-def _anthropic_messages_to_openai(system: str, messages: list[dict]) -> list[dict]:
+def _anthropic_messages_to_openai(system: str, messages: list[dict], *,
+                                  images: bool = True) -> list[dict]:
     oai: list[dict] = []
+    pending_images: list[dict] = []
     if system:
         oai.append({"role": "system", "content": system})
     for msg in messages:
@@ -755,10 +846,28 @@ def _anthropic_messages_to_openai(system: str, messages: list[dict]) -> list[dic
                     oai.append({
                         "role": "tool",
                         "tool_call_id": block.get("tool_use_id", ""),
-                        "content": str(block.get("content", "")),
+                        "content": tool_result_text(block),
                     })
+                    pending_images.extend(tool_result_images(block))
                 elif block.get("type") == "text":
                     oai.append({"role": "user", "content": str(block.get("text", ""))})
+            if pending_images and not images:
+                oai.append({"role": "user", "content": (
+                    f"[{len(pending_images)} screenshot(s) omitted: this model cannot see "
+                    "images. Use get_screen_context or analyze_screen for text.]")})
+                pending_images = []
+            if pending_images:
+                # Tool messages are text-only on OpenAI-compatible APIs, so the
+                # screenshots follow as one user message after the tool results.
+                parts: list[dict] = [{"type": "text",
+                                      "text": "Images returned by the tool calls above:"}]
+                for img in pending_images:
+                    src = img.get("source") or {}
+                    parts.append({"type": "image_url", "image_url": {
+                        "url": f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}",
+                    }})
+                oai.append({"role": "user", "content": parts})
+                pending_images = []
             continue
         oai.append({"role": role, "content": str(content)})
     return oai

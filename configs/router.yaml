@@ -50,6 +50,7 @@ providers:
     max_tokens: 1024
     temperature: 0
     provider_label: groq
+    images: false            # text-only model: screenshots become a note
 
   fireworks:
     backend: openai_compatible

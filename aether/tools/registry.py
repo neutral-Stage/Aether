@@ -34,6 +34,14 @@ class AgentContext:
     browser_headless: bool = True
     browser_attach_mode: str = "headless"  # headless | cdp
     browser_cdp_url: str = "http://127.0.0.1:9222"
+    # Screenshots a tool wants the model to SEE; the orchestrator attaches them
+    # to this call's tool result and clears the list.
+    pending_images: list = field(default_factory=list)
+    # mark_screen's numbered targets: {n: {"x", "y", "label"}} in screen points.
+    marks: dict = field(default_factory=dict)
+    # The last screenshot the model was shown; click(space="image") maps
+    # coordinates read off it back to screen points.
+    last_model_image: str | None = None
 
 
 @dataclass
@@ -151,9 +159,10 @@ class Registry:
             return f"wait for agent [{args.get('session_id', '')[:12]}]"
         if name.startswith("mcp_"):
             return name.replace("_", " ", 1)
-        from . import desktop_tools
+        from . import desktop_tools, targeting_tools
 
-        return desktop_tools.describe(name, args) or name
+        return (desktop_tools.describe(name, args) or targeting_tools.describe(name, args)
+                or name)
 
     def dispatch(self, name: str, args: dict, ctx: AgentContext) -> str:
         stop_ctl.check()
@@ -220,18 +229,38 @@ def _try_native_effector(tool: str, args: dict) -> str | None:
 
 def _h_click(args: dict, ctx: AgentContext) -> str:
     app = (args.get("app") or "").strip()
+    idx = args.get("element_index")
+    label = str(args.get("label") or "").strip()
+    if label and idx is not None and not app:
+        from ..effectors import targeting
+
+        current = targeting.current_label(int(idx), ctx.elements)
+        if current is not None and not targeting.label_consistent(current, label):
+            return (f"ERROR: element [{idx}] is now '{current[:60]}', not '{label}'. The "
+                    f"screen changed or the index is wrong. Use click_element(name='{label}') "
+                    "or call get_screen_context again.")
+    if str(args.get("space") or "screen") == "image" and idx is None:
+        from . import targeting_tools
+
+        try:
+            x, y = targeting_tools.image_point_to_screen(ctx, args["x"], args["y"])
+        except (KeyError, ValueError) as e:
+            return f"ERROR: {e}"
+        args = {**args, "x": x, "y": y, "space": "screen"}
     if app:
         return _background_click(app, args)
-    native = _try_native_effector("click", args)
-    if native:
-        time.sleep(0.2)
-        return native
-    idx = args.get("element_index")
     if idx is not None and ax_actions.can_press(int(idx)) and not args.get("double"):
         if args.get("button", "left") == "left":
             return ax_actions.press_element(int(idx))
     x, y = _resolve_click_target(args, ctx)
     count = 2 if args.get("double") else 1
+    if count == 1 and args.get("button", "left") == "left":
+        # The Swift effector only does a plain left click at a point, so it
+        # gets resolved coordinates (never a bare element_index).
+        native = _try_native_effector("click", {"x": x, "y": y})
+        if native:
+            time.sleep(0.2)
+            return native
     with executor.HID_LOCK:
         kbd.click(x, y, button=args.get("button", "left"), count=count)
     time.sleep(0.3)
@@ -348,11 +377,16 @@ def _h_run_shell(args: dict, _ctx: AgentContext) -> str:
 
 
 def _h_screenshot(_args: dict, ctx: AgentContext) -> str:
+    from . import targeting_tools
+
     path = screen_cap.capture_to_file()
     ctx.last_screenshot = path
     if ctx.world is not None:
         ctx.world.last_screenshot = path
-    return f"Saved screenshot to {path}. Use analyze_screen for OCR/vision."
+    targeting_tools.attach_image(ctx, path)
+    return (f"Screenshot attached (full resolution saved to {path}). To click something "
+            "you see, prefer click_element or click_text; mark_screen numbers targets; "
+            "click(x, y, space='image') takes coordinates read off this image.")
 
 
 def _h_analyze_screen(args: dict, ctx: AgentContext) -> str:
@@ -551,16 +585,21 @@ def build_default_registry() -> Registry:
         ),
         ToolSpec(
             name="click",
-            description=("Click a UI element. Prefer element_index from get_screen_context; "
-                         "uses AXPress when available, else CGEvent. Or pass x,y coordinates. "
-                         "Pass app='Name' to click in a BACKGROUND app (element_index from "
-                         "get_app_context; AX-first, no focus steal)."),
+            description=("Click by element_index from get_screen_context (pass label= with the "
+                         "element's text so a stale index is caught), or by x,y. Prefer "
+                         "click_element(name) when the control has a name. x,y are screen "
+                         "points; with space='image' they are pixels read off the last "
+                         "attached screenshot. Pass app='Name' for a BACKGROUND app "
+                         "(element_index from get_app_context; AX-first, no focus steal)."),
             json_schema={
                 "type": "object",
                 "properties": {
                     "element_index": {"type": "integer"},
+                    "label": {"type": "string",
+                              "description": "the element's text, checked before clicking"},
                     "x": {"type": "number"},
                     "y": {"type": "number"},
+                    "space": {"type": "string", "enum": ["screen", "image"]},
                     "button": {"type": "string", "enum": ["left", "right"]},
                     "double": {"type": "boolean"},
                     "app": {"type": "string"},
@@ -672,7 +711,8 @@ def build_default_registry() -> Registry:
         ),
         ToolSpec(
             name="screenshot",
-            description="Capture the screen to a PNG file (returns the path).",
+            description=("Look at the screen: attaches a screenshot of the front window's "
+                         "display. Use when the accessibility tree can't show what you need."),
             json_schema={"type": "object", "properties": {}},
             permission="screen",
             impact="read",
@@ -888,9 +928,9 @@ def build_default_registry() -> Registry:
     ]
     for s in specs:
         reg.register(s)
-    from . import desktop_tools
+    from . import desktop_tools, targeting_tools
 
-    for s in desktop_tools.specs():
+    for s in (*desktop_tools.specs(), *targeting_tools.specs()):
         reg.register(s)
     from ..core.config import load_config
 

@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from .config import Config, ROOT
-from .llm import LLM
+from .llm import LLM, prune_images
 from .router import Router, RouteTier, RouterConfig
 from .world_model import VerificationExpectation, WorldModel
 from .focus import FocusTracker
@@ -33,6 +34,8 @@ from ..core.metrics import MetricsCollector
 
 if TYPE_CHECKING:
     from ..hud.overlay import HUD
+
+log = logging.getLogger(__name__)
 
 def record_usage_for_response(metrics, resp) -> None:  # noqa: ANN001
     """Record token usage for an LLMResponse if the backend reported any."""
@@ -55,8 +58,12 @@ on the user's behalf using the provided tools.
 Operating rules:
 - Call `get_screen_context` BEFORE acting, and again after any action that changes \
 the screen, so your targets are current.
-- If AX tree is empty or element not found, use `analyze_screen` for OCR/vision fallback.
-- Prefer clicking by `element_index` (from get_screen_context) over raw coordinates.
+- Click by the most reliable means available, in this order: `click_element` (by \
+name, read live at click time); `click` with `element_index` AND `label`; `click_text` \
+(on-screen text via OCR); `mark_screen` then `click_mark`; `click` with x,y read off a \
+screenshot (space="image") only as the last resort.
+- When the accessibility tree is empty or thin (canvas, Electron, games), use \
+`screenshot` to look, and `analyze_screen` for OCR text with click-ready coordinates.
 - For web tasks prefer `browser_*` tools; for Mail/Safari/Finder prefer tier-1 tools.
 - For complex coding tasks use `delegate_to_coder` (Tier-0 CLI agents).
 - For long or parallel work, `spawn_agent` runs coding agents (claude, codex, \
@@ -197,14 +204,52 @@ class Agent:
             blob += "|label=" + (getattr(focus, "label", "") or "")
         return (name, hashlib.sha1(blob.encode()).hexdigest()[:12])
 
-    def _click_label(self, args: dict) -> str:
+    def _verification_screenshot(self) -> str | None:
+        """A model-sized screenshot after a GUI action when AX can't show the result.
+
+        agent.verify_screenshots: auto (default; only when the AX tree is thin,
+        or the screen is text-heavy while AX exposes little of that text, as
+        in canvas and Electron apps — the router's vision rule), always, or off.
+        """
+        mode = str(self.cfg.get("agent", "verify_screenshots", default="auto")).lower()
+        if mode == "off":
+            return None
+        if mode != "always":
+            thin = bool(getattr(self.world, "ax_insufficient", False))
+            try:
+                routing = dict(self.router.cfg.routing or {})
+            except Exception:  # noqa: BLE001
+                routing = {}
+            threshold = float(routing.get("ax_text_coverage_threshold", 0.15) or 0.15)
+            hidden_text = (
+                getattr(self.world, "screen_content_class", "unknown") == "text_heavy"
+                and float(getattr(self.world, "ax_text_ratio", 1.0) or 0.0) < threshold)
+            if not (thin or hidden_text):
+                return None
+        try:
+            from ..perception import screen
+
+            edge = int(screen.grounding_settings().get("max_image_edge") or 0) or None
+            shot = screen.try_capture_to_file(max_edge=edge)
+            if shot:
+                self.ctx.last_model_image = shot
+            return shot
+        except Exception as e:  # noqa: BLE001 — verification is best effort
+            log.debug("verification screenshot failed: %s", e)
+            return None
+
+    def _click_label(self, args: dict, name: str = "click") -> str:
         """AX label of the click target. It already exists in ctx.elements —
         it was simply never shown to the policy, so `click` on an Empty Trash
-        button was silent while the AppleScript equivalent was destructive."""
+        button was silent while the AppleScript equivalent was destructive.
+        click_mark targets carry the label mark_screen gave them."""
         try:
+            if name == "click_mark":
+                mark = (self.ctx.marks or {}).get(int(args.get("mark", -1))) or {}
+                return str(mark.get("label") or "")
             idx = args.get("element_index")
             if idx is None:
-                return ""
+                return str(args.get("label") or "")
             for el in self.ctx.elements or []:
                 if el.get("idx") == int(idx):
                     return str(el.get("label") or el.get("title")
@@ -502,6 +547,7 @@ class Agent:
             )
 
             correction, pending_correction = pending_correction, None
+            prune_images(messages, keep=2)
             try:
                 resp, route_tier = await self._reason_step(
                     goal, messages, step,
@@ -541,6 +587,8 @@ class Agent:
             results = []
             done = False
             correction_note: str | None = None
+            step_images = 0
+            gui_changed = False
 
             for call in resp.tool_calls:
                 if stop_ctl.is_set():
@@ -591,8 +639,8 @@ class Agent:
 
                 untrusted = self._context_is_untrusted()
                 focus = self.focus.state()
-                if spec and name == "click":
-                    focus = focus.with_label(self._click_label(args))
+                if spec and name in ("click", "click_mark"):
+                    focus = focus.with_label(self._click_label(args, name))
                 ro2 = bool(spec and self.policy.is_rule_of_two_risk(
                     spec, args, untrusted, focus))
                 # Ask once per identical payload per run. Applies ONLY to
@@ -657,6 +705,7 @@ class Agent:
                     self.world.begin_action_verification(exp)
 
                 tool_start = time.time()
+                self.ctx.pending_images = []
                 try:
                     observation = await asyncio.to_thread(
                         self.registry.dispatch, name, args, self.ctx
@@ -695,12 +744,23 @@ class Agent:
                     observation = observation + "\n\n" + fail_msg
                     correction_note = fail_msg
 
-                results.append({"tool_use_id": call["id"], "content": observation})
+                images, self.ctx.pending_images = list(self.ctx.pending_images), []
+                result = {"tool_use_id": call["id"], "content": observation}
+                if images:
+                    result["images"] = images
+                    step_images += len(images)
+                results.append(result)
+                if spec and spec.permission == "input" and spec.impact != "read" and not tool_err:
+                    gui_changed = True
 
                 # AX miss detection for click
                 if name == "click" and "not found" in observation.lower():
                     correction_note = observation
 
+            if gui_changed and not step_images and results and not done:
+                shot = await asyncio.to_thread(self._verification_screenshot)
+                if shot:
+                    results[-1]["images"] = [shot]
             messages.append(LLM.tool_results_turn(results))
 
             if correction_note and self.world.needs_replan:

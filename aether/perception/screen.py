@@ -131,6 +131,13 @@ def _register(cap: Capture) -> Capture:
     return cap
 
 
+def register_derived(cap: Capture, path: str, pixel_width: int, pixel_height: int) -> Capture:
+    """Register an image made from a capture (resized, annotated) with the same
+    display geometry, so its pixels still map to screen points."""
+    return _register(replace(cap, path=str(path), pixel_width=int(pixel_width),
+                             pixel_height=int(pixel_height)))
+
+
 def capture_info(path: str | None) -> Capture | None:
     """Geometry for a screenshot Aether took (None for foreign images)."""
     if not path:

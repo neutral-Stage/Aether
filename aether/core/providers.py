@@ -113,6 +113,7 @@ def create_client(
             temperature=temperature,
             backend_name=provider_label,
             extra_headers=extra_headers or None,
+            images=bool(role_cfg.get("images", True)),
         )
 
     if backend == "google":

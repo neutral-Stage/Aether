@@ -30,7 +30,8 @@
         "narrate": { "type": "boolean" },
         "local_only": { "type": "boolean" },
         "explicit_planner": { "type": "boolean" },
-        "planner_use_llm": { "type": "boolean" }
+        "planner_use_llm": { "type": "boolean" },
+        "verify_screenshots": { "type": "string", "enum": ["auto", "always", "off"] }
       }
     },
     "mcp_server": {

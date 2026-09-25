@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 54,
+  "tool_count": 58,
   "tools": [
     {
       "name": "get_screen_context",
@@ -177,6 +177,22 @@
     {
       "name": "notify",
       "file": "notify.json"
+    },
+    {
+      "name": "click_element",
+      "file": "click_element.json"
+    },
+    {
+      "name": "click_text",
+      "file": "click_text.json"
+    },
+    {
+      "name": "mark_screen",
+      "file": "mark_screen.json"
+    },
+    {
+      "name": "click_mark",
+      "file": "click_mark.json"
     },
     {
       "name": "delegate_to_coder",

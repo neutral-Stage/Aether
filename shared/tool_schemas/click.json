@@ -1,17 +1,28 @@
 {
   "name": "click",
-  "description": "Click a UI element. Prefer element_index from get_screen_context; uses AXPress when available, else CGEvent. Or pass x,y coordinates. Pass app='Name' to click in a BACKGROUND app (element_index from get_app_context; AX-first, no focus steal).",
+  "description": "Click by element_index from get_screen_context (pass label= with the element's text so a stale index is caught), or by x,y. Prefer click_element(name) when the control has a name. x,y are screen points; with space='image' they are pixels read off the last attached screenshot. Pass app='Name' for a BACKGROUND app (element_index from get_app_context; AX-first, no focus steal).",
   "input_schema": {
     "type": "object",
     "properties": {
       "element_index": {
         "type": "integer"
       },
+      "label": {
+        "type": "string",
+        "description": "the element's text, checked before clicking"
+      },
       "x": {
         "type": "number"
       },
       "y": {
         "type": "number"
+      },
+      "space": {
+        "type": "string",
+        "enum": [
+          "screen",
+          "image"
+        ]
       },
       "button": {
         "type": "string",

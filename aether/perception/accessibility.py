@@ -56,6 +56,8 @@ class Element:
     y: float
     w: float
     h: float
+    identifier: str = ""   # AXIdentifier (developer id; stable across locales)
+    help: str = ""         # AXHelp (tooltip text)
 
     @property
     def center(self) -> tuple[float, float]:
@@ -71,6 +73,17 @@ class Element:
 
 def available() -> bool:
     return _IMPORT_OK
+
+
+def handle_label(handle: Any) -> str | None:
+    """The live label of a retained AXUIElement (None when it can't be read)."""
+    if not _IMPORT_OK or handle is None:
+        return None
+    try:
+        return (_to_str(_copy(handle, A_TITLE)) or _to_str(_copy(handle, A_DESC))
+                or _to_str(_copy(handle, A_LABEL)) or _to_str(_copy(handle, A_VALUE)))
+    except Exception:  # noqa: BLE001 — element gone
+        return None
 
 
 def _copy(element, attr: str):
@@ -253,6 +266,8 @@ def read_tree(max_elements: int = 250, max_depth: int = 14,
                 out.append(Element(
                     idx=idx, role=role, title=title, value=value,
                     enabled=enabled, x=pos[0], y=pos[1], w=size[0], h=size[1],
+                    identifier=_to_str(_copy(el, "AXIdentifier")),
+                    help=_to_str(_copy(el, "AXHelp")),
                 ))
                 if capture_handles:
                     handles[idx] = el

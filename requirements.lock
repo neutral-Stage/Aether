@@ -78,6 +78,8 @@ openai==3.19.2
     # via -r requirements-runtime.txt
 packaging==26.3
     # via pytest
+pillow==12.3.0
+    # via -r requirements-runtime.txt
 playwright==1.63.0
     # via -r requirements-runtime.txt
 pluggy==1.6.0

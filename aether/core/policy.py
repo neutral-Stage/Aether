@@ -303,14 +303,36 @@ def _looks_executable(path: str) -> bool:
         return False
 
 
-def _money_target(name: str, args: dict, focus: "FocusState") -> str:
-    """The control text a money-gated action would act on ("" if none)."""
-    if name == "click":
+# Every tool that clicks a control. The gate judges them on the control's
+# label: click/click_mark via the label the orchestrator resolves into
+# focus.label, click_element/click_text via the name the model asked for (and
+# their handlers refuse when the element they resolve is more sensitive than
+# that name — see is_sensitive_label).
+CLICK_TOOLS = frozenset({"click", "click_element", "click_text", "click_mark"})
+
+
+def _click_target(name: str, args: dict, focus: "FocusState") -> str:
+    """The label of the control a click tool would press ("" if unknown)."""
+    if name in ("click", "click_mark"):
         return focus.label or ""
     if name == "click_element":
-        return str(args.get("name", "") or "")
+        return str(args.get("name") or focus.label or "")
     if name == "click_text":
-        return str(args.get("text", "") or "")
+        return str(args.get("text") or "")
+    return ""
+
+
+def is_sensitive_label(label: str) -> bool:
+    """Would the gate treat a click on a control with this label specially
+    (commit/destroy/send, or spend money)?"""
+    t = (label or "").strip()
+    return bool(t and (_COMMIT_LABEL_RE.match(t) or _MONEY_ACTION_RE.search(t)))
+
+
+def _money_target(name: str, args: dict, focus: "FocusState") -> str:
+    """The control text a money-gated action would act on ("" if none)."""
+    if name in CLICK_TOOLS:
+        return _click_target(name, args, focus)
     if name == "browser_click":
         return str(args.get("selector", "") or "")
     if name == "menu_item":
@@ -443,7 +465,8 @@ class Policy:
             if focus.surface == "outbound_draft":
                 return "destructive"
 
-        if name == "click" and focus.label and _COMMIT_LABEL_RE.match(focus.label.strip()):
+        if name in CLICK_TOOLS and _COMMIT_LABEL_RE.match(
+                _click_target(name, args, focus).strip()):
             return "destructive"
 
         # `open -a` accepts an absolute bundle path, so a "/" turns open_app
@@ -618,8 +641,10 @@ class Policy:
         if name == "press_key":
             mods = args.get("modifiers") or []
             return "press " + "+".join([*(str(m) for m in mods), str(args.get("key", ""))])
-        if name == "click" and focus is not None and focus.label:
-            return f"click the '{focus.label[:80]}' control"
+        if name in CLICK_TOOLS:
+            target = _click_target(name, args, focus or FocusState())
+            if target:
+                return f"click the '{target[:80]}' control"
         if name == "mail_compose":
             return (f"send-ready draft to {args.get('to', '')} / "
                     f"{str(args.get('subject', ''))[:80]}\n"
@@ -675,7 +700,7 @@ class Policy:
     # are the agent's normal motor output (a UI run emits dozens, and any
     # ordinary web page trips the injection scanner), so a blanket here would
     # mean confirm-on-every-keystroke. Gated on the TARGET instead.
-    _UI_INPUT_TOOLS = frozenset({"type_text", "press_key", "click"})
+    _UI_INPUT_TOOLS = frozenset({"type_text", "press_key", *CLICK_TOOLS})
 
     def is_rule_of_two_risk(
         self, spec: "ToolSpec", args: dict, untrusted_present: bool,

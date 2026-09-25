@@ -1,0 +1,30 @@
+{
+  "name": "click_text",
+  "description": "Click visible TEXT found by on-device OCR (for apps whose controls have no accessibility names). occurrence=2 picks the second match.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string"
+      },
+      "occurrence": {
+        "type": "integer"
+      },
+      "button": {
+        "type": "string",
+        "enum": [
+          "left",
+          "right"
+        ]
+      },
+      "double": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

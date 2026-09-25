@@ -1,0 +1,18 @@
+{
+  "name": "mark_screen",
+  "description": "Attach a screenshot with numbered boxes on clickable things (accessibility elements plus OCR text), then click_mark(n). Use when click_element and click_text can't find the target.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "include_text": {
+        "type": "boolean",
+        "description": "also mark OCR text (default true)"
+      },
+      "max_marks": {
+        "type": "integer"
+      }
+    }
+  },
+  "permission": "screen",
+  "impact": "read"
+}

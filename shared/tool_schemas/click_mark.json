@@ -1,0 +1,27 @@
+{
+  "name": "click_mark",
+  "description": "Click a numbered target from the last mark_screen.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "mark": {
+        "type": "integer"
+      },
+      "button": {
+        "type": "string",
+        "enum": [
+          "left",
+          "right"
+        ]
+      },
+      "double": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "mark"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}

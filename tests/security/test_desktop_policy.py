@@ -178,3 +178,96 @@ def test_orchestrator_blocks_paths_outside_roots(minimal_config, monkeypatch, tm
     asyncio.run(agent.run_async("read my hosts file", run_id="p"))
     assert "read_file" not in dispatched
     assert "outside the approved folders" in seen[0]
+
+
+@pytest.mark.security
+class TestClickToolsJudgedByLabel:
+    @pytest.mark.parametrize(("tool", "args", "label"), [
+        ("click_element", {"name": "Empty Trash"}, ""),
+        ("click_element", {"name": "Delete", "role": "button"}, ""),
+        ("click_text", {"text": "Send"}, ""),
+        ("click_mark", {"mark": 3}, "Don't Save"),
+        ("click", {"element_index": 3}, "Move to Trash"),
+    ])
+    def test_commit_labels_are_destructive(self, tool, args, label) -> None:  # noqa: ANN001
+        p = Policy(PolicyConfig())
+        focus = FocusState(label=label)
+        assert p.impact_of(R.get(tool), args, focus) == "destructive"
+        assert p.requires_confirm(R.get(tool), args, focus)
+        target = label or args.get("name") or args.get("text")
+        assert f"click the '{target}' control" in p.describe_operation(R.get(tool), args, focus)
+
+    @pytest.mark.parametrize(("tool", "args"), [
+        ("click_element", {"name": "Save"}), ("click_text", {"text": "Next"}),
+        ("click_mark", {"mark": 1}), ("mark_screen", {}),
+    ])
+    def test_ordinary_targets_do_not_confirm(self, tool, args) -> None:  # noqa: ANN001
+        p = Policy(PolicyConfig())
+        assert not p.requires_confirm(R.get(tool), args, FocusState(label="Open"))
+
+    def test_money_gate_covers_every_click_tool(self) -> None:
+        p = Policy(PolicyConfig())
+        p.set_run_goal("compare prices")
+        assert p.impact_of(R.get("click_element"), {"name": "Buy now"}) == "destructive"
+        assert p.impact_of(R.get("click_text"), {"text": "Place order"}) == "destructive"
+        assert p.impact_of(R.get("click_mark"), {"mark": 2},
+                           FocusState(label="Complete purchase")) == "destructive"
+        assert "did not ask to buy" in p.describe_operation(
+            R.get("click_element"), {"name": "Buy now"})
+
+    def test_clicks_at_a_shell_prompt_confirm_under_taint(self) -> None:
+        p = Policy(PolicyConfig())
+        focus = FocusState(surface="command")
+        for tool, args in [("click_element", {"name": "Run"}), ("click_text", {"text": "OK"}),
+                           ("click_mark", {"mark": 1})]:
+            assert p.is_rule_of_two_risk(R.get(tool), args, True, focus), tool
+            assert not p.is_rule_of_two_risk(R.get(tool), args, False, focus), tool
+
+    @pytest.mark.parametrize(("label", "sensitive"), [
+        ("Empty Trash", True), ("Send", True), ("Buy now", True), ("Subscribe", True),
+        ("Trash", False), ("Save", False), ("Sender settings", False), ("", False),
+    ])
+    def test_is_sensitive_label(self, label, sensitive) -> None:  # noqa: ANN001
+        from aether.core.policy import is_sensitive_label
+
+        assert is_sensitive_label(label) is sensitive
+
+
+@pytest.mark.security
+def test_orchestrator_gates_click_mark_on_its_label(minimal_config, monkeypatch) -> None:  # noqa: ANN001
+    from aether.core.llm import LLMResponse
+    from aether.core.orchestrator import Agent
+    from aether.core.router import RouteDecision, RouteTier
+
+    agent = Agent(minimal_config, hud=None)
+    monkeypatch.setattr(agent.world, "refresh", lambda force=False: {})
+    monkeypatch.setattr(agent, "say", lambda text: None)
+    monkeypatch.setattr(agent.router, "route",
+                        lambda *a, **k: RouteDecision(RouteTier.CLOUD_FRONTIER, "t"))
+    dispatched: list[str] = []
+    monkeypatch.setattr(agent.registry, "dispatch",
+                        lambda name, args, ctx: dispatched.append(name) or "ok")
+    asked: list[str] = []
+
+    async def deny(text: str) -> bool:
+        asked.append(text)
+        return False
+
+    agent.confirm_async = deny
+    agent.ctx.marks = {4: {"x": 10, "y": 10, "label": "Delete Account", "kind": "text"}}
+
+    class Client:
+        n = 0
+
+        def step(self, system, messages, tools, *, abort_event=None):  # noqa: ANN001
+            Client.n += 1
+            call = ({"id": "t1", "name": "click_mark", "input": {"mark": 4}} if Client.n == 1
+                    else {"id": "t2", "name": "finish", "input": {"message": "done"}})
+            return LLMResponse(text="", tool_calls=[call],
+                               raw_content=[{"type": "tool_use", **call}],
+                               stop_reason="tool_use", backend="fake")
+
+    monkeypatch.setattr(agent.router, "pick_client", lambda d: Client())
+    asyncio.run(agent.run_async("tidy my account page", run_id="m"))
+    assert "click_mark" not in dispatched
+    assert asked and "Delete Account" in asked[0]

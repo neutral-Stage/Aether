@@ -10,6 +10,7 @@ python-dotenv>=1.0,<2       # load API keys from .env
 PyYAML>=6.0,<7              # config.yaml, knowledge packs
 jsonschema>=4.23,<5         # config validation
 numpy>=1.24,<3              # memory embeddings, audio buffers
+pillow>=10.4,<13            # numbered target marks and crops on screenshots
 
 # --- macOS native bridges (macOS only) ---
 pyobjc-core>=10.3,<13; sys_platform == "darwin"

@@ -185,6 +185,7 @@ agent:
   local_only: false            # true => prefer local model; cloud fallback if unavailable
   explicit_planner: false      # Phase 11: decompose novel goals into plan steps (FR-9)
   planner_use_llm: true        # use cloud LLM for planning when explicit_planner is true
+  verify_screenshots: auto     # screenshot after GUI actions: auto (thin AX only) | always | off
 
 hud:
   enabled: true                # menu-bar + overlay window
