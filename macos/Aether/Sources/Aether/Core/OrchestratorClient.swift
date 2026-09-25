@@ -454,6 +454,55 @@ final class OrchestratorClient: ObservableObject {
                 obj["file"] as? String)
     }
 
+    // MARK: meeting notes
+
+    func meetingTranscription() async -> MeetingTranscription? {
+        guard let result = try? await URLSession.shared.data(
+                for: sessionsRequest("meetings/transcription")),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return nil
+        }
+        return MeetingTranscription.parse(obj)
+    }
+
+    func startMeeting(app: String) async throws -> (id: String, title: String) {
+        let obj = try await postJSON("meetings", ["app": app])
+        guard let id = obj["id"] as? String else {
+            throw NSError(domain: "Aether", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "No meeting id in the reply"])
+        }
+        return (id, obj["title"] as? String ?? "Meeting")
+    }
+
+    /// One WAV piece of the meeting; `offset` is seconds since the meeting started.
+    func uploadMeetingAudio(id: String, channel: String, offset: Double, wav: Data) async throws {
+        var comps = URLComponents(url: AetherConfig.sidecarBaseURL
+                                    .appendingPathComponent("meetings/\(id)/audio"),
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "channel", value: channel),
+                             URLQueryItem(name: "offset_s", value: String(format: "%.2f", offset))]
+        guard let url = comps?.url else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 180            // local transcription can be slow
+        request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
+        request.httpBody = wav
+        applySidecarAuth(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+            let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+            throw NSError(domain: "Aether", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: obj["detail"] as? String ?? "upload failed"])
+        }
+    }
+
+    /// Ends the meeting; returns the notes as text.
+    func stopMeeting(id: String) async throws -> String {
+        let obj = try await postJSON("meetings/\(id)/stop", [:], timeout: 180)
+        return obj["text"] as? String ?? ""
+    }
+
     // MARK: proactive hints
 
     func hintsEnabled() async -> Bool {

@@ -122,13 +122,23 @@ struct ScreenMemoryMenu: View {
     }
 }
 
-/// The menu bar icon: an eye while screen text is being remembered.
+/// The menu bar icon: a record mark while taking meeting notes, an eye while screen
+/// text is being remembered.
 struct MenuBarIcon: View {
     @ObservedObject var screenMemory: ScreenMemoryController
+    @ObservedObject var meetings: MeetingRecorder
 
     var body: some View {
-        Image(systemName: screenMemory.status.isRecording ? "eye.circle" : "sparkles")
-            .accessibilityLabel(screenMemory.status.isRecording
-                                ? "Aether, remembering screen text" : "Aether")
+        Image(systemName: symbol).accessibilityLabel(label)
+    }
+
+    private var symbol: String {
+        if meetings.active != nil { return "record.circle" }
+        return screenMemory.status.isRecording ? "eye.circle" : "sparkles"
+    }
+
+    private var label: String {
+        if meetings.active != nil { return "Aether, taking meeting notes" }
+        return screenMemory.status.isRecording ? "Aether, remembering screen text" : "Aether"
     }
 }

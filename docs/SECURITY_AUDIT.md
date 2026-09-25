@@ -196,6 +196,17 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
   an assistant are dropped, as are low-confidence, muted or cooling-down kinds. Hints are
   only displayed, never acted on, and each one shown is audited.
 
+### Meeting notes (`aether/meetings/`, `sidecar/meetings_api.py`)
+
+- [x] Started only from the menu bar, after a consent prompt that names the app, where the
+  audio is transcribed, whether the transcript goes to the model, and reminds the user to
+  tell the other participants. The menu bar icon shows a record mark while it records.
+- [x] Audio is written to a private temp file only while it is transcribed, then deleted;
+  quiet pieces are never sent. Local transcription is the default.
+- [x] Transcripts live in a mode-0600 database. The summary request redacts secrets and
+  marks the transcript untrusted; recall tools wrap results the same way.
+- [x] Uploads must be WAV, at most 25 MB, for a meeting that has not ended.
+
 ### STOP (FR-26)
 
 - [x] Global event checked before tool dispatch

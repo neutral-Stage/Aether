@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 70,
+  "tool_count": 72,
   "tools": [
     {
       "name": "get_screen_context",
@@ -241,6 +241,14 @@
     {
       "name": "activity_summary",
       "file": "activity_summary.json"
+    },
+    {
+      "name": "search_meetings",
+      "file": "search_meetings.json"
+    },
+    {
+      "name": "meeting_notes",
+      "file": "meeting_notes.json"
     },
     {
       "name": "delegate_to_coder",

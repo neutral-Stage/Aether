@@ -50,6 +50,14 @@
         "protect_self": { "type": "boolean" }
       }
     },
+    "meetings": {
+      "type": "object",
+      "properties": {
+        "transcription": { "enum": ["local", "cloud"] },
+        "summarize": { "type": "boolean" },
+        "db_path": { "type": "string" }
+      }
+    },
     "hints": {
       "type": "object",
       "properties": {

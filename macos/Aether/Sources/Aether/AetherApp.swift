@@ -17,6 +17,7 @@ struct AetherApp: App {
                 RecentChatsMenu(chat: app.chat) { app.openChat(session: $0) }
                 QuickSkillsMenu(controller: app.quickSkills)
                 ScreenMemoryMenu(controller: app.screenMemory)
+                MeetingMenu(recorder: app.meetings)
                 Button("Open Window") { app.showMainWindow = true }
                 Button("Command Bar (⌥Space)") { app.toggleCommandBar() }
                 Button("New Conversation") { app.newConversation() }
@@ -31,7 +32,7 @@ struct AetherApp: App {
                 await app.screenMemory.refresh()
             }
         } label: {
-            MenuBarIcon(screenMemory: app.screenMemory)
+            MenuBarIcon(screenMemory: app.screenMemory, meetings: app.meetings)
         }
         .menuBarExtraStyle(.window)
 

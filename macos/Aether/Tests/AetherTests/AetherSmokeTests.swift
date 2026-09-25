@@ -466,3 +466,43 @@ final class ScreenHintTests: XCTestCase {
         XCTAssertNil(ScreenHint.parse(["hint": "x", "category": "fix"]))   // no reason, not shown
     }
 }
+
+final class MeetingAudioTests: XCTestCase {
+    func testPickApp() {
+        XCTAssertEqual(MeetingAudio.pickApp(running: ["us.zoom.xos", "com.apple.Safari"],
+                                            frontmost: "com.apple.Safari", own: "dev.aether.macos"),
+                       "us.zoom.xos")
+        XCTAssertEqual(MeetingAudio.pickApp(running: ["us.zoom.xos", "com.apple.FaceTime"],
+                                            frontmost: "com.apple.FaceTime", own: nil),
+                       "com.apple.FaceTime")
+        XCTAssertEqual(MeetingAudio.pickApp(running: ["com.google.Chrome"],
+                                            frontmost: "com.google.Chrome", own: nil),
+                       "com.google.Chrome")
+        XCTAssertNil(MeetingAudio.pickApp(running: [], frontmost: "dev.aether.macos",
+                                          own: "dev.aether.macos"))
+    }
+
+    func testResampleSilenceAndWav() {
+        let one = [Float](repeating: 0.5, count: 48_000)
+        XCTAssertEqual(MeetingAudio.resample(one, from: 48_000, to: 16_000).count, 16_000)
+        XCTAssertEqual(MeetingAudio.resample(one, from: 16_000, to: 16_000).count, 48_000)
+        XCTAssertFalse(MeetingAudio.worthSending([Float](repeating: 0, count: 16_000)))
+        XCTAssertFalse(MeetingAudio.worthSending([Float](repeating: 0.5, count: 100)))
+        XCTAssertTrue(MeetingAudio.worthSending([Float](repeating: 0.1, count: 16_000)))
+        let wav = MeetingAudio.wav([0, 0.5, -0.5, 1.5])
+        XCTAssertEqual(wav.count, 44 + 8)
+        XCTAssertEqual(String(data: wav.prefix(4), encoding: .ascii), "RIFF")
+        XCTAssertEqual(String(data: wav[8 ..< 16], encoding: .ascii), "WAVEfmt ")
+        XCTAssertEqual(String(data: wav[36 ..< 40], encoding: .ascii), "data")
+        // clipped to full scale
+        let last = wav[50 ..< 52].withUnsafeBytes { $0.loadUnaligned(as: Int16.self) }
+        XCTAssertEqual(Int16(littleEndian: last), Int16.max)
+    }
+
+    func testTranscriptionConsentText() {
+        let local = MeetingTranscription.parse(["engine": "local", "ready": true, "summarize": true])
+        XCTAssertEqual(local.whereText, "on this Mac")
+        XCTAssertEqual(MeetingTranscription.parse(["engine": "groq"]).whereText, "with Groq")
+        XCTAssertFalse(MeetingTranscription.parse([:]).ready)
+    }
+}

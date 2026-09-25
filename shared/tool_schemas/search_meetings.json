@@ -1,0 +1,17 @@
+{
+  "name": "search_meetings",
+  "description": "Find meetings the user took notes in: by words said in them, or the most recent ones when query is empty. For 'what did we decide about X', 'my action items from Monday's call'.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    }
+  },
+  "permission": "none",
+  "impact": "read"
+}

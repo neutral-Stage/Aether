@@ -102,6 +102,8 @@ final class AppState: ObservableObject {
     lazy var screenMemory = ScreenMemoryController(client: client)
     /// Polite proactive hints (hints.enabled), shown top-right with their reason.
     lazy var hints = HintController(client: client)
+    /// Meeting notes, started from the menu bar after a consent prompt.
+    lazy var meetings = MeetingRecorder(client: client)
     private let transformPanel = TransformPanel()
     private let chipsPanel = ChipsPanel()
     private let chipsHotkey = CommandBarHotkeyController(modifiers: [.control, .option], keyCode: 8)
@@ -205,6 +207,7 @@ final class AppState: ObservableObject {
                 || self.dictation.state != .idle || self.activeGuideId != nil
         }
         hints.start()
+        meetings.onStatus = { [weak self] status in self?.showStatus(status) }
         audio.refreshMicPermission()
         stt.refreshAuthorization()
         Task {
