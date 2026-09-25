@@ -31,6 +31,8 @@ struct AetherApp: App {
                         audio: app.audio,
                         stt: app.stt,
                         isPresented: $app.showOnboarding,
+                        client: app.client,
+                        onKeysSaved: { app.sidecar.restart() },
                         onComplete: { app.refreshHUD() }
                     )
                 }

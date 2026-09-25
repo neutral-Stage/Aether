@@ -66,3 +66,17 @@ final class ScreenCaptureSizingTests: XCTestCase {
         XCTAssertEqual(size.height, 800)
     }
 }
+
+final class DoctorReportTests: XCTestCase {
+    func testParse() {
+        let json = #"{"verdict":"warn","checks":[{"name":"git","status":"ok","detail":"present","fix":""},{"name":"Default brain","status":"fail","detail":"ZAI_API_KEY missing","fix":"add it"},{"bad":1}]}"#
+        let report = DoctorReport.parse(Data(json.utf8))
+        XCTAssertEqual(report?.verdict, "warn")
+        XCTAssertEqual(report?.checks.count, 2)
+        XCTAssertEqual(report?.checks[1].fix, "add it")
+    }
+
+    func testParseRejectsGarbage() {
+        XCTAssertNil(DoctorReport.parse(Data("nope".utf8)))
+    }
+}

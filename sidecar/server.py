@@ -601,6 +601,27 @@ async def replay_skill(
         store.close()
 
 
+@app.get("/doctor")
+async def doctor(online: bool = False, _auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Preflight checks for the app's onboarding screen (same as `aether doctor`)."""
+    import os
+
+    from aether.core import doctor as doc
+
+    prev = os.environ.get("AETHER_DOCTOR_ONLINE")
+    if online:
+        os.environ["AETHER_DOCTOR_ONLINE"] = "1"
+    try:
+        checks = await asyncio.to_thread(doc.run_checks)
+    finally:
+        if online:
+            if prev is None:
+                os.environ.pop("AETHER_DOCTOR_ONLINE", None)
+            else:
+                os.environ["AETHER_DOCTOR_ONLINE"] = prev
+    return {"verdict": doc.verdict(checks), "checks": doc.as_dicts(checks)}
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     from aether.perception import accessibility as ax

@@ -14,6 +14,33 @@ enum SidecarEvent {
     case runRequest(goal: String)   // proactive trigger auto-run (Phase 11)
 }
 
+struct DoctorCheck: Identifiable, Equatable {
+    var id: String { name }
+    let name: String
+    let status: String   // ok | warn | fail
+    let detail: String
+    let fix: String
+}
+
+struct DoctorReport: Equatable {
+    let verdict: String
+    let checks: [DoctorCheck]
+
+    static func parse(_ data: Data) -> DoctorReport? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let verdict = json["verdict"] as? String else { return nil }
+        let checks = (json["checks"] as? [[String: Any]] ?? []).compactMap { raw -> DoctorCheck? in
+            guard let name = raw["name"] as? String, let status = raw["status"] as? String else {
+                return nil
+            }
+            return DoctorCheck(name: name, status: status,
+                               detail: raw["detail"] as? String ?? "",
+                               fix: raw["fix"] as? String ?? "")
+        }
+        return DoctorReport(verdict: verdict, checks: checks)
+    }
+}
+
 struct RunOptions {
     var careful: Bool = false
     var localOnly: Bool = false
@@ -50,6 +77,25 @@ final class OrchestratorClient: ObservableObject {
             }
         } catch {
             healthOK = false
+        }
+    }
+
+    /// Preflight checks from the sidecar (`GET /doctor`). `online` also tests
+    /// the default brain's API key against the provider.
+    func fetchDoctor(online: Bool = false) async -> DoctorReport? {
+        var comps = URLComponents(url: AetherConfig.sidecarBaseURL.appendingPathComponent("doctor"),
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "online", value: online ? "true" : "false")]
+        guard let url = comps?.url else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 25
+        applySidecarAuth(&request)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            return DoctorReport.parse(data)
+        } catch {
+            return nil
         }
     }
 
