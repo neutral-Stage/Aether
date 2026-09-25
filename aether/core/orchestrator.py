@@ -80,18 +80,12 @@ class Agent:
     ):
         self.cfg = config
         self.confirm_async: Callable[[str], Awaitable[bool]] | None = None
-        self.llm: LLM | None = None
-        if config.anthropic_api_key:
-            self.llm = LLM(
-                api_key=config.anthropic_api_key,
-                model=config.model,
-                max_tokens=config.max_tokens,
-                temperature=config.temperature,
-            )
+        # All model clients come from the router (configs/router.yaml). The old
+        # eager Anthropic client here was never used and was built with the
+        # supervisor's model id (a non-Anthropic model).
         router_path = config.get("router", "config_path")
         self.router = Router(
             router_cfg=RouterConfig.load(ROOT / router_path if router_path else None),
-            cloud_llm=self.llm,
             anthropic_api_key=config.anthropic_api_key,
             api_keys=config.api_keys,
         )
@@ -473,6 +467,7 @@ class Agent:
         messages: list[dict] = [{"role": "user", "content": goal}]
         final = ""
         task_success = False
+        pending_correction: str | None = None
 
         for step in range(1, self.cfg.max_steps + 1):
             step_start = time.time()
@@ -504,9 +499,12 @@ class Agent:
                 ),
             )
 
+            correction, pending_correction = pending_correction, None
             try:
                 resp, route_tier = await self._reason_step(
-                    goal, messages, step, ax_miss=ax_miss,
+                    goal, messages, step,
+                    ax_miss=ax_miss or correction is not None,
+                    correction=correction,
                 )
             except stop_ctl.StopRequested:
                 final = "Stopped by user."
@@ -712,16 +710,11 @@ class Agent:
                     )
                     if replan_result.steps:
                         print(f"📋 replan: {' → '.join(replan_result.steps[:4])}")
-                # Self-correction: extra reasoning turn with failure context
-                fix_resp, _ = await self._reason_step(
-                    goal, messages, step,
-                    ax_miss=True,
-                    correction=correction_note,
-                )
-                if fix_resp.tool_calls:
-                    messages.append(LLM.assistant_turn(fix_resp.raw_content))
-                elif fix_resp.text:
-                    print(f"💭 correction: {fix_resp.text}")
+                # Self-correction: the NEXT regular step reasons with the failure
+                # context. It used to be an extra model call whose tool calls were
+                # appended but never executed, leaving tool_use blocks without
+                # tool_results — an invalid conversation every provider rejects.
+                pending_correction = correction_note
 
             if done:
                 self.world.mark_idle()
