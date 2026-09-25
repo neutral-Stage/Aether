@@ -173,24 +173,35 @@ class AgentSession:
             }
 
 
+def start_process(cmd: list[str], workspace: str, env_allowlist: list[str] | None, *,
+                  stdin_pipe: bool = False) -> subprocess.Popen:
+    """Start a coding CLI in ``workspace`` under the coder sandbox, pipes attached."""
+    from ..effectors import sandbox
+
+    env = build_subprocess_env(env_allowlist)
+    cmd, _profile = sandbox.wrap_coder(cmd, str(workspace))
+    return subprocess.Popen(  # noqa: S603 — commands come from a fixed table
+        cmd,
+        cwd=workspace,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE if stdin_pipe else subprocess.DEVNULL,
+        text=True,
+        bufsize=1,
+    )
+
+
 class SubprocessSession(AgentSession):
     """Shared pipe-based subprocess plumbing (claude / headless CLIs)."""
 
     def _spawn(self, cmd: list[str], *, stdin_pipe: bool = False) -> None:
-        from ..effectors import sandbox
+        self._attach(start_process(cmd, str(self.workspace), self.env_allowlist,
+                                   stdin_pipe=stdin_pipe))
 
-        env = build_subprocess_env(self.env_allowlist)
-        cmd, _profile = sandbox.wrap_coder(cmd, str(self.workspace))
-        self._proc = subprocess.Popen(  # noqa: S603 — commands come from a fixed table
-            cmd,
-            cwd=self.workspace,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.PIPE if stdin_pipe else subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
-        )
+    def _attach(self, proc: subprocess.Popen) -> None:
+        """Take over a running process: start the readers, mark the session running."""
+        self._proc = proc
         threading.Thread(target=self._read_stdout, daemon=True,
                          name=f"fleet-out-{self.session_id}").start()
         threading.Thread(target=self._read_stderr, daemon=True,

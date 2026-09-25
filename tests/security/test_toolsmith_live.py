@@ -51,7 +51,14 @@ def _listener() -> tuple[socket.socket, int]:
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
     srv.listen(1)
-    threading.Thread(target=lambda: srv.accept(), daemon=True).start()
+
+    def accept() -> None:
+        try:
+            srv.accept()
+        except OSError:        # closed by the test, or the connection was refused
+            pass
+
+    threading.Thread(target=accept, daemon=True).start()
     return srv, srv.getsockname()[1]
 
 

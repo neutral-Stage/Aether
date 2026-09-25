@@ -44,6 +44,26 @@ summary.
 `enabled, max_sessions, output_buffer_lines, session_timeout_sec, cost_cap_usd,
 claude_permission_mode, claude_allowed_tools, env_allowlist, worktrees, idle_detect_sec`.
 
+### Warm pool
+
+After a Claude Code session starts in a folder, Aether starts one spare
+`claude` process for the same folder and settings. It waits for its task on
+stdin and uses no CPU. The next Claude session there adopts it and skips the
+CLI's startup time.
+
+- A spare is used only on an exact match: folder, isolation, permission mode,
+  allowed tools, MCP setting and environment allowlist.
+- An isolated spare has its worktree ready. If the repo's HEAD moved since
+  it was made, the spare is thrown away and its unused worktree and branch
+  are removed.
+- At most `fleet.warm_pool.max_total` spares exist (default 2). Each is
+  stopped after `max_age_sec` (default 900). STOP stops them all.
+- `GET /fleet` lists them under `warm`. Turn the pool off with
+  `fleet.warm_pool.enabled: false`.
+
+Codex, OpenCode and Cursor take the task as a command-line argument, so they
+cannot be started ahead of time.
+
 ## Task graphs — multi-agent orchestration (Phase 8)
 
 The fleet gives you N agents; a **task graph** coordinates them. Decompose a goal

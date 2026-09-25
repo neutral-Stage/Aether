@@ -181,6 +181,10 @@ fleet:
     enabled: true              # isolate code agents in git worktrees
     keep: true                 # keep worktree dir after stop (branch always kept)
   require_isolation: false     # refuse spawn if worktree unavailable
+  warm_pool:                   # keep a spare Claude Code process for the last-used folders
+    enabled: true              # the next session there starts without CLI startup time
+    max_total: 2
+    max_age_sec: 900           # spares older than this are stopped (and their worktree removed)
 
 # Tier-0 coding agent delegation (§6.10)
 delegation:

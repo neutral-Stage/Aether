@@ -49,7 +49,7 @@ def _session_or_404(session_id: str):
 @router.get("")
 async def list_sessions() -> dict[str, Any]:
     mgr = SessionManager.get()
-    return {"sessions": mgr.list(), **mgr.snapshot()}
+    return {"sessions": mgr.list(), **mgr.snapshot(), "warm": mgr.warm_status()}
 
 
 # NOTE: /graphs routes MUST precede /{session_id} so "graphs" isn't captured as an id.

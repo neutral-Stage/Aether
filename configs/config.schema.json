@@ -90,7 +90,15 @@
             "keep": { "type": "boolean" }
           }
         },
-        "require_isolation": { "type": "boolean" }
+        "require_isolation": { "type": "boolean" },
+        "warm_pool": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "max_total": { "type": "integer", "minimum": 0, "maximum": 8 },
+            "max_age_sec": { "type": "number", "minimum": 30 }
+          }
+        }
       }
     },
     "delegation": {
