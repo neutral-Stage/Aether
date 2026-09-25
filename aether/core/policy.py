@@ -17,6 +17,7 @@ from .security import (
     InjectionScan,
     InjectionSeverity,
     redact_secrets_extended,
+    redact_tokens,
     scan_injection,
     wrap_untrusted,
 )
@@ -895,6 +896,16 @@ class Policy:
                 lines.append(line)
         redacted = "\n".join(lines)
         return redact_secrets_extended(redacted)
+
+    def redact_observation(self, text: str, *, screen: bool = False) -> tuple[str, int]:
+        """Hide secrets in a tool result before the model sees it: (text, how many).
+
+        Only secrets recognised by their format, so code and file contents the
+        agent may write back stay intact. Text read off the screen also gets
+        the random-looking-string check."""
+        if not self.config.redact_secrets or not text:
+            return text, 0
+        return redact_tokens(text, entropy=screen)
 
     def prepare_context_for_model(self, text: str) -> str:
         """Sanitize perceived content: redact secrets, wrap as untrusted data."""

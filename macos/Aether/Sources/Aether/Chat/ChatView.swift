@@ -90,10 +90,17 @@ struct ChatComposer: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField("What should I do?", text: $store.draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1 ... 5)
-                .onSubmit { store.send() }
+            VStack(alignment: .leading, spacing: 2) {
+                TextField("What should I do?", text: $store.draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1 ... 5)
+                    .onSubmit { store.send() }
+                if !store.estimate.isEmpty {
+                    Text(store.estimate)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
             if store.transcript.isWorking {
                 Button(role: .destructive) { store.stop() } label: {
                     Label("Stop", systemImage: "stop.fill")
@@ -152,6 +159,15 @@ struct ChatBubble: View {
                 } else {
                     Text(message.text.isEmpty ? "Done." : message.text)
                         .textSelection(.enabled)
+                }
+                if message.redacted > 0 {
+                    Label(redactedLabel, systemImage: "lock.shield")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("API keys, tokens and private keys found in what Aether read "
+                              + "were replaced with [REDACTED] before it went to the model.")
+                }
+                if message.status != .working {
                     if message.status != .done {
                         HStack {
                             Text(message.status == .stopped ? "Stopped" : "Didn't finish")
@@ -166,6 +182,11 @@ struct ChatBubble: View {
             .frame(maxWidth: 560, alignment: .leading)
             .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
         }
+    }
+
+    private var redactedLabel: String {
+        message.redacted == 1 ? "1 secret was hidden from the model"
+            : "\(message.redacted) secrets were hidden from the model"
     }
 
     private var stepsLabel: String {

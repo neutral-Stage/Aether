@@ -101,6 +101,12 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
 - [x] HMAC-signed append-only JSONL
 - [x] `GET /audit/verify` tamper check
 - [x] Secret redaction in policy and error responses
+- [x] **Fixed:** tool results (screen text, shell output, files, browser pages) reached the
+  model without redaction; only the system prompt was redacted. Every tool result now has
+  API keys, tokens, private keys and bearer tokens replaced by `[REDACTED]` before the
+  model, the audit log or the step log see it. Text read off the screen also has long
+  random-looking strings hidden. The chat shows how many were hidden per reply;
+  `policy.redact_secrets: false` turns it off.
 - [x] `AETHER_AUDIT_KEY` env override (Phase 12)
 - [x] **Fixed:** `/audit/verify` reported a chain break on every log longer than 500
   records, because it checked the last 500 as if the first had no predecessor. It now
@@ -278,6 +284,10 @@ Categories: prompt injection, red-team, MCP SSRF/policy, skill replay, sidecar h
     example.com" also allows `https://example.com/?q=<anything>`. The grant is the user's
     explicit choice for that one site, but a site chosen by injected text and then
     approved can receive data this way for the rest of the conversation.
+14. **Redaction recognises secrets by format.** A password or a key with no known prefix
+    in a file or shell output still reaches the model (screen text gets the extra
+    random-string check). Personal details such as emails and phone numbers are not
+    redacted, because tasks often need them.
 
 ---
 

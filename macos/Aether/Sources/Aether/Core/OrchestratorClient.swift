@@ -75,7 +75,7 @@ enum SidecarEvent {
                 out.append(.question(requestId: rid, question: q,
                                      options: obj["options"] as? [String] ?? []))
             }
-        case "tool_call", "tool_result", "screenshot", "text", "plan":
+        case "tool_call", "tool_result", "screenshot", "text", "plan", "redaction":
             out.append(.step(obj))
         case "pointer":
             let targets = (obj["targets"] as? [[String: Any]] ?? []).compactMap(OverlayTarget.init(json:))
@@ -452,6 +452,17 @@ final class OrchestratorClient: ObservableObject {
                                       "spoken": spoken], timeout: 90)
         return (obj["text"] as? String ?? "", obj["destination"] as? String ?? "show",
                 obj["file"] as? String)
+    }
+
+    // MARK: cost
+
+    /// One line such as "Tasks usually cost about $0.02 · stops at $2.00"; nil when unreachable.
+    func fetchEstimate() async -> String? {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("estimate")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return nil
+        }
+        return obj["summary"] as? String
     }
 
     // MARK: activity log

@@ -41,6 +41,10 @@ def _isolated_sessions(tmp_path_factory: pytest.TempPathFactory,
 
     monkeypatch.setattr(session_store, "_PATH",
                         tmp_path_factory.mktemp("sessions") / "sessions.db")
+    from aether.core import cost_history
+
+    monkeypatch.setattr(cost_history, "PATH",
+                        tmp_path_factory.mktemp("costs") / "run_costs.jsonl")
 
 
 @pytest.fixture(autouse=True)

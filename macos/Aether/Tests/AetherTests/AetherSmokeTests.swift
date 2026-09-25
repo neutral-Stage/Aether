@@ -441,3 +441,16 @@ final class TapSequenceTests: XCTestCase {
         XCTAssertFalse(control.register(at: 0.5))       // clock went backwards: start over
     }
 }
+
+final class RedactionNoteTests: XCTestCase {
+    func testRedactionEventsCountOnTheReply() {
+        var t = ChatTranscript()
+        t.send("read my screen")
+        for event in SidecarEvent.parse(["type": "redaction", "step": 1, "tool": "get_screen_context",
+                                         "count": 2, "total": 2], fallbackGoal: "") {
+            t.apply(event)
+        }
+        t.apply(.step(["type": "redaction", "count": 1]))   // no total: adds
+        XCTAssertEqual(t.messages.last?.redacted, 3)
+    }
+}

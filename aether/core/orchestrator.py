@@ -249,6 +249,8 @@ class Agent:
         # Consent ledger: one Rule-of-Two confirmation per identical payload per
         # run. Cross-call state, so it cannot live in Policy as a pure function.
         self._ro2_grants: set[tuple[str, str]] = set()
+        # Secrets hidden from the model in this run's tool results (shown to the user).
+        self.redacted_count = 0
         audit_raw = config.get("audit") or {}
         self.audit = AuditLog.configure(
             path=audit_raw.get("path"),
@@ -480,6 +482,7 @@ class Agent:
         else:
             observation = await asyncio.to_thread(self.registry.dispatch, name, args, self.ctx)
         tool_err = observation.startswith("ERROR")
+        observation = self._hide_secrets(name, spec, observation, step=step)
         if edited and not tool_err:
             observation = (f"(The user edited {', '.join(edited)} before approving; what was "
                            f"sent is: " + "; ".join(f"{k}={str(args.get(k))[:200]!r}"
@@ -511,6 +514,17 @@ class Agent:
         gui = bool(spec and spec.permission == "input" and spec.impact != "read" and not tool_err)
         return CallOutcome(observation, images=images, correction=correction,
                            gui_changed=gui, error=tool_err)
+
+    def _hide_secrets(self, name: str, spec, text: str, *, step: int) -> str:  # noqa: ANN001
+        """Redact secrets from a tool result before the model, the audit log or the
+        step log see it, and tell the app how many were hidden."""
+        screen = bool(spec and spec.permission == "screen") or name == "browser_get_text"
+        clean, hidden = self.policy.redact_observation(text, screen=screen)
+        if hidden:
+            self.redacted_count += hidden
+            self._emit({"type": "redaction", "step": step, "tool": name, "count": hidden,
+                        "total": self.redacted_count})
+        return clean
 
     async def _execute_batch(self, args: dict, *, step: int, rid: str) -> CallOutcome:
         """Run up to 5 reversible UI actions in a row, each through the full gate;
@@ -1136,6 +1150,7 @@ class Agent:
         # these a focus surface (and a granted confirmation) leaked into the
         # next goal — neither reset nor seed was called anywhere before now.
         self._ro2_grants.clear()
+        self.redacted_count = 0
         self._tool_repairs.clear()
         self.focus.reset()
         self.policy.set_run_goal(goal)

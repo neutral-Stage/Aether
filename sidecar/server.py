@@ -111,6 +111,7 @@ from .screen_memory_api import router as _screen_memory_router  # noqa: E402
 from . import screen_memory_api  # noqa: E402
 from . import questions  # noqa: E402
 from aether.core import session_grants  # noqa: E402
+from aether.core import cost_history  # noqa: E402
 from . import session_store  # noqa: E402
 
 app.include_router(_fleet_router)
@@ -132,6 +133,7 @@ async def _fleet_startup() -> None:
     _register_fleet_sink(asyncio.get_running_loop(), _broadcast)
     _register_apps_sink(asyncio.get_running_loop(), _broadcast)
     _reconcile_persisted_state()
+    MetricsCollector.get().on_run_end = cost_history.record
     try:
         if screen_memory_api.start_if_enabled():
             log.info("screen memory is recording (screen_memory.enabled)")
@@ -747,6 +749,14 @@ async def audit_entries(limit: int = 200, q: str = "", event: str = "", run_id: 
     entries = await asyncio.to_thread(_audit().recent, max(1, min(limit, 1000)),
                                       query=q, event=event, run_id=run_id)
     return {"entries": entries}
+
+
+@app.get("/estimate")
+async def estimate(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """What tasks usually cost (recent runs) and the per-task cost limit."""
+    cap = float((load_config().get("agent") or {}).get("cost_cap_usd", 2.0) or 0.0)
+    est = await asyncio.to_thread(cost_history.estimate, cap)
+    return {**est, "summary": cost_history.summary(est)}
 
 
 @app.get("/metrics")

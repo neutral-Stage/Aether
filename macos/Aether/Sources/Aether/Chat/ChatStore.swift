@@ -13,6 +13,8 @@ final class ChatStore: ObservableObject {
     @Published var loadError: String?
     /// What the user allowed for the rest of the open conversation.
     @Published var grants: [String] = []
+    /// What tasks usually cost and the per-task limit, shown under the text field.
+    @Published var estimate = ""
 
     weak var app: AppState?
     private let client: OrchestratorClient
@@ -25,6 +27,7 @@ final class ChatStore: ObservableObject {
         if let rows = try? await client.listSessions() {
             sessions = rows
         }
+        estimate = await client.fetchEstimate() ?? ""
     }
 
     func open(_ id: String?) async {

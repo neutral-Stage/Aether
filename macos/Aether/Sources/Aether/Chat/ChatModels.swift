@@ -44,6 +44,8 @@ struct ChatMessage: Identifiable, Equatable {
     var narrationStep = -1
     /// Waiting on the user: a confirmation or a question (the panel asks it).
     var waitingOn = ""
+    /// Secrets hidden from the model in this reply's tool results.
+    var redacted = 0
 }
 
 /// The conversation shown in the chat window. A pure reducer over the run's
@@ -134,6 +136,9 @@ struct ChatTranscript: Equatable {
             if let steps = p["steps"] as? [String], !steps.isEmpty {
                 messages[i].narration = "Plan: " + steps.joined(separator: " → ")
             }
+        case "redaction":
+            messages[i].redacted = p["total"] as? Int
+                ?? messages[i].redacted + (p["count"] as? Int ?? 0)
         default:
             break
         }

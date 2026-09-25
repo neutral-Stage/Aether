@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextvars
 import threading
+from collections.abc import Callable
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -115,6 +116,8 @@ class MetricsCollector:
         self._max_hist = 200
         self._provider_costs: dict[str, dict[str, float]] = {}
         self._agent_costs: dict[str, dict[str, float]] = {}
+        # Called with each finished run (the sidecar keeps a cost history with it).
+        self.on_run_end: Callable[[RunMetrics], None] | None = None
 
     @classmethod
     def get(cls) -> MetricsCollector:
@@ -181,6 +184,11 @@ class MetricsCollector:
                 self._runs = self._runs[-self._max_runs :]
             self.inc(f"runs_{status}")
         _active_run.set(None)
+        if self.on_run_end is not None:
+            try:
+                self.on_run_end(rm)
+            except Exception:  # noqa: BLE001 — bookkeeping must never break a run
+                pass
 
     def record_step(self, route_tier: str, latency_ms: float) -> None:
         with self._mutex:
