@@ -183,7 +183,8 @@
         "ack_text": { "type": "string" },
         "record_seconds": { "type": "number", "minimum": 1 },
         "barge_in": { "type": "boolean" },
-        "vad_energy_threshold": { "type": "number", "minimum": 0, "maximum": 1 }
+        "vad_energy_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "speculative_talk": { "type": "boolean" }
       }
     },
     "beta": {

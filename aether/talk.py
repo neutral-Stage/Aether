@@ -86,6 +86,22 @@ def get_session(session_id: str | None) -> TalkSession:
         return sess
 
 
+def forget_turn(session_id: str | None, question: str, answer: str) -> bool:
+    """Drop one exchange from a talk session (a speculative answer the user never
+    asked for: it finished before they let go, then their final words differed)."""
+    if not session_id:
+        return False
+    with _sessions_lock:
+        sess = _SESSIONS.get(session_id)
+        if sess is None:
+            return False
+        for i in range(len(sess.history) - 1, -1, -1):
+            if sess.history[i] == (question, answer):
+                del sess.history[i]
+                return True
+    return False
+
+
 # ---- what the model sees -----------------------------------------------------------------------
 
 @dataclass
@@ -226,11 +242,13 @@ class TalkReply:
 
 
 def _step(client: Any, system: str, messages: list[dict], *,
-          on_token: Callable[[str], None] | None = None) -> Any:
+          on_token: Callable[[str], None] | None = None,
+          abort_event: threading.Event | None = None) -> Any:
     """One model call, with its token cost recorded like an agent step."""
     from .core.llm import step_with_tokens
 
-    resp = step_with_tokens(client, system, messages, [], on_token=on_token)
+    resp = step_with_tokens(client, system, messages, [], on_token=on_token,
+                            abort_event=abort_event)
     try:
         from .core.metrics import MetricsCollector
         from .core.orchestrator import record_usage_for_response
@@ -251,7 +269,8 @@ def _reply_text(resp: Any) -> str:
     return ""
 
 
-def refine_target(target: Target, scene: Scene, client: Any) -> Target:
+def refine_target(target: Target, scene: Scene, client: Any,
+                  abort_event: threading.Event | None = None) -> Target:
     """Ask again on a native-resolution crop around a pixel-only point."""
     crop = screen.crop_around(scene.full_capture, target.x, target.y,
                               half_pt=REFINE_HALF_PT, scale=1.0)
@@ -261,7 +280,8 @@ def refine_target(target: Target, scene: Scene, client: Any) -> Target:
                                         "neighbours."},
                image_block(crop.path)]
     try:
-        resp = _step(client, _REFINE_SYSTEM, [{"role": "user", "content": content}])
+        resp = _step(client, _REFINE_SYSTEM, [{"role": "user", "content": content}],
+                    abort_event=abort_event)
     except Exception:  # noqa: BLE001 — keep the rough point
         return target
     pt = grounding.parse_point(_reply_text(resp))
@@ -283,13 +303,23 @@ def refine_target(target: Target, scene: Scene, client: Any) -> Target:
 def ask(question: str, client: Any, *, cursor: tuple[float, float] | None = None,
         session_id: str | None = None, refine: bool = True, scene: Scene | None = None,
         redact: Callable[[str], str] | None = None,
-        on_text: Callable[[str], None] | None = None) -> TalkReply:
+        on_text: Callable[[str], None] | None = None,
+        abort_event: threading.Event | None = None) -> TalkReply:
     """Answer a spoken question about what is on screen, with pointing targets.
 
     With ``on_text`` the answer streams: speakable text (pointing tags removed,
     partial tags held back) is passed on as it arrives, so speech can start at
     the first clause.
+
+    ``abort_event``, when set, cancels the call: the streaming model call
+    already checks it per chunk (aether.core.llm), and it is checked again
+    before the (extra, costly) target-refinement calls and again right before
+    the turn is committed to session history. Either check raises
+    ``aether.core.stop.StopRequested``, so a cancelled talk never touches
+    session history.
     """
+    from .core.stop import StopRequested
+
     started = time.monotonic()
     scene = scene or build_scene(cursor, redact=redact)
     sess = get_session(session_id)
@@ -306,26 +336,34 @@ def ask(question: str, client: Any, *, cursor: tuple[float, float] | None = None
                 on_text(text)
 
         def on_token(chunk: str) -> None:
+            # A cancelled talk stops streaming at the next chunk: raising here
+            # ends the model call, instead of paying for the rest of the answer.
+            if abort_event is not None and abort_event.is_set():
+                raise StopRequested("STOP requested — talk cancelled.")
             say(parser.feed(chunk)[0])
 
-    resp = _step(client, talk_prompt(), messages, on_token=on_token)
+    resp = _step(client, talk_prompt(), messages, on_token=on_token, abort_event=abort_event)
     if on_text is not None:
         say(parser.close()[0])
     raw = _reply_text(resp)
     tags = pointing.parse_tags(raw)
     answer = pointing.strip_tags(raw)
     targets = pointing.resolve_all(tags, scene.point_ctx)
+    if abort_event is not None and abort_event.is_set():
+        raise StopRequested("STOP requested — talk cancelled.")
     refined = 0
     if refine:
         out = []
         for t in targets:
             if t.kind == "point" and t.source == "image":
-                new = refine_target(t, scene, client)
+                new = refine_target(t, scene, client, abort_event=abort_event)
                 refined += int(new is not t)
                 out.append(new)
             else:
                 out.append(t)
         targets = out
+    if abort_event is not None and abort_event.is_set():
+        raise StopRequested("STOP requested — talk cancelled.")
     sess.history.append((question, answer))
     return TalkReply(answer or "I'm not sure.", targets, raw, sess.id,
                      (time.monotonic() - started) * 1000, refined,

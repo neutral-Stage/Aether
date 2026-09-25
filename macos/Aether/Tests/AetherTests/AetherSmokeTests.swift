@@ -655,6 +655,56 @@ final class MicHubTests: XCTestCase {
     }
 }
 
+final class SpeculationPolicyTests: XCTestCase {
+    func testFiresOnlyOnceStable() {
+        var policy = SpeculationPolicy(stableSeconds: 1.0, minWords: 4, maxFires: 2)
+        policy.observe("where is the wifi setting", at: 0.0)
+        XCTAssertNil(policy.fire(at: 0.5), "should not fire before the stable window elapses")
+        XCTAssertEqual(policy.fire(at: 1.0), "where is the wifi setting")
+    }
+
+    func testDoesNotFireBelowMinWords() {
+        var policy = SpeculationPolicy(stableSeconds: 1.0, minWords: 4, maxFires: 2)
+        policy.observe("turn it on", at: 0.0)
+        XCTAssertNil(policy.fire(at: 5.0), "three words, below the four-word minimum")
+    }
+
+    func testFiresAtMostMaxFiresTimes() {
+        var policy = SpeculationPolicy(stableSeconds: 1.0, minWords: 4, maxFires: 2)
+        policy.observe("where is the wifi setting", at: 0.0)
+        XCTAssertNotNil(policy.fire(at: 1.0))
+        policy.observe("where is the wifi setting please", at: 1.1)
+        XCTAssertNotNil(policy.fire(at: 2.2))
+        policy.observe("where is the wifi setting please now", at: 2.3)
+        XCTAssertNil(policy.fire(at: 3.4), "a third fire is past the budget")
+    }
+
+    func testDoesNotFireTwiceForTheSameText() {
+        var policy = SpeculationPolicy(stableSeconds: 1.0, minWords: 4, maxFires: 2)
+        policy.observe("where is the wifi setting", at: 0.0)
+        XCTAssertNotNil(policy.fire(at: 1.0))
+        // Same (normalized) text, still stable: nothing new to fire on.
+        XCTAssertNil(policy.fire(at: 5.0))
+    }
+
+    func testStabilityResetsWhenThePartialChanges() {
+        var policy = SpeculationPolicy(stableSeconds: 1.0, minWords: 4, maxFires: 2)
+        policy.observe("where is the wifi setting", at: 0.0)
+        XCTAssertNil(policy.fire(at: 0.9))
+        policy.observe("where is the bluetooth setting", at: 0.95)  // changed just before firing
+        XCTAssertNil(policy.fire(at: 1.5), "the clock restarted on the new text")
+        XCTAssertEqual(policy.fire(at: 1.95), "where is the bluetooth setting")
+    }
+
+    func testNormalizeIgnoresCasePunctuationAndCollapsesWhitespace() {
+        XCTAssertEqual(SpeculationPolicy.normalize("  Where  is   the WiFi?! "), "where is the wifi")
+        XCTAssertTrue(SpeculationPolicy.matches("Where is the Wi-Fi setting?",
+                                                "where is the wifi setting"))
+        XCTAssertFalse(SpeculationPolicy.matches("where is the wifi setting",
+                                                 "where is the bluetooth setting"))
+    }
+}
+
 final class MicConverterTests: XCTestCase {
     private func fill(_ buffer: AVAudioPCMBuffer) {
         guard let channels = buffer.floatChannelData else { return }

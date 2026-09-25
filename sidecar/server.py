@@ -961,6 +961,7 @@ async def stop(
     # stop signal is process-global). run_id only narrows which run rows we mark.
     # Off the event loop: the fleet bridge does blocking per-session proc.wait().
     await asyncio.to_thread(stop_ctl.trigger, "sidecar")
+    talk_api.cancel_all()
     run_id = body.run_id if body else None
     targets = ([_run_registry.get(run_id)] if run_id
                else _run_registry.active())
@@ -998,6 +999,7 @@ async def voice_config() -> dict[str, Any]:
         "realtime_voice": bool(beta.get("realtime_voice", False)),
         "barge_in": bool(cfg.get("voice", "barge_in", default=True)),
         "vad_energy_threshold": float(cfg.get("voice", "vad_energy_threshold", default=0.02)),
+        "speculative_talk": bool(cfg.get("voice", "speculative_talk", default=True)),
     }
 
 

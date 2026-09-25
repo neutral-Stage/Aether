@@ -1,6 +1,18 @@
 import AppKit
 import SwiftUI
 
+/// A talk request fired speculatively (before push-to-talk was released), on a
+/// settled partial transcript. `tokens`/`done` buffer the streamed reply so it
+/// can be replayed instantly if the final transcript matches; `task` is the
+/// in-flight (or finished) POST /talk request itself.
+private struct SpeculativeTalk {
+    let id: String
+    let text: String
+    var tokens: [String] = []
+    var done = false
+    let task: Task<TalkReply, Error>
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @Published var goalText = ""
@@ -73,6 +85,23 @@ final class AppState: ObservableObject {
     private var fillerTask: Task<Void, Never>?
     /// Said when an answer takes a moment to start (synthesized ahead of time).
     static let fillers = ["One moment.", "Let me look.", "Okay, checking."]
+    /// Release-of-keys instant, consumed once by the first spoken ANSWER clause
+    /// (never a filler) to report `first_audio_ms`; cleared if the round ends
+    /// without ever speaking an answer.
+    private var pendingTalkReleaseAt: Date?
+    /// Bumped on every fresh talk (beginTalk, askTalk/adoptSpeculation start, STOP)
+    /// so a reply for a superseded round is dropped instead of shown or spoken.
+    private var talkGeneration = 0
+    /// Bumped whenever queued speech should go silent (STOP, a new talk or PTT
+    /// round starting) so every chained clause — not just the newest — checks
+    /// before it speaks.
+    private var speechGeneration = 0
+    // Talk mode speculation: start the model on a settled partial transcript,
+    // before the user releases the talk chord.
+    private var talkRecognizer: PartialRecognizer?
+    private var speculationPolicy = SpeculationPolicy()
+    private var speculationTicker: Task<Void, Never>?
+    private var speculation: SpeculativeTalk?
     // An agent run's streamed reply (token events), per step.
     private var streamStep = -1
     private var streamText = ""
@@ -502,15 +531,22 @@ final class AppState: ObservableObject {
             guard pendingQuestionId != requestId else { return }
             showQuestion(requestId: requestId, question: question, options: options)
         case let .talkToken(id, text):
-            guard id == streamingTalkId else { return }
-            talkPartial += text
-            world.currentStep = talkPartial.trimmingCharacters(in: .whitespacesAndNewlines)
-            refreshHUD()
-            for clause in talkSplitter.feed(text) { speakInOrder(clause) }
+            if id == streamingTalkId {
+                talkPartial += text
+                world.currentStep = talkPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+                refreshHUD()
+                for clause in talkSplitter.feed(text) { speakInOrder(clause) }
+            } else {
+                // Not (yet) adopted: buffer it, don't speak it.
+                appendSpeculationToken(id: id, text)
+            }
         case let .talkDone(id, _):
-            guard id == streamingTalkId else { return }
-            if let rest = talkSplitter.flush() { speakInOrder(rest) }
-            talkDoneSeen = true
+            if id == streamingTalkId {
+                if let rest = talkSplitter.flush() { speakInOrder(rest) }
+                talkDoneSeen = true
+            } else {
+                markSpeculationDone(id: id)
+            }
         case .runRequest(let goal):
             if !client.isRunning { submitGoal(goal) }
         case let .guideStep(id, index, total, say, target):
@@ -586,14 +622,26 @@ final class AppState: ObservableObject {
     /// Queue speech behind whatever is already being said (streamed talk clauses).
     /// A filler is queued the same way but doesn't count as the answer.
     private func speakInOrder(_ text: String, isAnswer: Bool = true) {
+        // The first answer clause of the round (never a filler) consumes the
+        // pending release instant, so first_audio_ms measures release → the
+        // answer actually starting, not a filler that may have played first.
+        let releasedAt: Date? = (isAnswer && !talkStreamed) ? pendingTalkReleaseAt : nil
+        if releasedAt != nil { pendingTalkReleaseAt = nil }
         if isAnswer {
             talkStreamed = true
             fillerTask?.cancel()
         }
+        let generation = speechGeneration
         let previous = speechChain
         speechChain = Task { @MainActor [weak self] in
             await previous?.value
-            guard let self, !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled, generation == self.speechGeneration else { return }
+            if let releasedAt {
+                self.tts.onPlaybackStart = { [weak self] in
+                    let ms = Date().timeIntervalSince(releasedAt) * 1000
+                    Task { await self?.client.reportVoiceMetrics(firstAudioMs: ms) }
+                }
+            }
             await self.speakWithBargeIn(text)
         }
     }
@@ -649,9 +697,12 @@ final class AppState: ObservableObject {
         pendingQuestionId = nil
         lastRunEnded = Date()
         overlay.clear()
+        talkGeneration += 1
+        speechGeneration += 1
         speechChain?.cancel()
         speechChain = nil
         fillerTask?.cancel()
+        pendingTalkReleaseAt = nil
         realtimeMic.stop()
         realtimePlayer.stop()
         dictation.cancel()
@@ -659,6 +710,8 @@ final class AppState: ObservableObject {
         chipsPanel.hide()
         hints.dismiss()
         streamingTalkId = nil
+        stopSpeculationRecognizer()
+        cancelSpeculation()
         if isTalkHeld { cancelTalk() }
         if let guideId = activeGuideId {
             activeGuideId = nil
@@ -696,6 +749,7 @@ final class AppState: ObservableObject {
     func beginPTT() {
         guard !isPTTHeld, dictation.state == .idle, quickSkills.recordingSkillId == nil
         else { return }
+        speechGeneration += 1
         if realtimeActive {
             isPTTHeld = true
             if realtimePlayer.isPlaying {
@@ -800,17 +854,22 @@ final class AppState: ObservableObject {
         guard !isPTTHeld, !isTalkHeld, dictation.state == .idle, quickSkills.recordingSkillId == nil
         else { return }
         isTalkHeld = true
+        talkGeneration += 1
+        speechGeneration += 1
         talkPointer = point
         voice.stopAll()
         overlay.clear()
         try? audio.startRecording()
         world.currentStep = "Listening… release to ask"
         refreshHUD()
+        beginSpeculation()
     }
 
     func cancelTalk() {
         guard isTalkHeld else { return }
         isTalkHeld = false
+        stopSpeculationRecognizer()
+        cancelSpeculation()
         _ = audio.stopRecording()
         world.currentStep = ""
         refreshHUD()
@@ -819,15 +878,13 @@ final class AppState: ObservableObject {
     func endTalk() async {
         guard isTalkHeld else { return }
         isTalkHeld = false
+        stopSpeculationRecognizer()
         let wav = audio.stopRecording()
-        guard !wav.isEmpty else { refreshHUD(); return }
-        // First audio: from releasing the keys to the first sound of the answer.
-        let released = Date()
+        guard !wav.isEmpty else { cancelSpeculation(); refreshHUD(); return }
+        // First audio: from releasing the keys to the first sound of the ANSWER
+        // (consumed once in speakInOrder — never by a filler).
+        pendingTalkReleaseAt = Date()
         talkStreamed = false
-        tts.onPlaybackStart = { [weak self] in
-            let ms = Date().timeIntervalSince(released) * 1000
-            Task { await self?.client.reportVoiceMetrics(firstAudioMs: ms) }
-        }
         fillerTask?.cancel()
         fillerTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 900_000_000)
@@ -842,6 +899,8 @@ final class AppState: ObservableObject {
             let question = try await transcribe(wav).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !question.isEmpty else {
                 fillerTask?.cancel()
+                pendingTalkReleaseAt = nil
+                cancelSpeculation()
                 world.currentStep = ""
                 refreshHUD()
                 return
@@ -849,11 +908,24 @@ final class AppState: ObservableObject {
             world.transcript = question
             if question.lowercased() == "stop" {
                 fillerTask?.cancel()
+                pendingTalkReleaseAt = nil
+                cancelSpeculation()
                 handleStop()
                 return
             }
-            try await askTalk(question, at: talkPointer)
+            if let spec = speculation, SpeculationPolicy.matches(spec.text, question) {
+                speculation = nil
+                try await adoptSpeculation(spec)
+            } else {
+                cancelSpeculation()
+                try await askTalk(question, at: talkPointer)
+            }
+        } catch is CancellationError {
+            // The talk (speculative or not) was cancelled server-side; nothing to show.
+            pendingTalkReleaseAt = nil
         } catch {
+            pendingTalkReleaseAt = nil
+            cancelSpeculation()
             lastResult = error.localizedDescription
             world.currentStep = error.localizedDescription
             refreshHUD()
@@ -863,6 +935,8 @@ final class AppState: ObservableObject {
     /// Ask about what is on screen (talk mode, or a chip): the answer streams, is
     /// spoken clause by clause, and points at things.
     func askTalk(_ question: String, at point: CGPoint?) async throws {
+        talkGeneration += 1
+        let generation = talkGeneration
         let talkId = String(UUID().uuidString.lowercased().prefix(12))
         streamingTalkId = talkId
         talkSplitter = ClauseSplitter()
@@ -871,6 +945,35 @@ final class AppState: ObservableObject {
         talkDoneSeen = false
         let reply = try await client.talk(question: question, at: point,
                                           sessionId: talkSessionId, talkId: talkId)
+        await finishTalk(reply, generation: generation)
+    }
+
+    /// Adopt a speculative talk whose buffered text matches what was actually
+    /// said: replay its buffered tokens as clauses immediately (instead of
+    /// waiting on a fresh request), then the same tail as `askTalk`.
+    private func adoptSpeculation(_ spec: SpeculativeTalk) async throws {
+        talkGeneration += 1
+        let generation = talkGeneration
+        streamingTalkId = spec.id
+        talkSplitter = ClauseSplitter()
+        talkPartial = spec.tokens.joined()
+        talkStreamed = false
+        talkDoneSeen = spec.done
+        for token in spec.tokens {
+            for clause in talkSplitter.feed(token) { speakInOrder(clause) }
+        }
+        let reply = try await spec.task.value
+        await finishTalk(reply, generation: generation)
+    }
+
+    /// The tail shared by `askTalk` and `adoptSpeculation`: show the overlay and
+    /// speak whatever wasn't already streamed — unless a newer talk superseded
+    /// this one while the reply was in flight.
+    private func finishTalk(_ reply: TalkReply, generation: Int) async {
+        guard generation == talkGeneration else {
+            pendingTalkReleaseAt = nil
+            return
+        }
         talkSessionId = reply.sessionId
         lastResult = reply.answer
         world.currentStep = reply.answer
@@ -887,6 +990,77 @@ final class AppState: ObservableObject {
         } else if !talkDoneSeen, let rest = talkSplitter.flush() {
             speakInOrder(rest)
         }
+    }
+
+    // MARK: - Talk mode speculation
+
+    /// Starts a fresh on-device partial recognizer and stability ticker for this
+    /// talk hold, when the setting and speech permission allow it. Any prior
+    /// speculation is cleared — a new hold is a new question.
+    private func beginSpeculation() {
+        speculationPolicy = SpeculationPolicy()
+        speculation = nil
+        guard voiceSettings.speculativeTalk, stt.speechAuthorized else { return }
+        let recognizer = stt.makePartialRecognizer()
+        talkRecognizer = recognizer
+        let contextual = [NSWorkspace.shared.frontmostApplication?.localizedName].compactMap { $0 }
+        Task { @MainActor in
+            _ = await recognizer.start(contextualStrings: contextual) { [weak self] partial in
+                self?.speculationPolicy.observe(partial, at: ProcessInfo.processInfo.systemUptime)
+            }
+        }
+        speculationTicker?.cancel()
+        speculationTicker = Task { @MainActor [weak self] in
+            while true {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard let self, !Task.isCancelled, self.isTalkHeld else { return }
+                if let text = self.speculationPolicy.fire(at: ProcessInfo.processInfo.systemUptime) {
+                    self.speculate(text)
+                }
+            }
+        }
+    }
+
+    /// Fires (or re-fires) the model on a settled partial: cancels any earlier
+    /// speculation for this hold, then starts a new speculative POST /talk.
+    private func speculate(_ text: String) {
+        cancelSpeculation()
+        let id = String(UUID().uuidString.lowercased().prefix(12))
+        let point = talkPointer
+        let session = talkSessionId
+        let task = Task { @MainActor in
+            try await client.talk(question: text, at: point, sessionId: session,
+                                  talkId: id, speculative: true)
+        }
+        speculation = SpeculativeTalk(id: id, text: text, task: task)
+    }
+
+    private func appendSpeculationToken(id: String, _ text: String) {
+        guard var spec = speculation, spec.id == id else { return }
+        spec.tokens.append(text)
+        speculation = spec
+    }
+
+    private func markSpeculationDone(id: String) {
+        guard var spec = speculation, spec.id == id else { return }
+        spec.done = true
+        speculation = spec
+    }
+
+    /// Cancels the current speculation, if any: tells the sidecar (best effort)
+    /// and cancels the local task so nobody awaits a stale reply.
+    private func cancelSpeculation() {
+        guard let spec = speculation else { return }
+        speculation = nil
+        spec.task.cancel()
+        Task { await client.cancelTalk(id: spec.id) }
+    }
+
+    private func stopSpeculationRecognizer() {
+        speculationTicker?.cancel()
+        speculationTicker = nil
+        talkRecognizer?.stop()
+        talkRecognizer = nil
     }
 
     // MARK: - Suggestion chips (⌃⌥C)

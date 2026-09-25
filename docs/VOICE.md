@@ -36,6 +36,38 @@ isn't fed audio at the wrong rate.
   answer, a guide, marks on screen, a confirmation), so it doesn't get in the way of apps
   that use Escape.
 
+## Talk starts before you let go
+
+Talk mode (hold ⌃⌥, point at something, ask) can start the model call before you
+release the keys, so the answer is already streaming back by the time you finish
+speaking. While the keys are held, `AppState` runs an on-device partial recognizer
+(`STTBridge.makePartialRecognizer()`) alongside recording and feeds its partials to
+`Voice/SpeculationPolicy.swift`. That policy fires (returns a candidate question) once
+a partial has held still, normalized, for 1.2 s, has at least 4 words, and it hasn't
+already fired twice for this hold. Each fire cancels any earlier speculation for the
+same hold and starts a new speculative `POST /talk` (`speculative: true`) — so **at
+most two extra model calls per question**, both billed and counted like any other
+talk (plus `talk_speculative_used`/`talk_speculative_wasted` in `/metrics`). Its
+streamed `talk_token`/`talk_done` events are buffered, not spoken, until it's adopted.
+
+When you release the keys, the real transcript is compared (case/punctuation-insensitive,
+via `SpeculationPolicy.matches`) against the speculation's text:
+
+- **Match:** the buffered clauses are spoken immediately and the in-flight request is
+  awaited for the rest of the answer — no new request goes out.
+- **No match (or none fired yet):** the speculation is cancelled and a normal request
+  is sent for what you actually asked.
+
+Cancelling — on a mismatch, a new speculation superseding an old one, or STOP — calls
+`POST /talk/{talk_id}/cancel` (also used directly by the app) and cancels the local
+task; the sidecar stops streaming that talk at once and never broadcasts its
+`talk_done`/`pointer` events. STOP also cancels every talk in flight, speculative or
+not (`talk_api.cancel_all()`).
+
+Controlled by `voice.speculative_talk` (default `true`; `GET /config/voice` exposes it
+as `speculative_talk`). Turn it off if the extra model calls aren't worth it for your
+setup — talk mode itself is unaffected either way.
+
 ## Enabling Realtime voice (beta)
 
 ```yaml

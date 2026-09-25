@@ -13,6 +13,7 @@ struct VoiceSettings: Equatable {
     var realtimeVoice: Bool = false
     var bargeIn: Bool = true
     var vadEnergyThreshold: Float = 0.02
+    var speculativeTalk: Bool = true
 
     var prefersGroqSTT: Bool { stt == "groq" }
     var prefersGroqTTS: Bool { tts == "groq" }

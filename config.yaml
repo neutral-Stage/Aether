@@ -247,6 +247,7 @@ voice:
   record_seconds: 8            # max push-to-talk capture length
   barge_in: true               # Phase 4: interrupt TTS when user speaks
   vad_energy_threshold: 0.02   # mic RMS threshold for barge-in detection
+  speculative_talk: true       # talk mode: start the model on a settled partial, before you let go
 
 agent:
   max_steps: 40                # safety cap on model turns per task

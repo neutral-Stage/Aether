@@ -98,6 +98,10 @@ It saves a result table under `~/Library/Application Support/Aether/validation/`
 - ⌃⌥D into a text field and dictate a full sentence. The pasted transcript should
   read back correctly, not garbled, sped up or slowed down — that would mean the
   recording isn't actually at 16 kHz.
+- Hold ⌃⌥ over something, ask a several-word question, and hold for a couple of
+  seconds before releasing (talk mode; see [`VOICE.md`](VOICE.md#talk-starts-before-you-let-go)).
+  With `voice.speculative_talk: true` (the default), `first_audio_ms` on `/dashboard`
+  should trend lower than with it set to `false` for the same kind of question.
 
 ## Coding agents (optional)
 

@@ -255,7 +255,8 @@ final class OrchestratorClient: ObservableObject {
                 realtimeProvider: json["realtime_provider"] as? String ?? "openai",
                 realtimeVoice: json["realtime_voice"] as? Bool ?? false,
                 bargeIn: json["barge_in"] as? Bool ?? true,
-                vadEnergyThreshold: (json["vad_energy_threshold"] as? NSNumber)?.floatValue ?? 0.02
+                vadEnergyThreshold: (json["vad_energy_threshold"] as? NSNumber)?.floatValue ?? 0.02,
+                speculativeTalk: json["speculative_talk"] as? Bool ?? true
             )
         } catch {
             return nil
@@ -311,8 +312,11 @@ final class OrchestratorClient: ObservableObject {
     }
 
     /// Talk mode: ask about what is at `point` (global top-left points).
+    /// `speculative`: fired before push-to-talk was released, on a settled partial
+    /// transcript — may be cancelled (throws `CancellationError`) if the final
+    /// transcript doesn't match.
     func talk(question: String, at point: CGPoint?, sessionId: String?,
-              talkId: String? = nil) async throws -> TalkReply {
+              talkId: String? = nil, speculative: Bool = false) async throws -> TalkReply {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("talk")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -331,15 +335,28 @@ final class OrchestratorClient: ObservableObject {
         } else {
             body["stream"] = false
         }
+        if speculative { body["speculative"] = true }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode),
-              let reply = TalkReply.parse(data) else {
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "Talk failed"
+            throw NSError(domain: "Aether", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           json["cancelled"] as? Bool == true {
+            throw CancellationError()
+        }
+        guard let reply = TalkReply.parse(data) else {
             let msg = String(data: data, encoding: .utf8) ?? "Talk failed"
             throw NSError(domain: "Aether", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
         }
         return reply
+    }
+
+    /// Cancel a talk in flight (speculative or not). Best-effort — errors are ignored.
+    func cancelTalk(id: String) async {
+        _ = try? await postJSON("talk/\(id)/cancel", [:])
     }
 
     // MARK: onboarding interview and tour
@@ -1062,33 +1079,26 @@ final class OrchestratorClient: ObservableObject {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                     continue
                 }
-                var lineBuffer = ""
-                for try await byte in bytes {
+                for try await line in bytes.lines {
                     try Task.checkCancellation()
-                    let ch = Character(UnicodeScalar(byte))
-                    if ch == "\n" {
-                        let line = lineBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-                        lineBuffer = ""
-                        guard line.hasPrefix("data:") else { continue }
-                        let jsonStr = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                        guard let data = jsonStr.data(using: .utf8),
-                              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                              let type = obj["type"] as? String else { continue }
-                        switch type {
-                        case "guide_step", "guide_done", "talk_token", "talk_done",
-                             "confirm_request", "question":
-                            for event in SidecarEvent.parse(obj, fallbackGoal: "") { onEvent(event) }
-                        case "run_request":
-                            if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
-                        case "say":
-                            if let t = obj["text"] as? String { onEvent(.say(t)) }
-                        case "fleet":
-                            onEvent(.fleet(obj))
-                        default:
-                            break
-                        }
-                    } else {
-                        lineBuffer.append(ch)
+                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard trimmed.hasPrefix("data:") else { continue }
+                    let jsonStr = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                    guard let data = jsonStr.data(using: .utf8),
+                          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let type = obj["type"] as? String else { continue }
+                    switch type {
+                    case "guide_step", "guide_done", "talk_token", "talk_done",
+                         "confirm_request", "question":
+                        for event in SidecarEvent.parse(obj, fallbackGoal: "") { onEvent(event) }
+                    case "run_request":
+                        if let g = obj["goal"] as? String { onEvent(.runRequest(goal: g)) }
+                    case "say":
+                        if let t = obj["text"] as? String { onEvent(.say(t)) }
+                    case "fleet":
+                        onEvent(.fleet(obj))
+                    default:
+                        break
                     }
                 }
             } catch {
@@ -1138,25 +1148,18 @@ final class OrchestratorClient: ObservableObject {
             ])
         }
 
-        var lineBuffer = ""
-        for try await byte in bytes {
+        for try await line in bytes.lines {
             try Task.checkCancellation()
-            let ch = Character(UnicodeScalar(byte))
-            if ch == "\n" {
-                let line = lineBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-                lineBuffer = ""
-                guard line.hasPrefix("data:") else { continue }
-                let jsonStr = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                guard let data = jsonStr.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      obj["type"] is String else { continue }
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("data:") else { continue }
+            let jsonStr = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            guard let data = jsonStr.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  obj["type"] is String else { continue }
 
-                let events = SidecarEvent.parse(obj, fallbackGoal: goal)
-                await MainActor.run {
-                    for event in events { onEvent(event) }
-                }
-            } else {
-                lineBuffer.append(ch)
+            let events = SidecarEvent.parse(obj, fallbackGoal: goal)
+            await MainActor.run {
+                for event in events { onEvent(event) }
             }
         }
     }
