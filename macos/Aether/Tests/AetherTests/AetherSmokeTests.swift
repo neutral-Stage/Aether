@@ -368,6 +368,18 @@ final class ScreenMemoryStatusTests: XCTestCase {
         XCTAssertFalse(off.isRecording)
         XCTAssertEqual(off.summary, "Screen memory is off")
         XCTAssertFalse(ScreenMemoryStatus().isRecording)
+        XCTAssertEqual(off.allowBrowsers, [])
+    }
+
+    func testAllowBrowsersIsParsedAndDefaultsToEmpty() {
+        let withAllowed = ScreenMemoryStatus.parse([
+            "enabled": true, "allow_browsers": ["com.apple.Safari", "com.brave.Browser"],
+        ])
+        XCTAssertEqual(withAllowed.allowBrowsers, ["com.apple.Safari", "com.brave.Browser"])
+        XCTAssertTrue(withAllowed.allowBrowsers.contains("com.apple.Safari"))
+
+        let missing = ScreenMemoryStatus.parse(["enabled": true])
+        XCTAssertEqual(missing.allowBrowsers, [])
     }
 
     func testRecordingPausedAndStopped() {

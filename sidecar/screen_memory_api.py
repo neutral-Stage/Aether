@@ -1,4 +1,6 @@
-"""Screen memory controls: status, pause and resume, search, activity, delete."""
+"""Screen memory controls: status, pause and resume, search, activity, delete,
+which browsers are allowed (Safari and others whose private windows can't be
+detected — see aether/screen_memory/browsers.py)."""
 from __future__ import annotations
 
 import asyncio
@@ -6,13 +8,23 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from aether import screen_memory
 from aether.core.audit_log import AuditLog
+from aether.core.config import load_config
+from aether.screen_memory.browsers import family as browser_family
+from aether.screen_memory.prefs import set_browser_allowed
+from aether.screen_memory.recorder import RecorderSettings
 
 from .auth import require_auth
 
 router = APIRouter()
+
+
+class BrowserAllowRequest(BaseModel):
+    bundle_id: str
+    allowed: bool = True
 
 
 def _rec():  # noqa: ANN202
@@ -35,8 +47,29 @@ def start_if_enabled() -> bool:
 async def status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     rec = screen_memory.get()
     if rec is None:
-        return {"enabled": False}
+        privacy = RecorderSettings.from_raw(load_config(validate=False).raw).privacy
+        return {"enabled": False, "allow_browsers": privacy.allowed_browsers}
     return await asyncio.to_thread(rec.status)
+
+
+@router.post("/screen-memory/browsers")
+async def set_browser(body: BrowserAllowRequest,
+                      _auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Allow (or stop allowing) a browser whose private windows screen memory and
+    hints otherwise can't confirm — works even while screen memory is off,
+    since hints use the same preference."""
+    if browser_family(body.bundle_id) is None:
+        raise HTTPException(400, f"not a recognised browser: {body.bundle_id}")
+    await asyncio.to_thread(set_browser_allowed, body.bundle_id, body.allowed)
+    allow_browsers = RecorderSettings.from_raw(load_config(validate=False).raw).privacy \
+        .allowed_browsers
+    rec = screen_memory.get()
+    if rec is not None:
+        rec.settings.privacy.allowed_browsers = list(allow_browsers)
+    AuditLog.get().record(
+        "screen_memory",
+        summary=f"{'allowed' if body.allowed else 'no longer allowed'} {body.bundle_id}")
+    return {"allow_browsers": allow_browsers}
 
 
 @router.post("/screen-memory/pause")

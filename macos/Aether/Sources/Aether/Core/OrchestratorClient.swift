@@ -585,6 +585,15 @@ final class OrchestratorClient: ObservableObject {
         _ = try await postJSON(paused ? "screen-memory/pause" : "screen-memory/resume", [:])
     }
 
+    /// Allows (or stops allowing) a browser whose private windows can't be confirmed
+    /// (Safari and others — see docs/SCREEN_MEMORY.md). Returns the new allowed set.
+    @discardableResult
+    func setScreenMemoryBrowser(bundleId: String, allowed: Bool) async throws -> [String] {
+        let obj = try await postJSON("screen-memory/browsers",
+                                     ["bundle_id": bundleId, "allowed": allowed])
+        return obj["allow_browsers"] as? [String] ?? []
+    }
+
     /// Deletes the last `minutes` of screen memory, or all of it when nil. Returns how many.
     func deleteScreenMemory(minutes: Int?) async throws -> Int {
         var comps = URLComponents(url: AetherConfig.sidecarBaseURL.appendingPathComponent("screen-memory"),

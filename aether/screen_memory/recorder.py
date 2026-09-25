@@ -6,8 +6,9 @@ count); a window that stays in front is re-read every ``interval_s`` and
 stored only if its text changed. Text comes from the accessibility tree; when
 that shows almost nothing (canvas and Electron apps), on-device OCR of that
 window only is the fallback. No images are kept. Secrets are redacted before
-anything is stored, the privacy gate (privacy.py) skips whatever it isn't sure
-about, and old captures are pruned after ``retention_days``.
+anything is stored, the privacy gate (privacy.py, browsers.py and gate.py)
+skips whatever it isn't sure about, and old captures are pruned after
+``retention_days``.
 """
 from __future__ import annotations
 
@@ -41,7 +42,13 @@ class RecorderSettings:
 
     @classmethod
     def from_raw(cls, raw: dict[str, Any] | None) -> RecorderSettings:
+        from .prefs import load_prefs
+
         s = (raw or {}).get("screen_memory") or {}
+        # Browsers allowed in config.yaml, plus whatever the owner has toggled
+        # on from the menu bar (persisted outside config.yaml — see prefs.py).
+        configured = {str(b) for b in s.get("allow_browsers") or []}
+        persisted = {str(b) for b in load_prefs().get("allow_browsers") or []}
         return cls(
             enabled=bool(s.get("enabled", False)),
             poll_s=max(0.5, float(s.get("poll_s", 2.0))),
@@ -53,7 +60,8 @@ class RecorderSettings:
                 paused=bool(s.get("paused", False)),
                 exclude_bundle_ids=[str(b) for b in s.get("exclude_bundle_ids") or []],
                 exclude_window_globs=[str(g) for g in s.get("exclude_window_globs") or []],
-                only_bundle_ids=[str(b) for b in s.get("only_bundle_ids") or []]))
+                only_bundle_ids=[str(b) for b in s.get("only_bundle_ids") or []],
+                allowed_browsers=sorted(configured | persisted)))
 
 
 def probe_front() -> WindowState:
@@ -66,7 +74,8 @@ def probe_front() -> WindowState:
             return WindowState(None, None, None)
         title = ax.focused_window_title(int(app["pid"]))
         focused = ax.focused_summary()
-        secure = "Secure" in str(focused.get("role", ""))
+        secure = ("Secure" in str(focused.get("role", ""))
+                 or "Secure" in str(focused.get("subrole", "")))
         return WindowState(app["name"], app.get("bundle") or None, title, secure,
                            int(app["pid"]))
     except Exception:  # noqa: BLE001 — unreadable counts as unknown (not recorded)
@@ -81,7 +90,7 @@ def read_window_text(state: WindowState, *, ocr_fallback: bool = True) -> tuple[
     seen: set[str] = set()
     try:
         for el in ax.read_tree(max_elements=400, capture_handles=False, pid=state.pid):
-            if "Secure" in el.role:
+            if "Secure" in el.role or "Secure" in el.subrole:
                 continue
             for text in (el.value, el.title):
                 t = " ".join(str(text or "").split())
@@ -117,12 +126,16 @@ class ScreenMemoryRecorder:
     def __init__(self, settings: RecorderSettings, store: ScreenMemoryStore, *,
                  probe: Callable[[], WindowState] = probe_front,
                  read_text: Callable[..., tuple[str, str]] = read_window_text,
+                 check: Callable[..., tuple[bool | None, str]] | None = None,
                  redact: Callable[[str], str] | None = None,
                  clock: Callable[[], float] = time.time) -> None:
+        from .browsers import check_private
+
         self.settings = settings
         self.store = store
         self.probe = probe
         self.read_text = read_text
+        self.check = check or check_private
         self.redact = redact or _default_redact
         self.clock = clock
         self.skipped: Counter[str] = Counter()
@@ -167,6 +180,9 @@ class ScreenMemoryRecorder:
         if now - self._last_prune > 3600:
             self._last_prune = now
             self.store.prune(self.settings.retention_days, now)
+        # The cheap check (no AppleScript) that decides whether we're still
+        # settling on the same window; the gate below re-does the allowed part
+        # of this plus the private-window check right before actually reading.
         state = self.probe()
         decision: Decision = decide(state, self.settings.privacy)
         if not decision.allowed:
@@ -184,12 +200,27 @@ class ScreenMemoryRecorder:
         if last is not None and now - last < self.settings.interval_s:
             return "unchanged"
         self._last_read[key] = now
-        text, source = self.read_text(state, ocr_fallback=self.settings.ocr_fallback)
-        text = self.redact(text).strip()
+        from .gate import readable_front
+
+        source = "ax"
+
+        def _read(s: WindowState, *, ocr_fallback: bool) -> tuple[str, str]:
+            nonlocal source
+            text, source = self.read_text(s, ocr_fallback=ocr_fallback)
+            return text, source
+
+        gated_state, text_or_reason = readable_front(
+            self.settings.privacy, ocr_fallback=self.settings.ocr_fallback,
+            probe=self.probe, read_text=_read, check=self.check)
+        if gated_state is None:
+            self.skipped[text_or_reason] += 1
+            return f"skipped: {text_or_reason}"
+        text = self.redact(text_or_reason).strip()
         if not text:
             return "unchanged"
-        row = self.store.add(app=str(state.app), bundle_id=str(state.bundle_id),
-                             window=str(state.window_title), text=text, source=source, ts=now)
+        row = self.store.add(app=str(gated_state.app), bundle_id=str(gated_state.bundle_id),
+                             window=str(gated_state.window_title), text=text, source=source,
+                             ts=now)
         return "recorded" if row else "unchanged"
 
     def start(self) -> None:
@@ -217,7 +248,8 @@ class ScreenMemoryRecorder:
                 "running": bool(self._thread and self._thread.is_alive()),
                 "captures": self.store.count(), "retention_days": self.settings.retention_days,
                 "last": last.as_dict() if last else None,
-                "skipped": dict(self.skipped.most_common(8))}
+                "skipped": dict(self.skipped.most_common(8)),
+                "allow_browsers": list(self.settings.privacy.allowed_browsers)}
 
 
 def _default_redact(text: str) -> str:

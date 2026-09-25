@@ -58,6 +58,7 @@ class Element:
     h: float
     identifier: str = ""   # AXIdentifier (developer id; stable across locales)
     help: str = ""         # AXHelp (tooltip text)
+    subrole: str = ""      # AXSubrole; only read for AXTextField (e.g. AXSecureTextField)
 
     @property
     def center(self) -> tuple[float, float]:
@@ -169,20 +170,38 @@ def element_at(x: float, y: float) -> dict | None:
 
 
 def focused_summary() -> dict:
-    """{role, title, value} of the focused element (value empty for secure fields)."""
+    """{role, subrole, title, value} of the focused element (value empty for secure fields).
+
+    A native password field reports role AXTextField with subrole
+    AXSecureTextField — checking role alone misses it, so callers that care
+    whether the focus is a secret must look at both.
+    """
     if not _IMPORT_OK:
-        return {"role": "", "title": "", "value": ""}
+        return {"role": "", "subrole": "", "title": "", "value": ""}
     try:
         focused = _copy(AX.AXUIElementCreateSystemWide(), "AXFocusedUIElement")
     except Exception:  # noqa: BLE001
         focused = None
     if focused is None:
-        return {"role": "", "title": "", "value": ""}
+        return {"role": "", "subrole": "", "title": "", "value": ""}
     role = _to_str(_copy(focused, A_ROLE))
     subrole = _to_str(_copy(focused, A_SUBROLE))
     secure = "Secure" in role or "Secure" in subrole
-    return {"role": role, "title": _label_of_handle(focused),
+    return {"role": role, "subrole": subrole, "title": _label_of_handle(focused),
             "value": "" if secure else _to_str(_copy(focused, A_VALUE))[:500]}
+
+
+def set_messaging_timeout(seconds: float) -> bool:
+    """Cap how long a single AX call may block, so a stuck or busy app can't
+    stall a whole percept. Best-effort: returns False when it can't be set.
+    """
+    if not _IMPORT_OK:
+        return False
+    try:
+        AX.AXUIElementSetMessagingTimeout(AX.AXUIElementCreateSystemWide(), seconds)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def handle_label(handle: Any) -> str | None:
@@ -386,11 +405,16 @@ def read_tree(max_elements: int = 250, max_depth: int = 14,
             has_area = size[0] > 1 and size[1] > 1
             if interesting and has_area:
                 idx = counter["i"]
+                # AXSubrole is only worth the extra round trip for text fields
+                # (it's how a native password field — AXSecureTextField — is told
+                # apart from an ordinary one; both report role AXTextField).
+                subrole = _to_str(_copy(el, A_SUBROLE)) if role == "AXTextField" else ""
                 out.append(Element(
                     idx=idx, role=role, title=title, value=value,
                     enabled=enabled, x=pos[0], y=pos[1], w=size[0], h=size[1],
                     identifier=_to_str(_copy(el, "AXIdentifier")),
                     help=_to_str(_copy(el, "AXHelp")),
+                    subrole=subrole,
                 ))
                 if capture_handles:
                     handles[idx] = el

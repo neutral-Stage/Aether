@@ -80,17 +80,12 @@ def reset() -> None:
 
 def read_front(raw: dict) -> tuple[Any, str]:
     """(window state, its text) when the privacy rules allow reading it, else (None, why)."""
-    from aether.screen_memory.privacy import decide
-    from aether.screen_memory.recorder import RecorderSettings, probe_front, read_window_text
+    from aether.screen_memory.gate import readable_front
+    from aether.screen_memory.recorder import RecorderSettings
 
-    state = probe_front()
     privacy = RecorderSettings.from_raw(raw).privacy
     privacy.paused = False          # pausing screen memory doesn't turn hints off
-    decision = decide(state, privacy)
-    if not decision.allowed:
-        return None, decision.reason
-    text, _source = read_window_text(state, ocr_fallback=False)
-    return state, text
+    return readable_front(privacy, ocr_fallback=False)
 
 
 def safe_to_show(hint: Hint) -> bool:

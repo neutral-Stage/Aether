@@ -45,6 +45,22 @@ def test_privacy_settings() -> None:
                   PrivacySettings(exclude_window_globs=["*MEDICAL*"])).reason == "excluded window"
 
 
+def test_decide_skips_unconfirmable_browsers_unless_allowed() -> None:
+    safari = W(bundle="com.apple.Safari")
+    arc = W(bundle="company.thebrowser.Browser")
+    assert decide(safari, PrivacySettings()).reason == "browser not allowed"
+    assert decide(arc, PrivacySettings()).reason == "browser not allowed"
+    # Allowed: falls through to the later (title-based) rules, same as any app.
+    assert decide(safari, PrivacySettings(allowed_browsers=["com.apple.Safari"])).allowed
+    assert decide(W(bundle="com.apple.Safari", title="Private Browsing"),
+                  PrivacySettings(allowed_browsers=["com.apple.Safari"])).reason \
+        == "private window"
+    # Chrome-family and Firefox aren't touched by this cheap rule — they're
+    # checked directly (by AppleScript / title) later, in the gate.
+    assert decide(W(bundle="com.google.Chrome"), PrivacySettings()).allowed
+    assert decide(W(bundle="org.mozilla.firefox"), PrivacySettings()).allowed
+
+
 def test_store_dedupes_searches_summarizes_and_deletes(tmp_path) -> None:  # noqa: ANN001
     s = ScreenMemoryStore(tmp_path / "sm.db")
     now = 1_000_000.0
@@ -96,6 +112,27 @@ def test_recorder_settles_reads_redacts_and_skips(tmp_path) -> None:  # noqa: AN
     rec.resume()
     status = rec.status()
     assert status["captures"] == 1 and status["skipped"] == {"private window": 1, "paused": 1}
+
+
+def test_recorder_skips_when_a_chromium_check_is_unconfirmed(tmp_path) -> None:  # noqa: ANN001
+    clock = [100.0]
+    state = W(bundle="com.google.Chrome", title="dashboard - Google Chrome")
+
+    def read_text(_state, ocr_fallback=True):  # noqa: ANN001, ANN202, ARG001
+        raise AssertionError("must not read text once the private check is unconfirmed")
+
+    def check(_state, _allowed):  # noqa: ANN001, ANN202
+        return None, "mode unknown"
+
+    rec = ScreenMemoryRecorder(RecorderSettings(enabled=True, settle_s=0.0, interval_s=30),
+                               ScreenMemoryStore(tmp_path / "r2.db"),
+                               probe=lambda: state, read_text=read_text, check=check,
+                               clock=lambda: clock[0])
+    assert rec.tick() == "settling"
+    clock[0] += 1
+    assert rec.tick() == "skipped: can't confirm the window isn't private"
+    assert rec.skipped["can't confirm the window isn't private"] == 1
+    assert rec.store.count() == 0
 
 
 @pytest.fixture
@@ -167,3 +204,80 @@ def test_api(sidecar_client, enabled) -> None:  # noqa: ANN001
     assert sidecar_client.delete("/screen-memory", params={"minutes": 0}).status_code == 400
     assert enabled.store.count() == 1
     assert sidecar_client.delete("/screen-memory", params={"minutes": 10}).json() == {"deleted": 1}
+
+
+def test_prefs_persist_across_loads(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    from aether.screen_memory import prefs
+
+    monkeypatch.setenv("AETHER_DATA_DIR", str(tmp_path))
+    assert prefs.load_prefs() == {}
+    assert prefs.allowed_browsers() == []
+    assert prefs.set_browser_allowed("com.apple.Safari", True) == ["com.apple.Safari"]
+    assert prefs.allowed_browsers() == ["com.apple.Safari"]
+    assert prefs.set_browser_allowed("company.thebrowser.Browser", True) == \
+        ["com.apple.Safari", "company.thebrowser.Browser"]
+    assert prefs.set_browser_allowed("com.apple.Safari", False) == \
+        ["company.thebrowser.Browser"]
+    # A fresh read sees what an earlier one wrote.
+    assert prefs.load_prefs()["allow_browsers"] == ["company.thebrowser.Browser"]
+
+
+def test_prefs_tolerate_a_missing_or_corrupt_file(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    from aether.screen_memory import prefs
+
+    monkeypatch.setenv("AETHER_DATA_DIR", str(tmp_path))
+    assert prefs.load_prefs() == {}                       # no file yet
+    (tmp_path / prefs.PREFS_NAME).write_text("not json{{{", encoding="utf-8")
+    assert prefs.load_prefs() == {}
+    assert prefs.allowed_browsers() == []
+
+
+def test_recorder_settings_merge_config_and_persisted_browsers(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    from aether.screen_memory import prefs
+
+    monkeypatch.setenv("AETHER_DATA_DIR", str(tmp_path))
+    prefs.set_browser_allowed("com.apple.Safari", True)
+    raw = {"screen_memory": {"allow_browsers": ["org.mozilla.firefox"]}}
+    settings = RecorderSettings.from_raw(raw)
+    assert settings.privacy.allowed_browsers == ["com.apple.Safari", "org.mozilla.firefox"]
+
+
+def test_browsers_endpoint_allows_persists_and_updates_a_running_recorder(
+    sidecar_client, tmp_path, monkeypatch, enabled,  # noqa: ANN001
+) -> None:
+    from aether.screen_memory import prefs
+
+    monkeypatch.setenv("AETHER_DATA_DIR", str(tmp_path))
+    assert enabled.settings.privacy.allowed_browsers == []
+    r = sidecar_client.post("/screen-memory/browsers",
+                            json={"bundle_id": "com.apple.Safari", "allowed": True})
+    assert r.status_code == 200 and r.json() == {"allow_browsers": ["com.apple.Safari"]}
+    assert prefs.allowed_browsers() == ["com.apple.Safari"]
+    # The already-running recorder picks the change up without a restart.
+    assert enabled.settings.privacy.allowed_browsers == ["com.apple.Safari"]
+    st = sidecar_client.get("/screen-memory/status").json()
+    assert st["allow_browsers"] == ["com.apple.Safari"]
+    r2 = sidecar_client.post("/screen-memory/browsers",
+                             json={"bundle_id": "com.apple.Safari", "allowed": False})
+    assert r2.json() == {"allow_browsers": []}
+    assert enabled.settings.privacy.allowed_browsers == []
+
+
+def test_browsers_endpoint_rejects_an_unrecognised_bundle(sidecar_client, tmp_path,  # noqa: ANN001
+                                                           monkeypatch) -> None:
+    monkeypatch.setenv("AETHER_DATA_DIR", str(tmp_path))
+    r = sidecar_client.post("/screen-memory/browsers",
+                            json={"bundle_id": "com.apple.Notes", "allowed": True})
+    assert r.status_code == 400
+
+
+def test_browsers_endpoint_works_while_screen_memory_is_off(sidecar_client, tmp_path,  # noqa: ANN001
+                                                             monkeypatch) -> None:
+    screen_memory.reset()
+    monkeypatch.setenv("AETHER_DATA_DIR", str(tmp_path))
+    assert screen_memory.get({"screen_memory": {"enabled": False}}) is None
+    r = sidecar_client.post("/screen-memory/browsers",
+                            json={"bundle_id": "com.apple.Safari", "allowed": True})
+    assert r.status_code == 200 and r.json() == {"allow_browsers": ["com.apple.Safari"]}
+    st = sidecar_client.get("/screen-memory/status").json()
+    assert st["enabled"] is False and st["allow_browsers"] == ["com.apple.Safari"]

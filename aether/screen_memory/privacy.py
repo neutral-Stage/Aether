@@ -37,6 +37,9 @@ class PrivacySettings:
     exclude_window_globs: list[str] = field(default_factory=list)
     # When set, ONLY these apps are recorded.
     only_bundle_ids: list[str] = field(default_factory=list)
+    # Safari and other browsers whose private windows can't be detected (see
+    # screen_memory/browsers.py) are skipped unless their bundle is listed here.
+    allowed_browsers: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,13 @@ def decide(state: WindowState, settings: PrivacySettings) -> Decision:
         return Decision(False, "excluded app")
     if settings.only_bundle_ids and bundle not in settings.only_bundle_ids:
         return Decision(False, "not in the allowed apps")
+    # A cheap, title-independent check: browsers whose private windows can't be
+    # confirmed by AppleScript (browsers.check_private, run later by the gate)
+    # are skipped outright unless the owner opted the bundle in.
+    from .browsers import family  # local import: browsers.py imports this module
+
+    if family(bundle) in ("safari", "unknown") and bundle not in settings.allowed_browsers:
+        return Decision(False, "browser not allowed")
     title = state.window_title
     if _PRIVATE_WINDOW.search(title):
         return Decision(False, "private window")

@@ -29,10 +29,13 @@ All of these must hold:
 - Aether is not busy: no task, no spoken answer, no guide, no dictation, and
   no confirmation waiting.
 - The front window's text changed since the last question.
-- The window may be read. Hints use screen memory's privacy rules: password
-  managers, private browser windows, sign-in, banking and verification-code pages, password
-  fields, Aether itself and the apps you excluded are never read. Pausing
-  screen memory does not turn hints off.
+- The window may be read. Hints run through the exact same checks as screen
+  memory (see docs/SCREEN_MEMORY.md), down to the browser private-window
+  check: password managers, private browser windows, sign-in, banking and
+  verification-code pages, password fields, Aether itself and the apps you
+  excluded are never read. Pausing screen memory does not turn hints off, and
+  allowing a browser (`allow_browsers`, or the menu bar's Safari toggle)
+  applies to hints too.
 
 ## What is shown
 

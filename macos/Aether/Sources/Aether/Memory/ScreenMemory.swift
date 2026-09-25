@@ -9,6 +9,9 @@ struct ScreenMemoryStatus: Equatable {
     var captures = 0
     var lastApp = ""
     var lastTime = ""
+    /// Browsers whose private windows can't be confirmed (Safari, Arc, Opera, Orion,
+    /// DuckDuckGo) but the owner has allowed anyway, by bundle ID.
+    var allowBrowsers: [String] = []
 
     /// True only while text is actually being remembered: drives the menu bar indicator.
     var isRecording: Bool { enabled && running && !paused }
@@ -30,7 +33,8 @@ struct ScreenMemoryStatus: Equatable {
                                   running: obj["running"] as? Bool ?? false,
                                   captures: obj["captures"] as? Int ?? 0,
                                   lastApp: last?["app"] as? String ?? "",
-                                  lastTime: time)
+                                  lastTime: time,
+                                  allowBrowsers: obj["allow_browsers"] as? [String] ?? [])
     }
 }
 
@@ -74,6 +78,17 @@ final class ScreenMemoryController: ObservableObject {
         await refresh()
     }
 
+    /// Allows (or stops allowing) a browser whose private windows can't otherwise be
+    /// confirmed, such as Safari. Works even while screen memory itself is paused or off.
+    func setBrowserAllowed(_ bundleId: String, _ allowed: Bool) async {
+        do {
+            try await client.setScreenMemoryBrowser(bundleId: bundleId, allowed: allowed)
+        } catch {
+            onStatus?("Couldn't update allowed browsers: \(error.localizedDescription)")
+        }
+        await refresh()
+    }
+
     func deleteRecent(minutes: Int) async {
         await delete(minutes: minutes, label: "from the last \(minutes) minutes")
     }
@@ -106,6 +121,8 @@ final class ScreenMemoryController: ObservableObject {
 struct ScreenMemoryMenu: View {
     @ObservedObject var controller: ScreenMemoryController
 
+    private static let safariBundleId = "com.apple.Safari"
+
     var body: some View {
         if controller.status.enabled {
             Text("Screen memory").font(.caption2).foregroundStyle(.secondary)
@@ -118,6 +135,14 @@ struct ScreenMemoryMenu: View {
                 Button("Delete all…") { Task { await controller.deleteAll() } }
             }
             .controlSize(.small)
+            Toggle("Include Safari", isOn: Binding(
+                get: { controller.status.allowBrowsers.contains(Self.safariBundleId) },
+                set: { on in Task { await controller.setBrowserAllowed(Self.safariBundleId, on) } }
+            ))
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .help("Safari's private windows can't be detected. Turn this on only if you " +
+                 "don't browse privately in Safari.")
         }
     }
 }

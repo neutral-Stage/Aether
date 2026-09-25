@@ -101,6 +101,9 @@ screen_memory:
   exclude_bundle_ids: []        # e.g. com.apple.MobileSMS
   exclude_window_globs: []      # e.g. "*medical*"
   only_bundle_ids: []           # when set, record only these apps
+  allow_browsers: []            # Safari and other browsers whose private windows can't be
+                                 # confirmed are skipped unless their bundle ID is listed here
+                                 # (or allowed from the menu bar); e.g. com.apple.Safari
 
 # Meeting notes: started from the menu bar after a consent prompt. The meeting
 # app's audio and your microphone are transcribed in ~30 s pieces and the audio

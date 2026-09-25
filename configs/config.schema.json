@@ -83,7 +83,8 @@
         "ocr_fallback": { "type": "boolean" },
         "exclude_bundle_ids": { "type": "array", "items": { "type": "string" } },
         "exclude_window_globs": { "type": "array", "items": { "type": "string" } },
-        "only_bundle_ids": { "type": "array", "items": { "type": "string" } }
+        "only_bundle_ids": { "type": "array", "items": { "type": "string" } },
+        "allow_browsers": { "type": "array", "items": { "type": "string" } }
       }
     },
     "toolsmith": {

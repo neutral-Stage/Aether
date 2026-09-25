@@ -146,3 +146,42 @@ def test_mute_persists(sidecar_client, hints_on) -> None:  # noqa: ANN001
     assert sidecar_client.post("/hints/mute", json={"category": "nope"}).status_code == 400
     hints_on.api.reset()
     assert sidecar_client.get("/hints/status").json()["muted"] == ["fix"]
+
+
+def test_check_endpoint_uses_the_real_gate_for_a_private_chromium_window(
+    sidecar_client, monkeypatch, tmp_path,  # noqa: ANN001
+) -> None:
+    """No mock of read_front here: the sidecar's own probe -> decide -> AppleScript
+    check -> read path runs for real, only the OS-level calls it bottoms out in
+    (accessibility, osascript) are faked."""
+    from aether.effectors import applescript
+    from aether.perception import accessibility
+    from sidecar import hints_api
+
+    hints_api.reset()
+    monkeypatch.setenv("AETHER_DATA_DIR", str(tmp_path))
+    raw = {"hints": {"enabled": True}, "screen_memory": {}}
+    cfg = SimpleNamespace(raw=raw, has_cloud_llm=lambda: True)
+    monkeypatch.setattr(hints_api, "load_config", lambda validate=True: cfg)
+
+    monkeypatch.setattr(accessibility, "frontmost_app",
+                        lambda: {"name": "Google Chrome", "pid": 123, "bundle": "com.google.Chrome"})
+    monkeypatch.setattr(accessibility, "focused_window_title",
+                        lambda pid: "dashboard - Google Chrome")  # noqa: ARG005
+    monkeypatch.setattr(accessibility, "focused_summary",
+                        lambda: {"role": "", "subrole": "", "title": "", "value": ""})
+
+    def fake_subprocess_run(cmd, **kwargs):  # noqa: ANN001, ANN202, ARG001
+        assert cmd[:2] == ["osascript", "-e"] and cmd[-1] == "com.google.Chrome"
+        return SimpleNamespace(returncode=0, stdout="incognito\n", stderr="")
+
+    monkeypatch.setattr(applescript.subprocess, "run", fake_subprocess_run)
+
+    def step_must_not_be_called(*_a, **_k):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("a private window must never reach the model")
+
+    monkeypatch.setattr(hints_api, "_client",
+                        lambda cfg: SimpleNamespace(step=step_must_not_be_called))
+
+    r = sidecar_client.post("/hints/check", json={"idle_s": 30, "typing": False}).json()
+    assert r == {"hint": None, "reason": "private window"}

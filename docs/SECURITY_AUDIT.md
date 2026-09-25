@@ -177,10 +177,18 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
 
 - [x] Off by default; text only, no images kept; secrets redacted before storing.
 - [x] Fails closed: an unreadable app, bundle ID or window title records nothing. Password
-  managers, Aether itself, a focused password field, private windows and sign-in, banking
-  and verification-code pages (by title) are skipped; password fields are dropped from window text.
-- [x] A pause is written to disk and survives a sidecar restart. Deletes, pauses and resumes
-  are audited. `DELETE /screen-memory?minutes=0` is refused rather than read as "all".
+  managers, Aether itself, a focused password field (by role or subrole, so a native secure
+  text field is caught even where role alone is not enough), sign-in, banking and
+  verification-code pages (by title) are skipped; password fields are dropped from window text.
+- [x] Browser private windows fail closed by family: Chrome-family windows are asked directly
+  (AppleScript) and skipped whenever that check fails or times out, not just when it says yes;
+  Firefox is skipped by title; Safari and browsers with no reliable check (Arc, Opera, Orion,
+  DuckDuckGo) are skipped outright unless the owner explicitly allows the bundle
+  (`allow_browsers`, or the menu bar's Safari toggle) — hints use the same preference. The
+  window is re-checked right after its text is read, in case it changed mid-read.
+- [x] A pause is written to disk and survives a sidecar restart. Deletes, pauses, resumes and
+  browser allow/disallow changes are audited. `DELETE /screen-memory?minutes=0` is refused
+  rather than read as "all".
 - [x] The database is mode 0600. Retention prunes old captures hourly.
 - [x] Recall results are wrapped as untrusted data and pass the same injection scan as every
   tool result, so poisoned page text taints the run. The tools are not exposed over
@@ -188,8 +196,9 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
 
 ### Proactive hints (`aether/hints/`, `sidecar/hints_api.py`)
 
-- [x] Off by default. The sidecar reads the front window itself through screen memory's
-  privacy rules, redacts it, and marks it untrusted before any model call.
+- [x] Off by default. The sidecar reads the front window itself through the exact same gate
+  screen memory uses — the privacy rules, the browser private-window check, and the re-check
+  after reading — then redacts it and marks it untrusted before any model call.
 - [x] The model is asked only when the user is idle, not typing, the screen changed, and
   the gap, hourly and daily limits allow it.
 - [x] Answers must match a strict schema; hints with links, commands or text addressed to
@@ -296,11 +305,15 @@ Categories: prompt injection, red-team, MCP SSRF/policy, skill replay, sidecar h
     it anywhere itself. The review and the approval are the check on intent; the
     sandbox limits what it can change. Tools with internet access read only their
     declared folders.
-12. **Screen memory recognises private windows by title only.** A browser that does not
-    say "Private", "Incognito" or "InPrivate" in its window title is recorded like any
-    other window, and so is a sensitive page whose title looks ordinary. Redaction catches
-    key-shaped secrets, not personal details. The owner can exclude apps and title globs,
-    or pause.
+12. **Firefox, and an allowed Safari or unconfirmable browser, still rely on the window
+    title.** Chrome-family browsers are asked directly whether a window is private and
+    skipped when they can't answer, but Firefox has no such API, and Safari, Arc, Opera,
+    Orion and DuckDuckGo are only ever title-checked once the owner allows the bundle — a
+    window whose title doesn't say "Private", "Incognito" or "InPrivate" is recorded like
+    any other, and so is a sensitive page whose title looks ordinary. The Chrome-family
+    check also trusts the browser's own answer to the AppleScript query; a browser that
+    lied about its mode would not be caught. Redaction catches key-shaped secrets, not
+    personal details. The owner can exclude apps and title globs, or pause.
 13. **A website grant allows sending data in page addresses.** "Open pages on
     example.com" also allows `https://example.com/?q=<anything>`. The grant is the user's
     explicit choice for that one site, but a site chosen by injected text and then
