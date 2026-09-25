@@ -348,6 +348,11 @@ def _money_target(name: str, args: dict, focus: "FocusState") -> str:
 # Self-written tools (aether/toolsmith) are registered as my_<name>.
 SELF_TOOL_PREFIX = "my_"
 
+# Integrations writes (aether/tools/integration_tools.py) always show an
+# editable draft, whatever the impact classification or careful mode say —
+# they touch the user's real Calendar/Reminders/Notes.
+_ALWAYS_CONFIRM = frozenset({"calendar_create_event", "reminders_add", "notes_create"})
+
 
 def normalize_file_roots(roots: list[str] | None) -> list[str]:
     """Expand ``~`` and narrow legacy ``/Users`` default to the current home."""
@@ -591,6 +596,8 @@ class Policy:
         # remember_fact is NOT exempt: it is the only durable write in this list
         # (it lands in the system prompt of every future session).
         impact = self.impact_of(spec, args, focus)
+        if spec.name in _ALWAYS_CONFIRM:
+            return True
         # Careful mode confirms every action that changes something (BETA.md:
         # "confirms before every non-read tool"); reading the screen, a file or
         # the menus does not need a prompt. remember_fact is reversible, so it

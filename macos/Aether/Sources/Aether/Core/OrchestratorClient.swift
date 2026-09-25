@@ -632,6 +632,23 @@ final class OrchestratorClient: ObservableObject {
         return obj["deleted"] as? Int ?? 0
     }
 
+    // MARK: integrations
+
+    /// The integrations catalog with each entry's on/off state (GET /integrations).
+    /// Empty when the sidecar can't be reached.
+    func fetchIntegrations() async -> [[String: Any]] {
+        guard let result = try? await URLSession.shared.data(for: sessionsRequest("integrations")),
+              let obj = try? JSONSerialization.jsonObject(with: result.0) as? [String: Any] else {
+            return []
+        }
+        return obj["integrations"] as? [[String: Any]] ?? []
+    }
+
+    /// Turns one integration on or off (POST /integrations/{id}).
+    func setIntegration(_ id: String, enabled: Bool) async throws {
+        _ = try await postJSON("integrations/\(id)", ["enabled": enabled])
+    }
+
     // MARK: conversations (chat window)
 
     private func sessionsRequest(_ path: String, method: String = "GET") -> URLRequest {

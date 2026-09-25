@@ -20,6 +20,23 @@ def test_outbound_detection_and_fields() -> None:
     assert drafts.draft_fields("mcp_slack_post_message", {"n": 1}) is None
 
 
+def test_integration_writes_are_outbound_with_ordered_fields() -> None:
+    for name in ("calendar_create_event", "reminders_add", "notes_create"):
+        assert drafts.is_outbound(name)
+    fields = drafts.draft_fields("calendar_create_event", {
+        "title": "Standup", "start": "2026-09-26T09:00", "end": "2026-09-26T09:30",
+        "location": "Zoom", "calendar": "Work", "notes": "weekly sync"})
+    assert [f["key"] for f in fields] == ["title", "start", "end", "location", "calendar",
+                                          "notes"]
+    fields = drafts.draft_fields("reminders_add", {
+        "title": "Buy milk", "due": "2026-09-26T18:00", "list": "Errands", "notes": "2%"})
+    assert [f["key"] for f in fields] == ["title", "due", "list", "notes"]
+    fields = drafts.draft_fields("notes_create", {
+        "title": "Ideas", "body": "long body text", "folder": "Work"})
+    assert [f["key"] for f in fields] == ["title", "folder", "body"]
+    assert fields[2]["long"] and not fields[0]["long"]
+
+
 def test_apply_edits_only_touches_shown_fields() -> None:
     args = {"to": "sam@example.com", "body": "Hi", "attachment": "/etc/passwd"}
     fields = drafts.draft_fields("mcp_gmail_send_email", args)

@@ -1,0 +1,23 @@
+{
+  "name": "calendar_events",
+  "description": "Read the user's calendar. start/end are ISO 8601 local time (default: now through +7 days); query filters by title/location/notes.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "start": {
+        "type": "string"
+      },
+      "end": {
+        "type": "string"
+      },
+      "query": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    }
+  },
+  "permission": "calendar",
+  "impact": "read"
+}

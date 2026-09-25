@@ -20,6 +20,7 @@ gotchas:
   - "Sending email is destructive — require confirmation before send"
   - "Compose window may be a separate sheet; re-read AX after ⌘N"
   - "Some accounts delay 'Send' until sync completes"
+  - "If Mail is connected under Integrations, prefer mail_search over UI automation for reading"
 scripting:
   mail_compose: "Create visible outgoing message with to/subject/body"
   mail_activate: "Bring Mail to front"

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 72,
+  "tool_count": 80,
   "tools": [
     {
       "name": "get_screen_context",
@@ -249,6 +249,38 @@
     {
       "name": "meeting_notes",
       "file": "meeting_notes.json"
+    },
+    {
+      "name": "calendar_events",
+      "file": "calendar_events.json"
+    },
+    {
+      "name": "reminders_list",
+      "file": "reminders_list.json"
+    },
+    {
+      "name": "contacts_search",
+      "file": "contacts_search.json"
+    },
+    {
+      "name": "notes_search",
+      "file": "notes_search.json"
+    },
+    {
+      "name": "mail_search",
+      "file": "mail_search.json"
+    },
+    {
+      "name": "calendar_create_event",
+      "file": "calendar_create_event.json"
+    },
+    {
+      "name": "reminders_add",
+      "file": "reminders_add.json"
+    },
+    {
+      "name": "notes_create",
+      "file": "notes_create.json"
     },
     {
       "name": "delegate_to_coder",

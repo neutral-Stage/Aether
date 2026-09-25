@@ -18,6 +18,7 @@ recipes:
 gotchas:
   - "A specific list must exist before adding to it via AppleScript"
   - "Natural-language dates ('tomorrow 9am') are parsed only in the typed UI, not AppleScript"
+  - "If Reminders is connected under Integrations, prefer reminders_list / reminders_add over UI automation"
 scripting:
   run_applescript: "Create/complete reminders deterministically via AppleScript"
 verified_recipes:

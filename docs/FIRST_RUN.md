@@ -102,6 +102,10 @@ It saves a result table under `~/Library/Application Support/Aether/validation/`
   seconds before releasing (talk mode; see [`VOICE.md`](VOICE.md#talk-starts-before-you-let-go)).
   With `voice.speculative_talk: true` (the default), `first_audio_ms` on `/dashboard`
   should trend lower than with it set to `false` for the same kind of question.
+- Expand **Integrations** and press Connect on Calendar and on Contacts — each should
+  show the matching macOS permission prompt (not just flip on silently). Ask Aether to
+  add a calendar event: it should show an editable draft (title/time/location) and wait
+  for you to approve before the event exists (see [`INTEGRATIONS.md`](INTEGRATIONS.md)).
 
 ## Coding agents (optional)
 

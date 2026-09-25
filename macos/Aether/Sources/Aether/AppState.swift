@@ -1166,6 +1166,10 @@ struct MainWindowView: View {
                 AuditView(client: app.client)
             }
             .font(.caption)
+            DisclosureGroup("Integrations") {
+                IntegrationsView(client: app.client)
+            }
+            .font(.caption)
 
             if let update = app.updateChecker.updateAvailable {
                 HStack {

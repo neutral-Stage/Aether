@@ -21,6 +21,7 @@ gotchas:
   - "Deleting notes is destructive — confirm first"
   - "iCloud sync may delay visibility of new notes"
   - "Shared notes have different permissions"
+  - "If Notes is connected under Integrations, prefer notes_search / notes_create over UI automation"
 verified_recipes:
   create_note:
     match: ["create a note", "create note", "make a note", "write a note", "add a note",

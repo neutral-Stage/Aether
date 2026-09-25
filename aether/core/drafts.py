@@ -13,19 +13,22 @@ from typing import Any
 
 # In the order they are shown.
 DRAFT_KEYS = ("to", "recipient", "recipients", "cc", "bcc", "channel", "subject", "title",
-              "summary", "start", "end", "location", "body", "text", "message", "content",
-              "description", "comment")
-LONG_KEYS = frozenset({"body", "text", "message", "content", "description", "comment"})
+              "summary", "start", "end", "due", "location", "list", "calendar", "folder",
+              "notes", "body", "text", "message", "content", "description", "comment")
+LONG_KEYS = frozenset({"body", "text", "message", "content", "description", "comment", "notes"})
 MAX_FIELD = 20_000
 _OUTBOUND_WORDS = frozenset({"send", "post", "reply", "message", "email", "comment", "publish",
                              "tweet", "invite", "schedule", "chat", "forward", "share"})
 _CREATED = frozenset({"event", "issue", "task", "page", "ticket", "meeting"})
+# aether/tools/integration_tools.py writes — always confirmed with a draft
+# (see aether/core/policy.py's _ALWAYS_CONFIRM), never sent by an mcp_ name.
+_INTEGRATION_WRITES = frozenset({"calendar_create_event", "reminders_add", "notes_create"})
 
 
 def is_outbound(tool: str) -> bool:
     """Tools whose effect reaches other people (MCP integrations, mail drafts).
     Matched on whole words of the name ("gmail_search" is not "mail")."""
-    if tool == "mail_compose":
+    if tool == "mail_compose" or tool in _INTEGRATION_WRITES:
         return True
     if not tool.startswith("mcp_"):
         return False

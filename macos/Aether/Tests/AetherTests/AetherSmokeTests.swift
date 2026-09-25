@@ -739,3 +739,99 @@ final class MicConverterTests: XCTestCase {
         XCTAssertTrue(abs(out.count - 16_000) <= 200, "expected ~16000 samples, got \(out.count)")
     }
 }
+
+final class PIMServiceJSONTests: XCTestCase {
+    func testEventJSONEncodesEpochSecondsAndFields() {
+        let start = Date(timeIntervalSince1970: 1_790_431_200)
+        let end = Date(timeIntervalSince1970: 1_790_434_800)
+        let json = PIMService.eventJSON(title: "Standup", start: start, end: end, allDay: false,
+                                        location: "Zoom", calendar: "Work", notes: "sync",
+                                        id: "abc")
+        XCTAssertEqual(json["title"] as? String, "Standup")
+        XCTAssertEqual(json["start"] as? Double, 1_790_431_200)
+        XCTAssertEqual(json["end"] as? Double, 1_790_434_800)
+        XCTAssertEqual(json["all_day"] as? Bool, false)
+        XCTAssertEqual(json["location"] as? String, "Zoom")
+        XCTAssertEqual(json["calendar"] as? String, "Work")
+        XCTAssertEqual(json["notes"] as? String, "sync")
+        XCTAssertEqual(json["id"] as? String, "abc")
+    }
+
+    func testEventJSONAllDayFlagAndOmitsEmptyOptionalFields() {
+        let now = Date()
+        let json = PIMService.eventJSON(title: "Holiday", start: now, end: now, allDay: true,
+                                        location: "", calendar: nil, notes: "", id: nil)
+        XCTAssertEqual(json["all_day"] as? Bool, true)
+        XCTAssertNil(json["location"])
+        XCTAssertNil(json["calendar"])
+        XCTAssertNil(json["notes"])
+        XCTAssertNil(json["id"])
+    }
+
+    func testEventJSONTruncatesNotesTo500Chars() {
+        let now = Date()
+        let longNotes = String(repeating: "x", count: 900)
+        let json = PIMService.eventJSON(title: "T", start: now, end: now, allDay: false,
+                                        location: nil, calendar: nil, notes: longNotes, id: nil)
+        XCTAssertEqual((json["notes"] as? String)?.count, 500)
+    }
+
+    func testReminderJSONEncodesDueAndCompleted() {
+        let due = Date(timeIntervalSince1970: 1_790_500_000)
+        let json = PIMService.reminderJSON(title: "Buy milk", due: due, completed: true,
+                                           list: "Errands", notes: "2%", id: "r1")
+        XCTAssertEqual(json["due"] as? Double, 1_790_500_000)
+        XCTAssertEqual(json["completed"] as? Bool, true)
+        XCTAssertEqual(json["list"] as? String, "Errands")
+        XCTAssertEqual(json["id"] as? String, "r1")
+    }
+
+    func testReminderJSONOmitsNilFields() {
+        let json = PIMService.reminderJSON(title: "T", due: nil, completed: false, list: nil,
+                                           notes: nil, id: nil)
+        XCTAssertNil(json["due"])
+        XCTAssertNil(json["list"])
+        XCTAssertNil(json["notes"])
+        XCTAssertEqual(json["completed"] as? Bool, false)
+    }
+
+    func testReminderJSONTruncatesNotesTo500Chars() {
+        let longNotes = String(repeating: "y", count: 700)
+        let json = PIMService.reminderJSON(title: "T", due: nil, completed: false, list: nil,
+                                           notes: longNotes, id: nil)
+        XCTAssertEqual((json["notes"] as? String)?.count, 500)
+    }
+
+    func testContactJSONOmitsEmptyOrganization() {
+        let json = PIMService.contactJSON(name: "Sam Lee", organization: "",
+                                          emails: ["sam@x.com"], phones: [])
+        XCTAssertEqual(json["name"] as? String, "Sam Lee")
+        XCTAssertNil(json["organization"])
+        XCTAssertEqual(json["emails"] as? [String], ["sam@x.com"])
+        XCTAssertEqual(json["phones"] as? [String], [])
+    }
+
+    func testContactJSONKeepsNonEmptyOrganization() {
+        let json = PIMService.contactJSON(name: "Sam Lee", organization: "Acme",
+                                          emails: [], phones: ["555-1234"])
+        XCTAssertEqual(json["organization"] as? String, "Acme")
+    }
+}
+
+final class IntegrationRowStateTests: XCTestCase {
+    func testConnectedWhenEnabledAndNoDenial() {
+        XCTAssertEqual(IntegrationRow.state(enabled: true, osStatus: "authorized"), .connected)
+        // Notes/Mail have no EventKit status (nil) but can still be connected.
+        XCTAssertEqual(IntegrationRow.state(enabled: true, osStatus: nil), .connected)
+    }
+
+    func testNotConnectedWhenDisabled() {
+        XCTAssertEqual(IntegrationRow.state(enabled: false, osStatus: nil), .notConnected)
+        XCTAssertEqual(IntegrationRow.state(enabled: false, osStatus: "not_determined"), .notConnected)
+    }
+
+    func testDeniedOverridesTheEnabledFlag() {
+        XCTAssertEqual(IntegrationRow.state(enabled: true, osStatus: "denied"), .denied)
+        XCTAssertEqual(IntegrationRow.state(enabled: false, osStatus: "restricted"), .denied)
+    }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "notes_create",
+  "description": "Create a note. ALWAYS confirmed with an editable draft.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string"
+      },
+      "folder": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "body"
+    ]
+  },
+  "permission": "notes",
+  "impact": "reversible"
+}

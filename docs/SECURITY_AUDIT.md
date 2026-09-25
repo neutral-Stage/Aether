@@ -216,6 +216,32 @@ its own Seatbelt sandbox (Seatbelt cannot nest).
   marks the transcript untrusted; recall tools wrap results the same way.
 - [x] Uploads must be WAV, at most 25 MB, for a meeting that has not ended.
 
+### Apple integrations (`aether/integrations/`, `aether/tools/integration_tools.py`)
+
+- [x] No accounts or tokens: Calendar/Reminders/Contacts go through the Swift app's
+  EventKit/Contacts access (the app owns the macOS permission prompts); Notes/Mail go
+  through AppleScript from the sidecar. Every integration is off by default and stays off
+  until the user connects it from the Aether window's Integrations panel.
+- [x] `POST /pim` on the Swift loopback server refuses outright when no bearer token is
+  configured (personal data, same rule as `GET /capture`) and does not depend on
+  `beta.native_effectors`/`allowInvoke`. Each action re-checks EventKit/Contacts
+  authorization itself before touching PIMService, independent of what the sidecar's own
+  `enabled()` flag says.
+- [x] `calendar_create_event`, `reminders_add` and `notes_create` always show an editable
+  draft and always confirm (`policy._ALWAYS_CONFIRM`), regardless of careful mode or their
+  impact classification. Calendar events are created through EventKit, which cannot send
+  invitations — nothing reaches another person.
+- [x] Every value passed to an AppleScript (query text, note title/body, folder, mailbox)
+  goes in as `osascript` argv (`run_applescript_args`), never spliced into the script
+  source; osascript output is parsed through fixed ASCII separators, not string splitting
+  on user content.
+- [x] Contacts, Mail and Notes results, and calendar/reminder notes fields, are wrapped as
+  untrusted data before the model sees them — a note or email is exactly the kind of text
+  a prompt injection would hide in.
+- [x] A disabled integration answers with the exact panel name to fix it in; an
+  unreachable Aether app (for the EventKit-backed tools) answers that the app must be
+  running, never a raw connection error.
+
 ### STOP (FR-26)
 
 - [x] Global event checked before tool dispatch

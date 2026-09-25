@@ -29,6 +29,7 @@ limitations.
 | Tools Aether writes for itself | [`docs/SELF_WRITTEN_TOOLS.md`](docs/SELF_WRITTEN_TOOLS.md) |
 | Coding agents and the warm pool | [`docs/FLEET.md`](docs/FLEET.md) |
 | Screen memory (opt-in) | [`docs/SCREEN_MEMORY.md`](docs/SCREEN_MEMORY.md) |
+| Integrations: Calendar, Reminders, Contacts, Notes, Mail (opt-in) | [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) |
 | Meeting notes | [`docs/MEETINGS.md`](docs/MEETINGS.md) |
 | Proactive hints (opt-in) | [`docs/HINTS.md`](docs/HINTS.md) |
 | App knowledge packs | [`docs/KNOWLEDGE_PACKS.md`](docs/KNOWLEDGE_PACKS.md) |

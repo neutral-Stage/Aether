@@ -288,3 +288,9 @@ capabilities:
   files: true
   network: true
   agents: true                 # fleet tools (spawn_agent, …)
+  calendar: true                # calendar_events/calendar_create_event, reminders_list/reminders_add
+  contacts: true                # contacts_search
+  notes: true                   # notes_search/notes_create
+  mail: true                    # mail_search
+  # Each integration also needs to be turned on per app in the Aether window's
+  # Integrations panel (off by default there, unlike these capability gates).
