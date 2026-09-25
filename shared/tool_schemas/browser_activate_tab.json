@@ -1,18 +1,15 @@
 {
-  "name": "browser_click",
-  "description": "Click an element in the browser by CSS selector (optional tab_id).",
+  "name": "browser_activate_tab",
+  "description": "Switch the active browser tab by tab_id (from browser_tabs).",
   "input_schema": {
     "type": "object",
     "properties": {
-      "selector": {
-        "type": "string"
-      },
       "tab_id": {
         "type": "integer"
       }
     },
     "required": [
-      "selector"
+      "tab_id"
     ]
   },
   "permission": "network",

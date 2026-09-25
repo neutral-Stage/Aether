@@ -1,6 +1,6 @@
 {
   "name": "browser_screenshot",
-  "description": "Screenshot the Playwright browser viewport.",
+  "description": "Screenshot the browser viewport.",
   "input_schema": {
     "type": "object",
     "properties": {}

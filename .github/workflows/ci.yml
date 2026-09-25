@@ -49,10 +49,12 @@ jobs:
       - name: Export tool schemas (check drift)
         run: |
           python scripts/export_tool_schemas.py
-          git diff --exit-code shared/tool_schemas/ || (
+          if [ -n "$(git status --porcelain shared/tool_schemas/)" ]; then
+            git status --porcelain shared/tool_schemas/
+            git diff shared/tool_schemas/
             echo "::error::Tool schemas out of date. Run scripts/export_tool_schemas.py"
             exit 1
-          )
+          fi
 
   swift:
     runs-on: macos-latest

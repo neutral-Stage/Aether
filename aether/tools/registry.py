@@ -1,6 +1,8 @@
 """Formal tool registry (§12.1) with ToolSpec + dispatch."""
 from __future__ import annotations
 
+import os
+
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -878,7 +880,10 @@ def build_default_registry() -> Registry:
     from ..core.config import load_config
 
     cfg = load_config(validate=False)
-    if bool((cfg.get("delegation") or {}).get("enabled", True)):
+    # Schema export (scripts/export_tool_schemas.py) registers every optional
+    # tool so shared/tool_schemas/ does not depend on the local config.yaml.
+    export_all = os.getenv("AETHER_SCHEMA_EXPORT") == "1"
+    if export_all or bool((cfg.get("delegation") or {}).get("enabled", True)):
         reg.register(
             ToolSpec(
                 name="delegate_to_coder",
@@ -914,7 +919,11 @@ def build_default_registry() -> Registry:
             )
         )
     fleet_cfg = cfg.get("fleet") or {}
-    if bool(fleet_cfg.get("enabled", True)):
+    if export_all:
+        from ..fleet.tools import register_fleet_tools
+
+        register_fleet_tools(reg)
+    elif bool(fleet_cfg.get("enabled", True)):
         from ..fleet.manager import SessionManager
         from ..fleet.tools import register_fleet_tools
 
@@ -928,7 +937,7 @@ def build_default_registry() -> Registry:
         # Bridge global STOP → kill fleet subprocesses + cancel graphs (Phase 9).
         from ..fleet.manager import register_stop_bridge
         register_stop_bridge()
-    if bool((cfg.get("beta") or {}).get("computer_use_api", False)):
+    if export_all or bool((cfg.get("beta") or {}).get("computer_use_api", False)):
         reg.register(ToolSpec(
             name="computer_use_step",
             description=("LAST RESORT when AX + OCR both fail: send a screenshot to "

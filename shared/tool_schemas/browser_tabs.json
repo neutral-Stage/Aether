@@ -1,0 +1,10 @@
+{
+  "name": "browser_tabs",
+  "description": "List open browser tabs with ids, titles, urls. In attached mode these are the user's real Chrome tabs.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "permission": "network",
+  "impact": "read"
+}

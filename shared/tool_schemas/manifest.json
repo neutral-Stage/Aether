@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "tool_count": 26,
+  "tool_count": 37,
   "tools": [
     {
       "name": "get_screen_context",
@@ -17,6 +17,22 @@
     {
       "name": "type_text",
       "file": "type_text.json"
+    },
+    {
+      "name": "get_app_context",
+      "file": "get_app_context.json"
+    },
+    {
+      "name": "watch_app",
+      "file": "watch_app.json"
+    },
+    {
+      "name": "unwatch_app",
+      "file": "unwatch_app.json"
+    },
+    {
+      "name": "list_windows",
+      "file": "list_windows.json"
     },
     {
       "name": "press_key",
@@ -59,6 +75,22 @@
       "file": "browser_screenshot.json"
     },
     {
+      "name": "browser_tabs",
+      "file": "browser_tabs.json"
+    },
+    {
+      "name": "browser_activate_tab",
+      "file": "browser_activate_tab.json"
+    },
+    {
+      "name": "browser_new_tab",
+      "file": "browser_new_tab.json"
+    },
+    {
+      "name": "browser_attach",
+      "file": "browser_attach.json"
+    },
+    {
       "name": "run_applescript",
       "file": "run_applescript.json"
     },
@@ -83,6 +115,14 @@
       "file": "delegate_to_coder.json"
     },
     {
+      "name": "spawn_graph",
+      "file": "spawn_graph.json"
+    },
+    {
+      "name": "get_graph",
+      "file": "get_graph.json"
+    },
+    {
       "name": "spawn_agent",
       "file": "spawn_agent.json"
     },
@@ -105,6 +145,10 @@
     {
       "name": "wait_for_agent",
       "file": "wait_for_agent.json"
+    },
+    {
+      "name": "computer_use_step",
+      "file": "computer_use_step.json"
     }
   ]
 }

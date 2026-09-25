@@ -1,0 +1,10 @@
+{
+  "name": "browser_attach",
+  "description": "Attach to the user's REAL Chrome: quits and relaunches Chrome with remote debugging (tabs restore), then browser_* tools control actual tabs. Ask the user before using this.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "permission": "network",
+  "impact": "destructive"
+}

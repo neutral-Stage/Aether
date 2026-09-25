@@ -1,0 +1,14 @@
+{
+  "name": "get_graph",
+  "description": "Status of a task graph (or all graphs when graph_id omitted).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "graph_id": {
+        "type": "string"
+      }
+    }
+  },
+  "permission": "agents",
+  "impact": "read"
+}

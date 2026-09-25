@@ -1,6 +1,6 @@
 {
   "name": "browser_fill",
-  "description": "Fill a form field in the Playwright browser.",
+  "description": "Fill a form field in the browser (optional tab_id).",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -9,6 +9,9 @@
       },
       "text": {
         "type": "string"
+      },
+      "tab_id": {
+        "type": "integer"
       }
     },
     "required": [

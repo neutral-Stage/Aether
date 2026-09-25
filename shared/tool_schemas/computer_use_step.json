@@ -1,0 +1,17 @@
+{
+  "name": "computer_use_step",
+  "description": "LAST RESORT when AX + OCR both fail: send a screenshot to Anthropic's computer-use model and execute the ONE action it proposes. Slower and costs tokens \u2014 prefer AX/vision tools.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "instruction": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "instruction"
+    ]
+  },
+  "permission": "input",
+  "impact": "reversible"
+}
