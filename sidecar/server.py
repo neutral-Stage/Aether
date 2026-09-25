@@ -104,6 +104,7 @@ from .guide_api import router as _guide_router  # noqa: E402
 from . import guide_api  # noqa: E402
 from .toolsmith_api import router as _toolsmith_router  # noqa: E402
 from .onboarding_api import router as _onboarding_router  # noqa: E402
+from .dictation_api import router as _dictation_router  # noqa: E402
 from . import questions  # noqa: E402
 from . import session_store  # noqa: E402
 
@@ -115,6 +116,7 @@ app.include_router(_mcp_router)
 app.include_router(_apps_router)
 app.include_router(_toolsmith_router)
 app.include_router(_onboarding_router)
+app.include_router(_dictation_router)
 
 
 @app.on_event("startup")
@@ -192,6 +194,8 @@ class RunRequest(BaseModel):
 class STTRequest(BaseModel):
     audio_base64: str = Field(..., description="WAV audio, base64-encoded")
     engine: str | None = None
+    # Dictation: bias recognition toward the user's vocabulary (names, jargon).
+    use_vocabulary: bool = False
 
 
 class TTSRequest(BaseModel):
@@ -1048,8 +1052,13 @@ async def stt(body: STTRequest, _auth: None = Depends(require_auth)) -> dict[str
 
     path = Path(tempfile.gettempdir()) / f"aether-stt-{uuid.uuid4().hex}.wav"
     path.write_bytes(raw)
+    prompt = ""
+    if body.use_vocabulary:
+        from aether import dictation
+
+        prompt = dictation.load_settings().stt_prompt()
     try:
-        text = stt_engine.transcribe_file(path)
+        text = stt_engine.transcribe_file(path, prompt=prompt)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"STT failed: {exc}") from exc
     finally:

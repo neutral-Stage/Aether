@@ -370,6 +370,38 @@ final class OrchestratorClient: ObservableObject {
         return (obj["examples"] as? [[String: Any]] ?? []).compactMap(TourExample.parse)
     }
 
+    // MARK: dictation and select-and-transform
+
+    private func postJSON(_ path: String, _ body: [String: Any],
+                          timeout: TimeInterval = 30) async throws -> [String: Any] {
+        var request = sessionsRequest(path, method: "POST")
+        request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+            let detail = obj["detail"] as? String ?? String(data: data, encoding: .utf8) ?? "failed"
+            throw NSError(domain: "Aether", code: 1, userInfo: [NSLocalizedDescriptionKey: detail])
+        }
+        return obj
+    }
+
+    /// Spoken text → text to type in the app in front (tone per app, vocabulary).
+    func cleanDictation(_ text: String, bundleId: String, app: String) async -> String? {
+        let obj = try? await postJSON("dictation/clean",
+                                      ["text": text, "bundle_id": bundleId, "app": app])
+        return obj?["text"] as? String
+    }
+
+    /// Rewrite selected text following an instruction.
+    func transformText(_ text: String, instruction: String, bundleId: String) async throws -> String {
+        let obj = try await postJSON("dictation/transform",
+                                     ["text": text, "instruction": instruction,
+                                      "bundle_id": bundleId], timeout: 60)
+        return obj["text"] as? String ?? ""
+    }
+
     // MARK: conversations (chat window)
 
     private func sessionsRequest(_ path: String, method: String = "GET") -> URLRequest {
@@ -902,13 +934,14 @@ final class OrchestratorClient: ObservableObject {
         }
     }
 
-    func transcribe(wavData: Data) async throws -> String {
+    func transcribe(wavData: Data, useVocabulary: Bool = false) async throws -> String {
         let url = AetherConfig.sidecarBaseURL.appendingPathComponent("stt")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = [
             "audio_base64": wavData.base64EncodedString(),
+            "use_vocabulary": useVocabulary,
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         applySidecarAuth(&request)

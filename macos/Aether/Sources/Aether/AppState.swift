@@ -90,6 +90,13 @@ final class AppState: ObservableObject {
         return store
     }()
     private let chatWindow = ChatWindowController()
+    /// ⌃⌥D dictates into the focused field; ⌃⌥T rewrites the selection.
+    private let dictationHotkey = CommandBarHotkeyController(modifiers: [.control, .option],
+                                                             keyCode: 2)
+    private let transformHotkey = CommandBarHotkeyController(modifiers: [.control, .option],
+                                                             keyCode: 17)
+    lazy var dictation = DictationController(audio: audio, client: client)
+    private let transformPanel = TransformPanel()
     let updateChecker = SparkleUpdateController()
     let sidecar = SidecarSupervisor()
     lazy var realtimeSession = RealtimeVoiceSession()
@@ -128,6 +135,18 @@ final class AppState: ObservableObject {
         chatHotkey.onToggle = { [weak self] in
             Task { @MainActor in self?.openChat() }
         }
+        dictationHotkey.onToggle = { [weak self] in
+            Task { @MainActor in
+                guard let self, !self.isPTTHeld else { return }
+                await self.dictation.toggle()
+            }
+        }
+        transformHotkey.onToggle = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                await self.transformPanel.begin(client: self.client) { self.showStatus($0) }
+            }
+        }
         ambient.onWake = { [weak self] in
             Task { @MainActor in await self?.handleWakeWord() }
         }
@@ -153,6 +172,9 @@ final class AppState: ObservableObject {
         talkHotkey.start()
         commandBarHotkey.start()
         chatHotkey.start()
+        dictationHotkey.start()
+        transformHotkey.start()
+        dictation.onStatus = { [weak self] status in self?.showStatus(status) }
         audio.refreshMicPermission()
         stt.refreshAuthorization()
         Task {
@@ -248,6 +270,12 @@ final class AppState: ObservableObject {
             onStop: { [weak self] in self?.handleStop() }
         )
         hud.setClickThrough(!client.isRunning && !audio.isRecording && pendingConfirmId == nil)
+    }
+
+    /// A short status line in the HUD (dictation, transform).
+    private func showStatus(_ text: String) {
+        world.currentStep = text
+        refreshHUD()
     }
 
     /// Open the chat window, optionally on one conversation.
@@ -541,6 +569,8 @@ final class AppState: ObservableObject {
         fillerTask?.cancel()
         realtimeMic.stop()
         realtimePlayer.stop()
+        dictation.cancel()
+        transformPanel.hide()
         streamingTalkId = nil
         if isTalkHeld { cancelTalk() }
         if let guideId = activeGuideId {
@@ -577,7 +607,7 @@ final class AppState: ObservableObject {
     }
 
     func beginPTT() {
-        guard !isPTTHeld else { return }
+        guard !isPTTHeld, dictation.state == .idle else { return }
         if realtimeActive {
             isPTTHeld = true
             if realtimePlayer.isPlaying {
@@ -679,7 +709,7 @@ final class AppState: ObservableObject {
     // MARK: - Talk mode (hold ⌃⌥, ask about what the mouse points at)
 
     func beginTalk(at point: CGPoint) {
-        guard !isPTTHeld, !isTalkHeld else { return }
+        guard !isPTTHeld, !isTalkHeld, dictation.state == .idle else { return }
         isTalkHeld = true
         talkPointer = point
         voice.stopAll()

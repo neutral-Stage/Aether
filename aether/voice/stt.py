@@ -56,14 +56,15 @@ class STT:
                 print(f"[STT error, falling back to text: {e}]")
         return input(prompt).strip()
 
-    def transcribe_file(self, path: str | Path) -> str:
-        """Transcribe an on-disk WAV (or other supported) audio file."""
+    def transcribe_file(self, path: str | Path, *, prompt: str = "") -> str:
+        """Transcribe an on-disk WAV (or other supported) audio file. ``prompt`` (words
+        the speaker uses: names, jargon) biases Whisper toward spelling them right."""
         if self.engine == "local" and self._local_stt().available():
             return self._local_stt().transcribe(path)
         if self.engine == "groq" and self.groq_api_key:
-            return self._transcribe_groq(path)
+            return self._transcribe_groq(path, prompt)
         if self.engine == "openai" and self.openai_api_key:
-            return self._transcribe_openai(path)
+            return self._transcribe_openai(path, prompt)
         raise RuntimeError(f"STT engine {self.engine!r} is not configured")
 
     # --- helpers ---
@@ -109,21 +110,23 @@ class STT:
         path = self._record_wav()
         return self._postprocess(self._transcribe_openai(path))
 
-    def _transcribe_groq(self, path: str | Path) -> str:
+    def _transcribe_groq(self, path: str | Path, prompt: str = "") -> str:
         from openai import OpenAI
 
         client = OpenAI(
             api_key=self.groq_api_key,
             base_url="https://api.groq.com/openai/v1",
         )
+        extra = {"prompt": prompt[:800]} if prompt else {}
         with open(path, "rb") as f:
-            tr = client.audio.transcriptions.create(model=self.model, file=f)
+            tr = client.audio.transcriptions.create(model=self.model, file=f, **extra)
         return (getattr(tr, "text", "") or "").strip()
 
-    def _transcribe_openai(self, path: str | Path) -> str:
+    def _transcribe_openai(self, path: str | Path, prompt: str = "") -> str:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.openai_api_key)
+        extra = {"prompt": prompt[:800]} if prompt else {}
         with open(path, "rb") as f:
-            tr = client.audio.transcriptions.create(model=self.model, file=f)
+            tr = client.audio.transcriptions.create(model=self.model, file=f, **extra)
         return (getattr(tr, "text", "") or "").strip()

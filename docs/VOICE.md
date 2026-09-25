@@ -74,3 +74,10 @@ Requires `GROQ_API_KEY` for Groq Orpheus synthesis.
 ## Metrics (VOICE-004)
 
 `voice_roundtrip_ms` histogram in sidecar metrics when STT + agent + TTS path is instrumented via `POST /metrics/voice`.
+
+## Dictation and rewriting
+
+- **⌃⌥D** starts dictating into the focused text field; press it again to finish. The words are transcribed with your vocabulary, cleaned up (punctuation, filler words, spoken "new line" / "comma"), matched to the app's tone (email prose in Mail, short chat in Slack), and pasted. The clipboard is put back afterwards unless something else changed it.
+- **⌃⌥T** rewrites the selected text: pick a quick action (fix, shorter, formal, friendlier, bullet points, translate) or type one, check the result next to the original, then Replace. It is pasted, so the app's own Undo reverts it. Secrets in the selection are redacted before it goes to the model.
+- Neither works in password fields.
+- `GET/PUT /dictation/settings` holds your vocabulary (also sent to speech-to-text as a spelling hint), per-app tones by bundle id, and whether to clean up with the model at all. Settings live in `<data dir>/dictation.json`.
