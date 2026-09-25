@@ -412,6 +412,7 @@ class Agent:
         # next goal — neither reset nor seed was called anywhere before now.
         self._ro2_grants.clear()
         self.focus.reset()
+        self.policy.set_run_goal(goal)
         self._hud_update(goal=goal, status="working", step="Starting…")
 
         rid = run_id or f"run-{int(time.time() * 1000)}"
@@ -578,6 +579,15 @@ class Agent:
                             "content": "Shell command blocked: path outside approved roots.",
                         })
                         continue
+                blocked_path = next((fp for fp in self.policy.file_paths(name, args)
+                                     if not self.policy.allows_file_path(fp)), None)
+                if blocked_path is not None:
+                    results.append({
+                        "tool_use_id": call["id"],
+                        "content": (f"Blocked: {blocked_path} is outside the approved "
+                                    "folders (policy.approved_file_roots)."),
+                    })
+                    continue
 
                 untrusted = self._context_is_untrusted()
                 focus = self.focus.state()

@@ -142,6 +142,8 @@ def _score_case(policy, registry, case: dict) -> CaseResult:
                       or args.get("prompt") or args.get("then_goal")
                       or args.get("name")      # open_app: the bundle path
                       or args.get("to")        # mail_compose: the recipient
+                      or args.get("content")   # write_file: what gets written
+                      or args.get("path")      # read_file/open_path/menu_item
                       or focus.label           # click: the AX target label
                       or args.get("key")       # press_key: the key itself
                       or "")
