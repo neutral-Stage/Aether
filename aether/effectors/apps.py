@@ -36,6 +36,13 @@ def activate_app(name: str) -> str:
 def frontmost() -> str:
     if not _OK:
         return ""
+    try:
+        from ..perception import accessibility as ax
+        name = ax.frontmost_app().get("name", "")
+        if name:
+            return name
+    except Exception:
+        pass
     app = NSWorkspace.sharedWorkspace().frontmostApplication()
     return app.localizedName() if app else ""
 
@@ -43,6 +50,13 @@ def frontmost() -> str:
 def list_running() -> list[str]:
     if not _OK:
         return []
+    try:
+        from ..perception import accessibility as ax
+        live = [a["name"] for a in ax.list_running_apps() if a.get("name")]
+        if live:
+            return sorted(set(live))
+    except Exception:
+        pass
     apps = NSWorkspace.sharedWorkspace().runningApplications()
     names = []
     for a in apps:

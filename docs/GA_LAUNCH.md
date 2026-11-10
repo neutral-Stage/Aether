@@ -6,7 +6,7 @@
 
 ## Release candidate status
 
-Phases 0–12 complete. Aether is **GA-ready** with documented exceptions below.
+Phases 0–17 complete. Aether is **GA-ready** with documented exceptions below. Real-Mac validation (`aether doctor`, `scripts/live_smoke.py --with-llm`, `scripts/live_smoke.py --tasks`) is logged in [`docs/VALIDATION_LOG.md`](VALIDATION_LOG.md).
 
 ---
 
@@ -14,12 +14,12 @@ Phases 0–12 complete. Aether is **GA-ready** with documented exceptions below.
 
 ### Build & sign
 
-- [ ] `make ci` green (Python + Swift + benchmark + validate-packs) — run before each release
+- [x] `make ci` green (Python + benchmark + validate-packs; Swift verified in macOS CI) — run before each release
 - [x] GitHub CI workflow (`.github/workflows/ci.yml`): pytest, ruff, Swift test, validate-packs, mock benchmark
-- [ ] `python -m pytest tests/security/ -q` — 50+ security cases (automated in CI)
-- [ ] Developer ID sign + notarize (`macos/scripts/sign-and-notarize.sh`)
-- [ ] DMG build (`macos/scripts/build-dmg.sh`)
-- [ ] Sparkle appcast hosted
+- [x] `python -m pytest tests/security/ -q` — 280+ security & red-team cases (automated in CI)
+- [ ] Developer ID sign + notarize (`macos/scripts/sign-and-notarize.sh` — self-signed via `make dev-identity` until Apple Developer ID is added)
+- [x] DMG build (`macos/scripts/build-dmg.sh` + `.github/workflows/release.yml`)
+- [ ] Sparkle appcast hosted (GitHub Releases feed wired to `neutral-Stage/Aether`)
 
 ### Security
 
@@ -27,30 +27,30 @@ Phases 0–12 complete. Aether is **GA-ready** with documented exceptions below.
 - [x] Localhost-only CORS default (`sidecar/auth.py`); production must not set `AETHER_SIDECAR_CORS_ORIGINS=*`
 - [ ] `AETHER_SIDECAR_TOKEN` set for beta/GA builds (deployment step)
 - [ ] `AETHER_AUDIT_KEY` set (or Keychain migration planned)
-- [ ] Review `docs/SECURITY_AUDIT.md` residual risks
+- [x] Review `docs/SECURITY_AUDIT.md` residual risks
 
 ### Configuration
 
 - [x] `delegation.enabled` config gate (tool omitted when false)
 - [x] `mcp.allow_private_urls` SSRF guard (default false)
 - [x] `beta.native_effectors` gates Swift effector HTTP bridge
-- [ ] `config.yaml` reviewed — risky beta flags off by default
-- [ ] API keys in `.env` only, not committed
-- [ ] `delegation.enabled` reviewed per deployment
+- [x] `config.yaml` reviewed — risky beta flags off by default
+- [x] API keys in `.env` only, not committed
+- [x] `delegation.enabled` reviewed per deployment
 
 ### Documentation
 
-- [ ] `README.md` links here
-- [ ] `BETA.md` graduation note
-- [ ] `docs/SUPPORT.md` published
-- [ ] `docs/RUNBOOK.md` for operators
+- [x] `README.md` links here
+- [x] `BETA.md` graduation note
+- [x] `docs/SUPPORT.md` published
+- [x] `docs/RUNBOOK.md` for operators
 
 ### Manual QA
 
-- [ ] PTT, command bar (⌥Space), text window all work
-- [ ] STOP < 200 ms (HUD + ⌃⇧S)
-- [ ] Careful mode confirms destructive actions
-- [ ] Onboarding + TCC permissions flow
+- [ ] PTT, command bar (⌥Space), text window all work (requires full Xcode.app build)
+- [x] STOP < 200 ms (verified via `scripts/live_smoke.py --tasks`)
+- [x] Careful mode confirms destructive actions
+- [ ] Onboarding + TCC permissions flow (Swift UI; CLI/sidecar TCC verified on macOS 27.2)
 - [ ] 10 external beta users (Phase 9 exit criterion)
 
 ---

@@ -1,6 +1,6 @@
 # Aether — Improvement Plan & Roadmap
 
-**Version:** 0.5.0-beta.1 · **Date:** June 2026 · **Status:** Planning document
+**Version:** 1.0.0-rc.1 · **Date:** November 2026 · **Status:** Living Architecture & Roadmap (Phases 0–17 complete)
 
 This document is the result of a full codebase audit against `Aether_macOS_AI_Agent_Engineering_Spec.md`. It covers current state, architecture improvements, feature gaps, and a phased roadmap from beta through GA.
 
@@ -8,15 +8,13 @@ This document is the result of a full codebase audit against `Aether_macOS_AI_Ag
 
 ## Executive Summary
 
-Aether has a **working end-to-end agent loop** (perceive → route → reason → policy → act → verify → memory) with a **Python sidecar** (`sidecar/server.py`) and a **native Swift shell** (`macos/Aether/`). Phases 0–5 deliverables are largely present: dual-loop routing, 19 registered tools, MCP stdio client, skill memory, barge-in voice, signed audit log, knowledge packs (33 packs), and observability.
+Aether has a **working end-to-end agent loop** (perceive → route → reason → policy → act → verify → memory) with a **Python sidecar** (`sidecar/server.py`) and a **native Swift shell** (`macos/Aether/`). Phases 0–17 deliverables are complete: dual-loop routing, **79 registered tools** across 11 tool modules, MCP stdio + SSE clients, skill memory + pack learning, barge-in voice, signed HMAC audit log, 33 app knowledge packs, Seatbelt sandboxing (`sandbox-exec`), self-written tools (`Toolsmith`), multi-agent coding fleet (`SessionManager` + DAG `GraphOrchestrator`), and observability.
 
-**Strengths:** Clear separation of concerns (orchestrator, world model, registry, policy); multi-provider LLM router (`configs/router.yaml`); accessibility-first perception; verify-after-act self-correction; security tests and HMAC audit chain.
+**Strengths:** Clear separation of concerns (orchestrator, world model, registry, policy); multi-provider LLM router (`configs/router.yaml` + per-Mac `AETHER_<ROLE>_PROVIDER` overrides including zero-key `ollama_local`); accessibility-first perception; verify-after-act self-correction; 1,500+ automated unit/integration/security tests and HMAC audit chain.
 
-**Critical gaps before GA:** No production wake word (Porcupine); ambient mode stub only; command bar present but not Spotlight-grade; continuous screen perception is a config flag only; no hardware acoustic echo cancellation; Swift effectors gated behind `beta.native_effectors` while Python remains the default hot path; Sparkle/notarized distribution incomplete; voice latency far from NFR-1 (&lt;800 ms) on default cloud pipeline.
+**Residual items before 1.0.0 GA tag:** Production Porcupine wake-word model key; hardware acoustic echo cancellation; Swift effectors gated behind `beta.native_effectors` while Python remains the default hot path; paid Apple Developer ID certificate for Gatekeeper notarization; voice latency >800 ms on default cloud pipeline (Realtime API available via `beta.realtime_voice`).
 
-**Recently closed (P0–P2):** GitHub CI (pytest, ruff, Swift test, validate-packs, mock benchmark); 50+ security tests; optional sidecar Bearer auth + localhost CORS default; MCP stdio + SSE with SSRF guards; skill replay policy; delegation env allowlist.
-
-**Recommended next focus (Phase 6):** CI + integration tests, automated task benchmark, then voice hardening (AEC + streaming STT path).
+**Recently closed (Phases 6–17):** GitHub CI + release DMG workflow (`.github/workflows/ci.yml`, `.github/workflows/release.yml`); 1,500+ tests including 280+ security & red-team cases; Seatbelt sandbox + Rule-of-Two consent ledger; multi-run sidecar (`_RunRegistry`); MCP stdio + SSE with SSRF guards; real-Mac validation (`scripts/live_smoke.py --tasks` with `qwen3.8:27b-mlx`).
 
 ---
 
@@ -35,13 +33,13 @@ Aether has a **working end-to-end agent loop** (perceive → route → reason �
 | Security | `aether/core/security.py` | **Good** | Pattern-based injection scan; `wrap_untrusted()` |
 | Audit | `aether/core/audit_log.py` | **Good** | HMAC hash chain; `GET /audit/verify` |
 | Metrics | `aether/core/metrics.py` | **Good** | Histograms, budgets, dashboard data |
-| Config | `aether/core/config.py` | **Adequate** | YAML + `.env`; no schema validation |
-| STOP | `aether/core/stop.py` | **Good** | Thread event; pynput hotkey; `StopRequested` in registry |
-| Tools registry | `aether/tools/registry.py` | **Production-ready** | 19 tools; `ToolSpec` with permission/impact |
-| MCP | `aether/tools/mcp_client.py`, `mcp_client_sse.py` | **Beta** | Stdio + SSE; SSRF guard; 30s timeout; dynamic `mcp_*` registration |
-| Delegation | `aether/tools/delegation.py` | **Beta** | Subprocess to claude/codex/opencode/cursor; no sandbox |
-| Memory | `aether/memory/store.py` | **Prototype** | Hash embeddings (not semantic); SQLite |
-| Skills | `aether/memory/skills.py` | **Prototype** | Heuristic distillation from traces |
+| Config | `aether/core/config.py` | **Production-ready** | YAML + `.env` + JSON Schema validation (`configs/config.schema.json`) |
+| STOP | `aether/core/stop.py` | **Production-ready** | Thread event; pynput hotkey; HTTP stream cancel + 25 ms async poll |
+| Tools registry | `aether/tools/registry.py` | **Production-ready** | 79 tools across 11 modules; `ToolSpec` with permission/impact |
+| MCP | `aether/tools/mcp_client.py`, `mcp_client_sse.py` | **Production-ready** | Stdio + SSE; SSRF guard; 30s timeout; dynamic `mcp_*` registration |
+| Delegation & Fleet | `aether/tools/delegation.py`, `aether/fleet/*` | **Production-ready** | Subprocess + PTY fleet + git worktrees + `sandbox-exec` Seatbelt profile |
+| Memory | `aether/memory/store.py`, `embeddings.py` | **Production-ready** | Hybrid FTS5 + `auto`/`e5`/`openai`/`local`/`hash` embeddings |
+| Skills | `aether/memory/skills.py`, `knowledge/learned.py` | **Production-ready** | Parameterized skill distillation + app pack recipe write-back |
 | Perception AX | `aether/perception/accessibility.py` | **Production** | Primary percept via pyobjc |
 | Perception OCR | `aether/perception/ocr.py` | **Good** | Apple Vision; normalized coords |
 | Perception vision | `aether/perception/vision.py` | **Basic** | Cloud/local analyze wrapper |
@@ -759,9 +757,9 @@ jobs:
 
 ---
 
-## Appendix A — Tool Inventory (19 registered)
+## Appendix A — Tool Inventory (79 registered)
 
-`get_screen_context`, `open_app`, `click`, `type_text`, `press_key`, `run_shell`, `screenshot`, `analyze_screen`, `remember_fact`, `browser_navigate`, `browser_click`, `browser_fill`, `browser_get_text`, `browser_screenshot`, `run_applescript`, `finder_go_to`, `safari_open_url`, `mail_compose`, `delegate_to_coder`, `finish` (+ dynamic `mcp_*`)
+Exported in `shared/tool_schemas/manifest.json` across core, desktop, targeting, browser, delegation, fleet, screen memory, integrations, meetings, quick skills, and toolsmith categories (`get_screen_context`, `get_app_context`, `list_windows`, `point_at`, `open_app`, `click`, `click_element`, `double_click`, `right_click`, `middle_click`, `mouse_down`, `mouse_up`, `type_text`, `press_key`, `key_down`, `key_up`, `scroll`, `drag`, `hover`, `wait`, `focus_window`, `set_window_frame`, `menu_item`, `list_menus`, `get_selected_text`, `clipboard_get`, `clipboard_set`, `read_file`, `write_file`, `list_dir`, `open_path`, `open_url`, `notify`, `quit_app`, `set_volume`, `shortcuts_list`, `shortcuts_run`, `batch_actions`, `ask_user`, `mark_screen`, `click_mark`, `click_text`, `click_described`, `run_shell`, `screenshot`, `analyze_screen`, `remember_fact`, `browser_navigate`, `browser_click`, `browser_fill`, `browser_get_text`, `browser_screenshot`, `run_applescript`, `finder_go_to`, `safari_open_url`, `mail_compose`, `delegate_to_coder`, `spawn_agent`, `send_to_agent`, `get_agent_output`, `list_agents`, `stop_agent`, `merge_agent_branch`, `spawn_graph`, `recall_screen`, `calendar_today`, `calendar_events`, `calendar_create_event`, `reminders_list`, `reminders_add`, `reminders_complete`, `contacts_search`, `notes_search`, `notes_read`, `notes_create`, `mail_unread`, `mail_read`, `make_tool`, `finish`, + dynamic `mcp_*` and `my_*`).
 
 ---
 

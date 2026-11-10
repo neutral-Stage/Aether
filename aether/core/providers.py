@@ -70,11 +70,28 @@ def resolve_api_key(role_cfg: dict[str, Any], api_keys: dict[str, str | None]) -
     return api_keys.get(env_name) or os.getenv(env_name)
 
 
+def provider_override(role: str) -> str | None:
+    """Provider chosen for ``role`` by environment, e.g. ``AETHER_VISION_PROVIDER``.
+
+    Lets one Mac switch a role to another template in router.yaml (say, a local
+    model) from ``.env`` without editing the shared router config.
+    """
+    value = os.getenv(f"AETHER_{role.upper()}_PROVIDER", "").strip()
+    return value or None
+
+
 def merge_role_config(router_raw: dict[str, Any], role: str) -> dict[str, Any]:
     """Merge a role block with its referenced provider template."""
     roles = router_raw.get("roles") or {}
     role_cfg = dict(roles.get(role) or {})
     provider_name = role_cfg.pop("provider", None)
+    override = provider_override(role)
+    if override:
+        if override in (router_raw.get("providers") or {}):
+            provider_name = override
+        else:
+            log.warning("AETHER_%s_PROVIDER=%r is not a provider in router.yaml; using %r",
+                        role.upper(), override, provider_name)
     if provider_name:
         providers = router_raw.get("providers") or {}
         base = dict(providers.get(provider_name) or {})
@@ -155,7 +172,11 @@ def create_client(
 
 
 def has_cloud_backend(router_raw: dict[str, Any], api_keys: dict[str, str | None] | None = None) -> bool:
-    """True if any configured cloud role has a usable API key."""
+    """True if the frontier or vision role has a usable backend.
+
+    That means an API key, or an OpenAI-compatible server on this Mac (Ollama,
+    LM Studio, mlx), which needs none — the same rule ``create_client`` applies.
+    """
     keys = api_keys or collect_api_keys()
     for role in ("cloud_frontier", "vision"):
         cfg = merge_role_config(router_raw, role)
@@ -165,5 +186,7 @@ def has_cloud_backend(router_raw: dict[str, Any], api_keys: dict[str, str | None
         if backend == "ocr_only":
             continue
         if resolve_api_key(cfg, keys):
+            return True
+        if backend in {"openai", "openai_compatible"} and is_loopback_url(str(cfg.get("base_url") or "")):
             return True
     return False

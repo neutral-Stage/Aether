@@ -278,8 +278,9 @@ class WorldModel:
                 reasons.append(f"missing text '{expected['contains']}'")
 
         exp = self._pending_expectation
+        if exp is not None or self._pre_action is not None:
+            self.refresh(force=True)
         if exp is not None:
-            self.refresh()
             if exp.app_name and exp.app_name.lower() not in self.frontmost_app.lower():
                 ok = False
                 reasons.append(f"expected app '{exp.app_name}', got '{self.frontmost_app}'")

@@ -65,23 +65,48 @@ def as_applescript_string(s: str) -> str:
 
 
 def finder_go_to(path: str) -> str:
+    import os
+
+    expanded = os.path.expanduser(path) if path.startswith("~") else path
     script = f'''
 tell application "Finder"
     activate
-    set target of front window to POSIX file {as_applescript_string(path)}
+    set theFolder to POSIX file {as_applescript_string(expanded)}
+    if (count of Finder windows) = 0 then
+        make new Finder window to theFolder
+    else
+        set target of front Finder window to theFolder
+    end if
+    return "Finder front window showing " & POSIX path of (target of front Finder window as alias)
 end tell
 '''
     return run_applescript(script).summary()
 
 
 def safari_open_url(url: str) -> str:
+    url_lit = as_applescript_string(url)
     script = f'''
 tell application "Safari"
     activate
-    if (count of windows) = 0 then
-        make new document
+    if (count of documents) = 0 then
+        make new document with properties {{URL:{url_lit}}}
+    else
+        set URL of front document to {url_lit}
     end if
-    set URL of front document to {as_applescript_string(url)}
+    repeat 25 times
+        delay 0.2
+        try
+            set docTitle to name of front document
+            if docTitle is not "" and docTitle is not "Untitled" and docTitle is not "Start Page" then
+                exit repeat
+            end if
+        end try
+    end repeat
+    try
+        return (name of front document) & " — " & (URL of front document)
+    on error
+        return "OK"
+    end try
 end tell
 '''
     return run_applescript(script).summary()
@@ -99,6 +124,7 @@ tell application "Mail"
     tell newMessage
         {to_part}
     end tell
+    return "Opened Mail draft to " & {as_applescript_string(to)} & " with subject " & {subject_lit} & " (unsent)."
 end tell
 '''
     return run_applescript(script).summary()

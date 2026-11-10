@@ -261,22 +261,30 @@ def image_dimensions(image_path: str) -> tuple[int, int]:
     if not path.exists():
         return (0, 0)
     url = NSURL.fileURLWithPath_(str(path.resolve()))
-    handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
-    w = int(handler.extent().size.width)
-    h = int(handler.extent().size.height)
-    if w > 0 and h > 0:
-        return (w, h)
+    try:
+        handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
+        if hasattr(handler, "extent"):
+            w = int(handler.extent().size.width)
+            h = int(handler.extent().size.height)
+            if w > 0 and h > 0:
+                return (w, h)
+    except Exception:
+        pass
     try:
         from Quartz import CGImageSourceCopyPropertiesAtIndex, CGImageSourceCreateWithURL
         src = CGImageSourceCreateWithURL(url, None)
-        if src is None:
-            return (0, 0)
-        props = CGImageSourceCopyPropertiesAtIndex(src, 0, None)
-        if props is None:
-            return (0, 0)
-        pw = int(props.get("PixelWidth", 0))
-        ph = int(props.get("PixelHeight", 0))
-        return (pw, ph)
+        if src is not None:
+            props = CGImageSourceCopyPropertiesAtIndex(src, 0, None)
+            if props is not None:
+                pw = int(props.get("PixelWidth", 0))
+                ph = int(props.get("PixelHeight", 0))
+                if pw > 0 and ph > 0:
+                    return (pw, ph)
+    except Exception:
+        pass
+    try:
+        from . import screen
+        return screen.png_dimensions(str(path))
     except Exception:
         return (0, 0)
 

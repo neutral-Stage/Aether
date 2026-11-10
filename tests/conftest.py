@@ -57,6 +57,19 @@ def _reset_metrics() -> Generator[None, None, None]:
     MetricsCollector._instance = None  # noqa: SLF001
 
 
+@pytest.fixture(autouse=True)
+def _no_provider_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests see router.yaml's own providers, not a developer's .env choice
+    (e.g. AETHER_CLOUD_FRONTIER_PROVIDER=ollama_local on their Mac)."""
+    import os
+    from aether.core import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod, "load_dotenv", lambda *a, **kw: False)
+    for name in list(os.environ):
+        if name.startswith("AETHER_") and name.endswith("_PROVIDER"):
+            monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def minimal_config() -> Config:
     """Config without secrets — safe for unit tests."""

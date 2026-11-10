@@ -132,8 +132,19 @@ class Smoke:
                    + (f" error={run.get('error')}" if run.get("error") else ""))
         try:
             _, m = _req("/metrics")
-            self.check("token cost is being tracked", float(m.get("total_cost_usd", 0)) > 0,
-                       f"total_cost_usd={m.get('total_cost_usd')}")
+            pc = m.get("provider_costs") or {}
+            tokens = sum(
+                int(v.get("tokens_in", 0)) + int(v.get("tokens_out", 0))
+                for v in pc.values()
+                if isinstance(v, dict)
+            )
+            cost = float(m.get("total_cost_usd", 0))
+            local_only = bool(pc) and set(pc).issubset({"ollama", "local_http"})
+            self.check(
+                "token cost is being tracked",
+                cost > 0 or (local_only and tokens > 0),
+                f"total_cost_usd={cost}, tokens={tokens}",
+            )
         except Exception as e:  # noqa: BLE001
             self.check("GET /metrics", False, str(e))
 
@@ -147,8 +158,10 @@ class Smoke:
             secs = time.monotonic() - t0
             observed = _osascript(probe) if probe else str(run.get("result") or "")
             ok = run.get("status") == "idle" and expect.lower() in observed.lower()
+            compact = "\n".join(ln for ln in observed.splitlines() if ln.strip()).strip()
+            snippet = compact[-60:] if expect.lower() in compact[-60:].lower() else compact[:60]
             detail = (f"{secs:.0f}s, status={run.get('status')}, "
-                      f"saw {observed.strip()[:60]!r}")
+                      f"saw {snippet!r}")
             self.check(name, ok, detail)
             rows.append((name, ok, detail))
         rows.append(self._stop_latency())

@@ -1,7 +1,7 @@
 # Aether — GA Release Candidate (1.0.0-rc.1)
 
-A working Python agent for macOS described in
-`Aether_macOS_AI_Agent_Engineering_Spec.md`. **Phases 0–12 are complete** — Aether
+A working Python + Swift agent for macOS described in
+`Aether_macOS_AI_Agent_Engineering_Spec.md`. **Phases 0–17 are complete** — Aether
 is **GA-ready** as release candidate `1.0.0-rc.1`. See
 **[`docs/GA_LAUNCH.md`](docs/GA_LAUNCH.md)** for the launch checklist and known
 limitations.
@@ -12,10 +12,12 @@ limitations.
 > Use `--careful` to confirm every action. See **`BETA.md`** for beta install and
 > **`docs/SUPPORT.md`** for troubleshooting.
 
-> **Status:** everything below builds and passes its tests in CI (Python, and the
-> Swift app on macOS runners), but none of it has been run on a real Mac yet.
-> Start with **[`docs/FIRST_RUN.md`](docs/FIRST_RUN.md)**, the validation gate, and
-> record results in [`docs/VALIDATION_LOG.md`](docs/VALIDATION_LOG.md).
+> **Status:** Python + Swift suites pass in CI (`1,500+` unit, integration, and
+> security tests, `79` tools, `33` app knowledge packs), and real-Mac validation
+> (`aether doctor`, `scripts/live_smoke.py --with-llm`, and `scripts/live_smoke.py --tasks`)
+> has been verified on Apple Silicon with `qwen3.8:27b-mlx` via Ollama. See
+> **[`docs/FIRST_RUN.md`](docs/FIRST_RUN.md)** and
+> **[`docs/VALIDATION_LOG.md`](docs/VALIDATION_LOG.md)**.
 
 ---
 
@@ -218,17 +220,24 @@ cp .env.example .env
 
 ### LLM providers
 
-Edit `configs/router.yaml` to pick the active cloud backend:
+Edit `configs/router.yaml` or override per-Mac in `.env`:
 
 ```yaml
 roles:
   cloud_frontier:
-    provider: zai          # glm-5.3-flash (default brain)
+    provider: zai          # glm-5.3-flash (default cloud brain)
   vision:
     provider: zai_vision   # glm-5.3-flash (native image input)
 ```
 
-Other providers: `anthropic`, `openrouter`, `groq`, `openai`, `kilo`, `kie_gemini`, `google`, `fireworks`.
+To run **100% locally on Apple Silicon** with no API key using Ollama (`qwen3.8:27b-mlx`), set in `.env`:
+
+```bash
+AETHER_CLOUD_FRONTIER_PROVIDER=ollama_local
+AETHER_VISION_PROVIDER=ollama_local
+```
+
+Other cloud providers: `anthropic`, `openrouter`, `groq`, `openai`, `kilo`, `kie_gemini`, `google`, `fireworks`.
 
 ### Voice (Groq STT + TTS)
 
@@ -370,22 +379,14 @@ memory ──► store successful task traces
 
 ---
 
-## Known limitations (Phase 4)
+## Known limitations (1.0.0-rc.1)
 
-- Barge-in uses energy threshold + partial STT — not full acoustic echo cancellation.
-- MCP servers must speak stdio JSON-RPC; SSE transport not yet supported.
-- Skill distillation is heuristic (hash embeddings, not semantic clustering).
-- `delegate_to_coder` requires the target CLI installed and authenticated.
-- ScreenCaptureKit captures single frames, not continuous streaming.
-- Global PTT hotkey requires Input Monitoring (see `macos/README.md`); README Phase 4 note is stale.
-- CLI `python run.py` still uses tkinter HUD; native HUD is the Swift app.
-
-### Phase 2 limitations (still apply)
-
-- Local fast model tool-calling uses JSON-in-text parsing (less reliable than native Anthropic tools).
-- Playwright runs headless Chromium, not the user's Safari/Chrome session.
-- OCR coordinates are normalized; pixel clicks from OCR need scaling.
-- Hash embeddings for memory are lightweight, not semantic-quality.
+- **Voice latency (NFR-1):** Default cloud STT → LLM → TTS exceeds 800 ms; use `beta.realtime_voice: true` or local STT (`mlx-whisper` / `whisper.cpp`) for low-latency voice.
+- **Acoustic echo cancellation:** Barge-in uses mic gate + TTS ducking + partial STT rather than hardware AEC.
+- **Wake word:** Energy VAD stub by default; production Porcupine model requires a Picovoice key.
+- **Delegation (`delegate_to_coder`):** Requires the target CLI (`claude`, `codex`, `opencode`, or `cursor`) installed and authenticated on `PATH`.
+- **Swift native effectors:** Gated behind `beta.native_effectors: true` (Python Quartz/AX effectors are the default hot path).
+- **Code signing:** Personal/CI builds use ad-hoc or self-signed certificates (`make dev-identity`) until an Apple Developer ID certificate is configured in repository secrets.
 
 ---
 

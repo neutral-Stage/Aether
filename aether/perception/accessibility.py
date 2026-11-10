@@ -14,11 +14,33 @@ from dataclasses import dataclass, asdict
 from typing import Any, Optional
 
 try:
-    from AppKit import NSWorkspace
+    from AppKit import NSRunningApplication, NSWorkspace
     import ApplicationServices as AX
+    import ctypes
     _IMPORT_OK = True
+    _REAL_NSWORKSPACE = NSWorkspace
 except Exception:  # pragma: no cover - non-macOS / missing pyobjc
     _IMPORT_OK = False
+    _REAL_NSWORKSPACE = None
+
+_HISERVICES = None
+
+
+class _ProcessSerialNumber(ctypes.Structure if _IMPORT_OK else object):  # type: ignore[misc]
+    if _IMPORT_OK:
+        _fields_ = [("highLongOfPSN", ctypes.c_uint32), ("lowLongOfPSN", ctypes.c_uint32)]
+
+
+def _hiservices():
+    global _HISERVICES
+    if _HISERVICES is None and _IMPORT_OK:
+        try:
+            _HISERVICES = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+            )
+        except Exception:  # pragma: no cover
+            _HISERVICES = False
+    return _HISERVICES or None
 
 # Attribute names (raw strings are stable across pyobjc versions)
 A_ROLE = "AXRole"
@@ -65,8 +87,12 @@ class Element:
         return (self.x + self.w / 2.0, self.y + self.h / 2.0)
 
     def describe(self) -> str:
-        label = self.title or self.value or ""
-        label = (label[:60] + "…") if len(label) > 61 else label
+        if self.role in ("AXTextArea", "AXTextView") and not self.title and self.value:
+            cleaned = "\n".join(ln for ln in self.value.splitlines() if ln.strip())
+            label = ("…" + cleaned[-180:]) if len(cleaned) > 181 else cleaned
+        else:
+            label = self.title or self.value or ""
+            label = (label[:60] + "…") if len(label) > 61 else label
         state = "" if self.enabled else " (disabled)"
         return (f"[{self.idx}] {self.role}{state} \"{label}\" "
                 f"@({int(self.x)},{int(self.y)} {int(self.w)}x{int(self.h)})")
@@ -269,10 +295,46 @@ def _value_pair(axvalue, kind: str) -> Optional[tuple[float, float]]:
     return None
 
 
+def _frontmost_pid_live() -> int:
+    """Query HIServices GetFrontProcess directly.
+
+    In headless Python processes (such as the uvicorn sidecar) the main-thread
+    Cocoa NSRunLoop is not pumped, so ``NSWorkspace.frontmostApplication()``
+    stays frozen at whatever app was frontmost when the process started.
+    ``GetFrontProcess`` queries the WindowServer directly from any thread.
+    """
+    hi = _hiservices()
+    if hi is None:
+        return -1
+    try:
+        psn = _ProcessSerialNumber(0, 0)
+        if hi.GetFrontProcess(ctypes.byref(psn)) != 0:
+            return -1
+        pid = ctypes.c_int32()
+        if hi.GetProcessPID(ctypes.byref(psn), ctypes.byref(pid)) != 0:
+            return -1
+        return int(pid.value)
+    except Exception:
+        return -1
+
+
 def frontmost_app() -> dict:
     """Return {'name', 'pid', 'bundle'} for the frontmost application."""
     if not _IMPORT_OK:
         return {"name": "", "pid": -1, "bundle": ""}
+    if NSWorkspace is _REAL_NSWORKSPACE:
+        pid = _frontmost_pid_live()
+        if pid > 0:
+            try:
+                ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+                if ra is not None:
+                    return {
+                        "name": _to_str(ra.localizedName()),
+                        "pid": pid,
+                        "bundle": _to_str(ra.bundleIdentifier()),
+                    }
+            except Exception:
+                pass
     app = NSWorkspace.sharedWorkspace().frontmostApplication()
     if app is None:
         return {"name": "", "pid": -1, "bundle": ""}
@@ -287,6 +349,29 @@ def list_running_apps() -> list[dict]:
     """Regular (Dock-visible) running apps: {'name', 'pid', 'bundle', 'active'}."""
     if not _IMPORT_OK:
         return []
+    if NSWorkspace is _REAL_NSWORKSPACE and _hiservices() is not None:
+        try:
+            hi = _hiservices()
+            front_pid = _frontmost_pid_live()
+            psn = _ProcessSerialNumber(0, 0)
+            live: list[dict] = []
+            while hi.GetNextProcess(ctypes.byref(psn)) == 0:
+                pid = ctypes.c_int32()
+                if hi.GetProcessPID(ctypes.byref(psn), ctypes.byref(pid)) != 0 or pid.value <= 0:
+                    continue
+                ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid.value)
+                if ra is None or int(ra.activationPolicy()) != 0:
+                    continue
+                live.append({
+                    "name": _to_str(ra.localizedName()),
+                    "pid": int(pid.value),
+                    "bundle": _to_str(ra.bundleIdentifier()),
+                    "active": int(pid.value) == front_pid if front_pid > 0 else bool(ra.isActive()),
+                })
+            if live:
+                return live
+        except Exception:
+            pass
     out = []
     for app in NSWorkspace.sharedWorkspace().runningApplications():
         try:

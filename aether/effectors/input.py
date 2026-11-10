@@ -229,7 +229,18 @@ def type_text(text: str, per_char_delay: float = 0.005) -> None:
     """Type arbitrary unicode text via keyboard events."""
     if not _OK:
         raise RuntimeError("Quartz unavailable (run on macOS).")
-    for ch in text:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    for ch in normalized:
+        if ch == "\n":
+            press_key("return")
+            if per_char_delay:
+                time.sleep(per_char_delay)
+            continue
+        if ch == "\t":
+            press_key("tab")
+            if per_char_delay:
+                time.sleep(per_char_delay)
+            continue
         down = CGEventCreateKeyboardEvent(None, 0, True)
         up = CGEventCreateKeyboardEvent(None, 0, False)
         # Emoji and other non-BMP characters are two UTF-16 code units.

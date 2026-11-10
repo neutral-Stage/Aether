@@ -46,6 +46,7 @@ PROVIDER_PRICES: dict[str, dict[str, float]] = {
     "zai": {"in": 0.00015, "out": 0.0005},           # glm-5.3-flash (default)
     "zai_vision": {"in": 0.00015, "out": 0.0005},
     "local_http": {"in": 0.0, "out": 0.0},
+    "ollama": {"in": 0.0, "out": 0.0},               # ollama_local (OpenAI-compatible /v1)
 }
 
 MODEL_PRICES: dict[str, dict[str, float]] = {

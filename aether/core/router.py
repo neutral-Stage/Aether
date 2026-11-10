@@ -20,7 +20,7 @@ import yaml
 
 from .llm import DEFAULT_ANTHROPIC_MODEL, LLM, LLMBackend, LocalHTTPClient, VisionLLM
 from .llm_errors import FailoverLLMClient
-from .providers import collect_api_keys, create_client, merge_role_config
+from .providers import collect_api_keys, create_client, merge_role_config, provider_override
 
 if TYPE_CHECKING:
     from .world_model import WorldModel
@@ -210,7 +210,12 @@ class Router:
         roles = self.cfg.raw.get("roles") or {}
         role_raw = dict(roles.get(role) or {})
         chain: list[str] = []
-        primary = role_raw.get("provider")
+        override = provider_override(role)
+        primary = (
+            override
+            if override and override in (self.cfg.raw.get("providers") or {})
+            else role_raw.get("provider")
+        )
         if primary:
             chain.append(str(primary))
         for name in role_raw.get("failover_providers") or []:

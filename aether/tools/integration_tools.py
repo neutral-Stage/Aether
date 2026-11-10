@@ -30,7 +30,25 @@ _DISABLED = {
     "notes": "Notes isn't connected — connect it in the Aether window under Integrations.",
     "mail": "Mail isn't connected — connect it in the Aether window under Integrations.",
 }
+_TOOL_INTEGRATION = {
+    "calendar_events": "calendar",
+    "calendar_create_event": "calendar",
+    "reminders_list": "reminders",
+    "reminders_add": "reminders",
+    "contacts_search": "contacts",
+    "notes_search": "notes",
+    "notes_create": "notes",
+    "mail_search": "mail",
+}
 _APP_NOT_RUNNING = "ERROR: the Aether app must be running for this."
+
+
+def disabled_message(tool_name: str) -> str | None:
+    """Return the disabled message when ``tool_name``'s integration is off."""
+    integ = _TOOL_INTEGRATION.get(tool_name)
+    if integ and not integrations.enabled(integ):
+        return _DISABLED[integ]
+    return None
 
 
 def _when(s: str) -> float:

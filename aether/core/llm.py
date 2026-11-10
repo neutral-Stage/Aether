@@ -192,12 +192,18 @@ class LLM:
             client = anthropic.Anthropic(api_key=self._api_key, http_client=http_client)
             _check_abort(abort_event)
             if on_token is None:
-                return client.messages.create(model=self.model, max_tokens=self.max_tokens,
-                                              **self._sampling(), **params)
+                try:
+                    return client.messages.create(model=self.model, max_tokens=self.max_tokens,
+                                                  **self._sampling(), **params)
+                except Exception as e:  # noqa: BLE001
+                    if stop_ctl.is_set() or (abort_event is not None and abort_event.is_set()):
+                        raise stop_ctl.StopRequested() from e
+                    raise
             try:
                 with client.messages.stream(model=self.model, max_tokens=self.max_tokens,
                                             **self._sampling(), **params) as stream:
                     for text in stream.text_stream:
+                        _check_abort(abort_event)
                         on_token(text)
                     return stream.get_final_message()
             except Exception as e:  # noqa: BLE001
@@ -413,7 +419,8 @@ def prune_images(messages: list[dict], keep: int = 2) -> int:
 
 
 def _stream_chat(client: Any, kwargs: dict[str, Any],
-                 on_token: TokenCallback) -> tuple[str, list[dict], str | None, Any]:
+                 on_token: TokenCallback,
+                 abort_event: threading.Event | None = None) -> tuple[str, list[dict], str | None, Any]:
     """Stream a chat completion: (text, tool calls, finish reason, usage holder)."""
     try:
         stream = client.chat.completions.create(**kwargs, stream=True,
@@ -427,6 +434,14 @@ def _stream_chat(client: Any, kwargs: dict[str, Any],
     finish: str | None = None
     usage = None
     for chunk in stream:
+        if abort_event is not None and abort_event.is_set():
+            try:
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass
+            _check_abort(abort_event)
         if getattr(chunk, "usage", None) is not None:
             usage = chunk
         for ch in getattr(chunk, "choices", None) or []:
@@ -521,13 +536,19 @@ class OpenAICompatibleClient:
             _check_abort(abort_event)
             if on_token is not None:
                 try:
-                    text, calls, finish, usage = _stream_chat(client, kwargs, on_token)
+                    text, calls, finish, usage = _stream_chat(
+                        client, kwargs, on_token, abort_event=abort_event)
                 except Exception as e:  # noqa: BLE001
                     if stop_ctl.is_set() or (abort_event is not None and abort_event.is_set()):
                         raise stop_ctl.StopRequested() from e
                     raise
             else:
-                resp = client.chat.completions.create(**kwargs)
+                try:
+                    resp = client.chat.completions.create(**kwargs)
+                except Exception as e:  # noqa: BLE001
+                    if stop_ctl.is_set() or (abort_event is not None and abort_event.is_set()):
+                        raise stop_ctl.StopRequested() from e
+                    raise
                 choice = resp.choices[0]
                 text = choice.message.content or ""
                 calls = [{"id": tc.id, "name": tc.function.name,

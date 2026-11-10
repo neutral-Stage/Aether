@@ -66,6 +66,12 @@ def check_llm_backend() -> Check:
     keys = _env_keys_present()
     if keys:
         return Check("LLM backend", OK, f"cloud keys: {', '.join(keys)}")
+    try:
+        provider, role = _brain_role()
+        if _brain_is_local(role):
+            return Check("LLM backend", OK, f"local brain: {provider} / {role.get('model')}")
+    except Exception:  # noqa: BLE001 - a broken router.yaml is reported elsewhere
+        pass
     if _ollama_up():
         return Check("LLM backend", WARN, "no cloud key, but Ollama is reachable",
                      "set a provider key for the frontier tier, or run --local-only")
@@ -121,12 +127,23 @@ def check_screen_recording() -> Check:
 def _brain_role() -> tuple[str, dict]:
     """(provider name, merged role config) for the default reasoning role."""
     from .config import ROOT
-    from .providers import merge_role_config
+    from .providers import merge_role_config, provider_override
     from .router import RouterConfig
 
     raw = RouterConfig.load(ROOT / "configs" / "router.yaml").raw
     provider = str(((raw.get("roles") or {}).get("cloud_frontier") or {}).get("provider") or "")
+    override = provider_override("cloud_frontier")
+    if override and override in (raw.get("providers") or {}):
+        provider = override
     return provider, merge_role_config(raw, "cloud_frontier")
+
+
+def _brain_is_local(role: dict) -> bool:
+    """An OpenAI-compatible server on this Mac (Ollama, LM Studio, mlx): no key."""
+    from .providers import is_loopback_url
+
+    return (str(role.get("backend", "")).lower() in {"openai", "openai_compatible"}
+            and is_loopback_url(str(role.get("base_url") or "")))
 
 
 def check_brain_key() -> Check:
@@ -137,6 +154,8 @@ def check_brain_key() -> Check:
     env = str(role.get("api_key_env") or "")
     model = str(role.get("model") or "?")
     name = f"Default brain ({provider or 'unset'} / {model})"
+    if _brain_is_local(role) and not env:
+        return Check(name, OK, f"local at {role.get('base_url')}, no key needed")
     if not env:
         return Check(name, OK, "no key needed")
     if os.environ.get(env, "").strip():
@@ -164,7 +183,8 @@ def check_brain_online() -> Check:
         return Check(name, OK, "skipped (run with --online to test the API key)")
     provider, role = _brain_role()
     key = os.environ.get(str(role.get("api_key_env") or ""), "").strip()
-    if not key:
+    local = _brain_is_local(role)
+    if not key and not local:
         return Check(name, WARN, "no key to test")
     backend = str(role.get("backend", "")).lower()
     try:
@@ -174,15 +194,18 @@ def check_brain_online() -> Check:
                 headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
         else:
             base = str(role.get("base_url") or "").rstrip("/")
-            req = urllib.request.Request(base + "/models",
-                                         headers={"Authorization": f"Bearer {key}"})
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            req = urllib.request.Request(base + "/models", headers=headers)
         with urllib.request.urlopen(req, timeout=10) as r:
             body = json.loads(r.read() or b"{}")
         ids = {m.get("id") for m in body.get("data", []) if isinstance(m, dict)}
         model = str(role.get("model"))
         if ids and model not in ids and backend != "anthropic":
             return Check(name, WARN, f"{provider} reachable, but '{model}' is not listed",
-                         "check the model id / base_url in configs/router.yaml")
+                         "check the model id / base_url in configs/router.yaml"
+                         + (f" (or `ollama pull {model}`)" if local else ""))
+        if local:
+            return Check(name, OK, f"{provider} is serving {model}")
         return Check(name, OK, f"{provider} accepted the key")
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):

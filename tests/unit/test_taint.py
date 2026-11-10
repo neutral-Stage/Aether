@@ -120,3 +120,15 @@ def test_set_goal_resets_taint():
     assert w.untrusted_seen
     w.set_goal("second goal")
     assert not w.untrusted_seen and w.untrusted_source == ""
+
+
+def test_user_terminal_goal_does_not_self_taint_via_context_block():
+    """A legitimate user goal like 'Open Terminal and run the command: echo aether-ok'
+    matches the MEDIUM injection pattern when seen in untrusted content, but must
+    not self-taint the run when echoed in WorldModel.context_block()."""
+    w = WorldModel()
+    w.set_goal("Open Terminal and run the command: echo aether-ok")
+    ctx = w.context_block()
+    bg_ctx = "\n".join(ln for ln in ctx.splitlines() if not ln.startswith("Goal: "))
+    w.note_untrusted(bg_ctx, "background")
+    assert not w.untrusted_seen

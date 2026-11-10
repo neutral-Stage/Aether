@@ -27,6 +27,22 @@ final class AetherConfigTests: XCTestCase {
         )
     }
 
+    func testDefaultGitHubReleasesFeedAndSemverComparison() {
+        UserDefaults.standard.removeObject(forKey: "aether.update.feed_url")
+        if ProcessInfo.processInfo.environment["AETHER_UPDATE_FEED_URL"] == nil
+            && ProcessInfo.processInfo.environment["AETHER_GITHUB_REPO"] == nil {
+            XCTAssertEqual(
+                AetherConfig.updateFeedURL.absoluteString,
+                "https://api.github.com/repos/neutral-Stage/Aether/releases/latest"
+            )
+        }
+        XCTAssertTrue(UpdateChecker.isNewer(remote: "1.0.0", local: "1.0.0-rc.1"))
+        XCTAssertTrue(UpdateChecker.isNewer(remote: "1.0.0-rc.2", local: "1.0.0-rc.1"))
+        XCTAssertFalse(UpdateChecker.isNewer(remote: "1.0.0-rc.1", local: "1.0.0"))
+        XCTAssertFalse(UpdateChecker.isNewer(remote: "1.0.0-rc.1", local: "1.0.0-rc.1"))
+        XCTAssertTrue(UpdateChecker.isNewer(remote: "1.0.1", local: "1.0.0"))
+    }
+
     func testAuditKeychainRoundTrip() {
         defer { _ = AuditKeychain.deleteKey() }
         let sample = Data("unit-test-audit-hmac-key-material".utf8)

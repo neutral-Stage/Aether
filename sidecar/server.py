@@ -493,7 +493,7 @@ async def _run_agent_task(
     try:
         result = await agent.run_async(goal, run_id=run_id, reset_stop=reset_stop,
                                        history=history)
-        state.status = "idle"
+        state.status = "stopped" if getattr(agent.world, "status", "") == "stopped" else "idle"
         state.result = result
         state.finished_at = time.time()
         _persist_run(state)

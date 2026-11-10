@@ -140,3 +140,12 @@ def test_sidecar_doctor_endpoint(sidecar_client):
     assert body["verdict"] in (OK, WARN, FAIL)
     names = {c["name"] for c in body["checks"]}
     assert "Data directory writable" in names
+
+
+def test_local_brain_provider_override_needs_no_key(monkeypatch):
+    for k in doctor._PROVIDER_ENVS:  # noqa: SLF001
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("AETHER_CLOUD_FRONTIER_PROVIDER", "ollama_local")
+    assert doctor.check_llm_backend().status == OK
+    brain = doctor.check_brain_key()
+    assert brain.status == OK and "no key needed" in brain.detail

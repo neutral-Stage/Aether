@@ -26,3 +26,17 @@ class TestConfig:
             "beta": {"ambient_listening": False, "continuous_screen_stream": False},
         }
         assert validate_config(raw, strict=True) == []
+
+    def test_shipped_config_matches_schema(self) -> None:
+        # The config.yaml we ship must validate cleanly, or every launch logs a
+        # schema warning (and `aether doctor` prints it) for a value the code supports.
+        import yaml
+
+        raw = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
+        assert validate_config(raw, strict=True) == []
+
+    @pytest.mark.parametrize("provider", ["auto", "e5", "hash", "openai", "local"])
+    def test_schema_accepts_every_embedding_provider(self, provider: str) -> None:
+        # Keep in sync with aether.memory.embeddings.create_embedder.
+        raw = {"memory": {"embedding_provider": provider}}
+        assert validate_config(raw, strict=True) == []

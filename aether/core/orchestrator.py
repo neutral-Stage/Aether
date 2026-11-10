@@ -90,8 +90,11 @@ class CallOutcome:
     error: bool = False
 
 
-# UI tools whose effect is not visible in the accessibility tree.
-_NO_SCREEN_CHECK = frozenset({"clipboard_set", "set_volume", "hover"})
+# UI tools whose effect is not visible in the accessibility tree (or that
+# operate via Apple Events on background apps and report their own exit status).
+_NO_SCREEN_CHECK = frozenset({
+    "clipboard_set", "set_volume", "hover", "run_applescript", "mail_compose",
+})
 MAX_BATCH = 5
 # Reversible UI actions that may be chained without a model turn in between.
 BATCHABLE_TOOLS = frozenset({
@@ -379,6 +382,12 @@ class Agent:
             return await self._point_at(args, step=step)
         if name == "make_tool":
             return await self._make_tool(args, step=step, rid=rid)
+
+        from ..tools import integration_tools
+
+        disabled_msg = integration_tools.disabled_message(name)
+        if disabled_msg is not None:
+            return CallOutcome(disabled_msg, error=True)
 
         shell_text = self.policy.shell_payload(name, args) if spec else None
         if shell_text is not None and not self.policy.allows_shell_path(shell_text):
@@ -940,7 +949,12 @@ class Agent:
         if ctx:
             # Carries screen_stream_summary + background-app window titles and
             # event detail — a third channel that never becomes an observation.
-            self.world.note_untrusted(ctx, "background")
+            # Exclude the user's own Goal line so a legitimate request like
+            # "Open Terminal and run the command: echo ok" does not self-taint.
+            bg_ctx = "\n".join(
+                ln for ln in ctx.splitlines() if not ln.startswith("Goal: ")
+            )
+            self.world.note_untrusted(bg_ctx, "background")
             parts.append(self.policy.prepare_context_for_model(ctx))
         return "\n\n".join(parts)
 
@@ -1067,14 +1081,17 @@ class Agent:
         abort = stop_ctl.abort_event()
         gate = self._token_gate(step)
         try:
-            resp = await asyncio.to_thread(
-                step_with_tokens,
-                client,
-                system,
-                messages,
-                self._schemas(),
-                abort_event=abort,
-                on_token=gate,
+            resp = await self._await_or_stop(
+                asyncio.to_thread(
+                    step_with_tokens,
+                    client,
+                    system,
+                    messages,
+                    self._schemas(),
+                    abort_event=abort,
+                    on_token=gate,
+                ),
+                abort,
             )
         except stop_ctl.StopRequested:
             raise
@@ -1088,14 +1105,17 @@ class Agent:
                 )
                 client = self.router.pick_client(decision)
                 gate = self._token_gate(step)
-                resp = await asyncio.to_thread(
-                    step_with_tokens,
-                    client,
-                    system,
-                    messages,
-                    self._schemas(),
-                    abort_event=abort,
-                    on_token=gate,
+                resp = await self._await_or_stop(
+                    asyncio.to_thread(
+                        step_with_tokens,
+                        client,
+                        system,
+                        messages,
+                        self._schemas(),
+                        abort_event=abort,
+                        on_token=gate,
+                    ),
+                    abort,
                 )
             else:
                 raise
@@ -1106,6 +1126,19 @@ class Agent:
         record_usage_for_response(self.metrics, resp)
         return resp, decision.tier.value
 
+    @staticmethod
+    async def _await_or_stop(coro, abort_event):  # noqa: ANN001, ANN205
+        """Await a thread coroutine while polling the STOP event every 25 ms."""
+        task = asyncio.ensure_future(coro)
+        while not task.done():
+            if stop_ctl.is_set() or (abort_event is not None and abort_event.is_set()):
+                task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+                raise stop_ctl.StopRequested("STOP requested — LLM call cancelled.")
+            done, _ = await asyncio.wait({task}, timeout=0.025)
+            if done:
+                break
+        return await task
+
     def _verification_for_tool(self, name: str, args: dict) -> VerificationExpectation | None:
         if name == "open_app":
             return VerificationExpectation(
@@ -1113,9 +1146,16 @@ class Agent:
                 frontmost_changed=True,
             )
         if name == "safari_open_url":
-            return VerificationExpectation(contains_text=args.get("url", "")[:20])
+            url = str(args.get("url", ""))
+            host = url.split("://", 1)[-1].split("/", 1)[0]
+            return VerificationExpectation(contains_text=(host or url)[:20])
         if name == "finder_go_to":
-            return VerificationExpectation(contains_text=args.get("path", "")[-20:])
+            import os
+            from pathlib import Path
+
+            raw = str(args.get("path", ""))
+            folder = Path(os.path.expanduser(raw)).name or raw[-20:]
+            return VerificationExpectation(contains_text=folder[-20:])
         return None
 
     def run(self, goal: str) -> str:

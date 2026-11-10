@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 
 from aether.core.config import load_config
 from aether.core.paths import data_dir
-from aether.core.providers import create_client, merge_role_config
+from aether.core.providers import create_client, merge_role_config, provider_override
 from aether.core.router import RouterConfig
 from aether.perception import accessibility as ax
 from aether.perception import grounding, screen
@@ -72,7 +72,11 @@ def vision_client(provider: str | None):  # noqa: ANN201
             sys.exit(f"Unknown provider {provider!r} in configs/router.yaml")
     else:
         role_cfg = merge_role_config(raw, "vision")
-        provider = str((raw.get("roles") or {}).get("vision", {}).get("provider", "vision"))
+        override = provider_override("vision")
+        if override and override in (raw.get("providers") or {}):
+            provider = override
+        else:
+            provider = str((raw.get("roles") or {}).get("vision", {}).get("provider", "vision"))
     client = create_client(role_cfg, api_keys=cfg.api_keys, role_name="vision")
     if client is None or not hasattr(client, "analyze_image"):
         sys.exit(f"No usable vision client for {provider!r} (API key set?)")

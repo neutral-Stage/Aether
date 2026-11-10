@@ -112,6 +112,19 @@ providers:
     max_tokens: 1024
     temperature: 0
 
+  ollama_local:
+    # Fully local brain + vision on this Mac through Ollama's OpenAI-compatible
+    # API: no key, nothing leaves the machine. Needs a model with tools + vision,
+    # e.g. `ollama pull qwen3.8:27b-mlx`. Select it per Mac in .env:
+    #   AETHER_CLOUD_FRONTIER_PROVIDER=ollama_local
+    #   AETHER_VISION_PROVIDER=ollama_local
+    backend: openai_compatible
+    base_url: http://localhost:11434/v1
+    model: qwen3.8:27b-mlx
+    max_tokens: 4096
+    temperature: 0
+    provider_label: ollama
+
 # Fallback chain when a backend is unavailable
 fallback_order:
   - local_fast
@@ -120,6 +133,9 @@ fallback_order:
 # Per-role provider failover (Phase 10, NFR-3): on transient LLM errors (503, rate
 # limit), try ``failover_providers`` in order after the primary ``provider``.
 # Unit tests: tests/unit/test_router_failover.py
+#
+# Per-Mac override: AETHER_<ROLE>_PROVIDER in .env (e.g. AETHER_VISION_PROVIDER)
+# replaces a role's ``provider`` with another template above.
 
 roles:
   local_fast:

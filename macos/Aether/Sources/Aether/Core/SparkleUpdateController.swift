@@ -71,7 +71,7 @@ final class SparkleUpdateController: ObservableObject {
                 lastCheckError = "Malformed appcast (missing version)"
                 return
             }
-            guard isNewer(remote: version, local: AetherConfig.appVersion) else {
+            guard UpdateChecker.isNewer(remote: version, local: AetherConfig.appVersion) else {
                 updateAvailable = nil
                 return
             }
@@ -109,18 +109,5 @@ final class SparkleUpdateController: ObservableObject {
         let raw = String(tail[..<endQuote])
         guard let url = URL(string: raw), url.scheme != nil else { return nil }
         return url
-    }
-
-    private func isNewer(remote: String, local: String) -> Bool {
-        let r = remote.split(separator: ".").compactMap { Int($0) }
-        let l = local.split(separator: ".").compactMap { Int($0) }
-        let n = max(r.count, l.count)
-        for i in 0 ..< n {
-            let rv = i < r.count ? r[i] : 0
-            let lv = i < l.count ? l[i] : 0
-            if rv > lv { return true }
-            if rv < lv { return false }
-        }
-        return false
     }
 }

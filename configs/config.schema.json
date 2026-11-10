@@ -156,7 +156,7 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "db_path": { "type": "string" },
-        "embedding_provider": { "enum": ["hash", "openai", "local"] }
+        "embedding_provider": { "enum": ["auto", "e5", "hash", "openai", "local"] }
       }
     },
     "knowledge": {

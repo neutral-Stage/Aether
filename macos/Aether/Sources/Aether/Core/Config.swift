@@ -59,10 +59,10 @@ enum AetherConfig {
            let url = URL(string: custom), !custom.isEmpty {
             return url
         }
-        // Override repo slug via AETHER_GITHUB_REPO (default: aether-agent/aether).
+        // Override repo slug via AETHER_GITHUB_REPO (default: neutral-Stage/Aether).
         let repo = ProcessInfo.processInfo.environment["AETHER_GITHUB_REPO"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let slug = (repo?.isEmpty == false) ? repo! : "aether-agent/aether"
+        let slug = (repo?.isEmpty == false) ? repo! : "neutral-Stage/Aether"
         return URL(string: "https://api.github.com/repos/\(slug)/releases/latest")!
     }
 
